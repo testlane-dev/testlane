@@ -35,3 +35,16 @@ it("delivers cancellation queued before child readiness and leaves no signal lis
   expect([process.listenerCount("SIGINT"),process.listenerCount("SIGTERM")]).toEqual(before);
   expect(stderr.text).toContain("waiting for cleanup");
 });
+it("initializes the real CLI adapter from an aliased cwd with absolute output resolution",async()=>{
+  const container=await fs.mkdtemp(path.join(os.tmpdir(),"testlane-verify-command-alias-"));
+  const alias=path.join(container,"app");
+  try{
+    await fs.writeFile(path.join(root,"feature brief.txt"),"A note persists after reload.\n");
+    await fs.symlink(root,alias,process.platform==="win32"?"junction":"dir");
+    const stdout=new Capture(),stderr=new Capture();
+    expect(await runVerification({mode:"init",cwd:alias,stdout,stderr,brief:"feature brief.txt",target:"http://localhost:4555",profile:"sample:testing:qa",outputDir:"e2e/aliased suite",json:true})).toBe(0);
+    expect(JSON.parse(stdout.text).directory).toBe("e2e/aliased suite");
+    expect(stderr.text).toBe("");
+    expect(await fs.readFile(path.join(root,"e2e","aliased suite","brief.md"),"utf8")).toBe("A note persists after reload.\n");
+  }finally{await fs.rm(container,{recursive:true,force:true});}
+});

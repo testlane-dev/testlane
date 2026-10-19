@@ -15,11 +15,22 @@ export async function initializeVerification({cwd=process.cwd(),brief,target,pro
     (origin.protocol!=='https:'&&!(origin.protocol==='http:'&&local))||
     origin.hostname.toLowerCase().split('.').some(label=>['prod','production','live'].includes(label))) throw new Error('invalid-target');
   const root=await fs.realpath(cwd);
-  const directory=path.resolve(root,outputDir);
-  if(!inside(root,directory)) throw new Error('output-outside-project');
-  // Validate the existing ancestor before making any directories through it.
-  let ancestor=path.dirname(directory);
-  for(;;){try{const actual=await fs.realpath(ancestor);if(actual!==root&&!inside(root,actual))throw new Error('output-outside-project');break;}catch(error){if(error.code!=='ENOENT')throw error;const parent=path.dirname(ancestor);if(parent===ancestor)throw new Error('invalid-output');ancestor=parent;}}
+  const requested=path.resolve(root,outputDir);
+  // An absolute caller path can use /var or a Windows short/junction alias even
+  // though cwd's realpath does not. Canonicalize its existing ancestor before
+  // checking containment; never create directories through an outside junction.
+  let ancestor=path.dirname(requested),directory;
+  for(;;){
+    const info=await fs.lstat(ancestor).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
+    if(info){
+      const actual=await fs.realpath(ancestor); // Dangling links fail closed.
+      if(path.relative(root,actual)!==''&&!inside(root,actual))throw new Error('output-outside-project');
+      directory=path.resolve(actual,path.relative(ancestor,requested));
+      if(!inside(root,directory))throw new Error('output-outside-project');
+      break;
+    }
+    const parent=path.dirname(ancestor);if(parent===ancestor)throw new Error('invalid-output');ancestor=parent;
+  }
   const briefBytes=await fs.readFile(path.resolve(root,brief));
   if(briefBytes.length===0||briefBytes.length>64*1024||briefBytes.includes(0))throw new Error('invalid-brief');
   const briefText=new TextDecoder('utf-8',{fatal:true}).decode(briefBytes);

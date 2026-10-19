@@ -55,6 +55,26 @@ describe("verification authoring scaffold", () => {
       expect(await fs.readdir(outside)).toEqual([]);
     } finally {await fs.rm(outside,{recursive:true,force:true});}
   });
+  it("accepts a cwd alias and absolute app-local output alias after canonical containment", async () => {
+    const container=await fs.mkdtemp(path.join(os.tmpdir(),"testlane-authoring-alias-"));
+    const alias=path.join(container,"project");
+    try {
+      await fs.symlink(root,alias,process.platform==="win32"?"junction":"dir");
+      const result=await initializeVerification({...input(),cwd:alias,brief:path.join(alias,"feature.txt"),outputDir:path.join(alias,"e2e","checks")});
+      expect(result.status).toBe("draft");
+      expect(result.directory).toBe("e2e/checks");
+      expect(await fs.readFile(path.join(root,"e2e","checks","brief.md"),"utf8")).toBe(await fs.readFile(path.join(root,"feature.txt"),"utf8"));
+    } finally {await fs.rm(container,{recursive:true,force:true});}
+  });
+  it("refuses an absolute output through an outside junction without creating outside directories", async () => {
+    const outside=await fs.mkdtemp(path.join(os.tmpdir(),"testlane-authoring-outside-"));
+    const link=path.join(root,"external");
+    try {
+      await fs.symlink(outside,link,process.platform==="win32"?"junction":"dir");
+      await expect(initializeVerification({...input(),outputDir:path.join(link,"new","suite")})).rejects.toThrow();
+      expect(await fs.readdir(outside)).toEqual([]);
+    } finally {await fs.rm(outside,{recursive:true,force:true});}
+  });
   it("refuses malformed UTF-8 instead of silently changing a requirement", async () => {
     await fs.writeFile(path.join(root,"feature.txt"),Buffer.from([0xff,0xfe]));
     await expect(initializeVerification(input())).rejects.toThrow();
