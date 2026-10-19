@@ -82,6 +82,9 @@ jobs:
       - name: Release artifact integrity contracts
         run: node --test scripts/release-artifact.test.mjs
 
+      - name: Local account provisioning contract and abuse tests
+        run: npm run test:account-provisioning
+
       - run: npx vitest run --reporter=default
         env:
           # Never let a runner touch a real ~/.testlane (runner context is step-level only).

@@ -8,6 +8,10 @@ what to do about it in [docs/upgrading.md](docs/upgrading.md).
 
 ### Added
 
+- A source-only local test-account provisioning experiment with fixed roles,
+  target-wide quotas, expiry, durable ownership/recovery and immediate synthetic
+  session invalidation. Its real-broker proof separately verifies account/session
+  and native-store cleanup. It adds no provider adapter or public provisioning API.
 - A public, disposable request approval example with app-owned Playwright tests for
   exact saved totals, editor/reviewer authorization, duplicate approval, anonymous
   denial and verified cleanup. Its unchanged suite detects an injected one-cent defect.

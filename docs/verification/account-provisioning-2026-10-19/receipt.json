@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "experiment": "source-only synthetic account provisioning; no provider integration or public CLI/MCP authority",
+  "passed": true,
+  "prototypeSourceOnly": true,
+  "prototypeIncludedInInstalledPackage": false,
+  "releaseId": "d7a4bba9a5e38271d0284d2fe55be9e3c3c30ef4a48d00edc08c887bf26ebd3a",
+  "sourceHashes": {
+    "contracts.mjs": "9f37af37cb3173be118896432d67f7da436e9c6960edcc088adbb57e62fbab0d",
+    "app.mjs": "987b0dc65fa0c3111e6e2d0ec28f7020159d2500829e3cd2ff3c2dde7c1c5900",
+    "controller.mjs": "3468a53c00f2d357cad06b7def9932b6ab0cae7299f47dff9e53708f0a83a608",
+    "proof.mjs": "a865764f5188d9257786b4a83c5839e0d2177c82e087fed0bf685fb2795a0ee1"
+  },
+  "supportHashes": {
+    "examples/verification-demo/native.mjs": "904b9d35dbf3c1bf8b38f015f5fae215936945d79b6b6009590f71dd59bfca6b",
+    "examples/playwright/tests/consumer.mjs": "6db34bb1389709daa7355f81f4c93ac65795bd7526ce9c8c1d24efdba13e8676",
+    "examples/workflows/test-support/real-broker.mjs": "d138cbea3460071979edef2b21a6705265819d1f257722893149c921410ef57f"
+  },
+  "installedNativeHelperSha256": "904b9d35dbf3c1bf8b38f015f5fae215936945d79b6b6009590f71dd59bfca6b",
+  "brokerArtifactMode": "fresh-source-pack",
+  "installedBrokerVersion": "0.7.0-beta.2",
+  "installedBrokerTreeSha256": "7cc2beb5bf1656677fa099ed335fe15388667a015827c04562e1868a7b80e496",
+  "nativeStore": "dpapi",
+  "roles": [
+    { "role": "Editor", "liveIdentityVerified": true, "allowedOperation": 200, "deniedOperation": 403 },
+    { "role": "Reviewer", "liveIdentityVerified": true, "allowedOperation": 200, "deniedOperation": 403 }
+  ],
+  "ownedAccountsRemaining": 0,
+  "oldSessionsRefused": 2,
+  "deletedAccountSignInRefused": 2,
+  "foreignAccountUnchanged": true,
+  "controllerRoutesExposed": false,
+  "nativeEntriesRemoved": 2,
+  "cleanupVerified": true,
+  "credentialLeakScanPassed": true
+}

@@ -43,6 +43,11 @@ The next milestone adds a reproducible approval example, useful failure diagnost
 and an installed-package acceptance gate. Native Android and iOS testing is a planned
 track; the current release runs web tests with Playwright.
 
+A separate [test-account provisioning experiment](examples/account-provisioning/README.md)
+creates and revokes dedicated accounts in a synthetic local app. It demonstrates
+fixed roles, quotas, expiry, ownership checks and integration with the real broker.
+It is source-only; real authentication-provider adapters remain future work.
+
 See the [prioritized roadmap](docs/roadmap.md) and
 [native mobile proposal](docs/mobile-testing.md) for scope and release criteria.
 
