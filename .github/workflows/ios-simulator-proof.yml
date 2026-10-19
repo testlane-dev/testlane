@@ -1,0 +1,42 @@
+name: iOS simulator proof
+
+on:
+  push:
+    branches: [codex/ios-simulator-proof]
+    paths:
+      - .github/workflows/ios-simulator-proof.yml
+      - scripts/ios-*.mjs
+      - examples/ios-verification/**
+      - examples/mobile-approval-app/**
+      - examples/android-verification/**
+  pull_request:
+    paths:
+      - .github/workflows/ios-simulator-proof.yml
+      - scripts/ios-*.mjs
+      - examples/ios-verification/**
+      - examples/mobile-approval-app/**
+      - examples/android-verification/**
+      - package.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-proof-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulator:
+    name: owned iOS simulator proof
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Inspect Xcode and the exact available simulator runtime
+        run: node scripts/ios-preflight.mjs output/ios-preflight.json
