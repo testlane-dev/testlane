@@ -24,6 +24,7 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
   const {runNativeWorker}=await moduleFrom('examples/android-verification/worker-host.mjs');
   const {validateNativePlan,sanitizeNativeReport}=await moduleFrom('examples/android-verification/contracts.mjs');
   const {APPROVAL_REQUIREMENTS}=await moduleFrom('examples/android-verification/proof-cases.mjs');
+  const {NATIVE_PROOF_BUDGETS}=await moduleFrom('examples/android-verification/budgets.mjs');
   const before=await digestTree(consumer.packageRoot),apkSha256=sha(await readFile(apkFile));
   const buildManifestFile=path.join(path.dirname(apkFile),'build-manifest.json');
   const buildBytes=await readFile(buildManifestFile),build=JSON.parse(buildBytes);
@@ -72,7 +73,7 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
       target:{baseUrl:app.origin,environment:'testing'},app:{package:PACKAGE,apkSha256},
       cases:APPROVAL_REQUIREMENTS.map(item=>({...item,cleanup:{required:item.id!=='anonymous-denied',description:item.id==='anonymous-denied'?'No state is created':'Delete only the unique owned marker and verify absence'}}))});
     const result=await runProofPhases({consumer,app,device,plan,cookies,identities,output,before,runWorker:runNativeWorker,sanitize:sanitizeNativeReport,signal,
-      workerTimeoutMs:360000,onStage:at,onCaptured:value=>{captured+=value;},onWorkerRisk:()=>{workerUnconfirmed=true;},
+      workerTimeoutMs:NATIVE_PROOF_BUDGETS.workerMs,onStage:at,onCaptured:value=>{captured+=value;},onWorkerRisk:()=>{workerUnconfirmed=true;},
       assertBuildUnchanged:async()=>{assert.equal(sha(await readFile(apkFile)),apkSha256);assert.equal(sha(await readFile(buildManifestFile)),sha(buildBytes));},
       driverOptions:{url:device.serverUrl,capabilities:{platformName:'Android','appium:automationName':'UiAutomator2','appium:udid':device.serial,
         'appium:appPackage':PACKAGE,'appium:appActivity':'.MainActivity','appium:remoteAdbHost':'127.0.0.1','appium:adbPort':device.adbPort,
@@ -80,7 +81,7 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
         'appium:printPageSourceOnFindFailure':false,'appium:noReset':true,'appium:newCommandTimeout':90}}});
     receipt={schemaVersion:1,passed:true,runner:'android-uiautomator2',context:'NATIVE_APP',proofOnly:true,nativeStore:support.store,
       packageTreeSha256:before,apkSha256,buildManifestSha256:sha(buildBytes),publicAppSourceSha256:Object.fromEntries(publicFiles.map(file=>[file,build.publicSourceSHA256[file]])),
-      versions:device.versions,...result};
+      versions:device.versions,budgets:NATIVE_PROOF_BUDGETS,...result};
   } catch(error) {
     if(typeof error?.capturedText==='function')captured+=error.capturedText();
     if(/TERMINATION_UNCONFIRMED|STOP_UNCONFIRMED/.test(String(error?.code??error?.message??'')))workerUnconfirmed=true;

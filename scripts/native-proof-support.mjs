@@ -33,11 +33,25 @@ export function proofProfiles(namespace,origin,accounts,app='testlane-android-pr
 export async function runProofPhases({consumer,app,device,plan,cookies,identities,output,before,runWorker,sanitize,signal,
   workerTimeoutMs,driverOptions,assertBuildUnchanged,onStage=()=>{},onCaptured=()=>{},onWorkerRisk=()=>{}}) {
   const recovery=path.join(output,'recovery'),journals=new Map();
+  const metric=()=>({calls:0,failed:0,elapsedMs:0}),elapsed=start=>Math.max(0,Math.round(performance.now()-start));
+  // These metrics contain fixed operation/phase labels and numbers only. They
+  // deliberately stay outside the native report contract and retain no values,
+  // identifiers, raw errors, device responses or credential-bearing payloads.
+  const timings={schemaVersion:1,assertOwned:metric(),phases:[]};
+  let currentPhase;
   const planBytes=Buffer.from(JSON.stringify(plan,null,2)+'\n'),planSha256=sha(planBytes);
   await writeFile(path.join(output,'plan.json'),planBytes,{flag:'wx',mode:0o600});
   const specFile=path.join(consumer.packageRoot,'examples/android-verification/proof-cases.mjs'),specSha256=sha(await readFile(specFile));
   const onRequest=async request=>{
-    if(request.type==='assert-owned'){await device.assertOwned();return true;}
+    if(request.type==='assert-owned'){
+      const start=performance.now(),phaseMetric=currentPhase?.assertOwned;let failed=true;
+      timings.assertOwned.calls++;if(phaseMetric)phaseMetric.calls++;
+      try{await device.assertOwned();failed=false;return true;}
+      finally{
+        const milliseconds=elapsed(start);timings.assertOwned.elapsedMs+=milliseconds;if(phaseMetric)phaseMetric.elapsedMs+=milliseconds;
+        if(failed){timings.assertOwned.failed++;if(phaseMetric)phaseMetric.failed++;}
+      }
+    }
     if(request.type==='bootstrap-consumed'){await device.assertBootstrapAbsent();return true;}
     if(request.type==='load-role'){
       assert.ok(Object.hasOwn(cookies,request.role));
@@ -64,22 +78,28 @@ export async function runProofPhases({consumer,app,device,plan,cookies,identitie
   const runs=[];
   for(const [phase,defect] of [['positive',false],['fault',true],['corrected',false]]){
     signal?.throwIfAborted();onStage(phase);app.setDefect(defect);
-    const result=await runWorker({plan,identities,origin:app.origin,cookies,onRequest,signal,timeoutMs:workerTimeoutMs,driverOptions});
-    onCaptured(result.captured??'');
-    const report=sanitize(result.report,plan);
-    if(report.reasonCodes.some(code=>['NATIVE_WORKER_TERMINATION_UNCONFIRMED','NATIVE_WORKER_RPC_UNSETTLED'].includes(code)))onWorkerRisk();
-    await writeFile(path.join(output,phase+'.json'),JSON.stringify(report,null,2)+'\n',{flag:'wx',mode:0o600});
-    assert.equal(report.verdict,defect?'failed':'passed','unchanged native suite detects the injected total defect');
-    for(const row of report.cases){
-      assert.equal(row.attempts,1);assert.ok(row.bodyAssertionsObserved>0);
-      assert.equal(row.cleanup.status,row.id==='anonymous-denied'?'not-required':'completed');
-      const failed=defect&&['editor-native-total','reviewer-native-approval'].includes(row.id);
-      assert.equal(row.status,failed?'failed':'passed');if(failed)assert.equal(row.reason,'NATIVE_ASSERTION_FAILED');
+    const phaseStart=performance.now();currentPhase={phase,elapsedMs:0,assertOwned:metric()};timings.phases.push(currentPhase);
+    try{
+      const result=await runWorker({plan,identities,origin:app.origin,cookies,onRequest,signal,timeoutMs:workerTimeoutMs,driverOptions});
+      onCaptured(result.captured??'');
+      const report=sanitize(result.report,plan);
+      if(report.reasonCodes.some(code=>['NATIVE_WORKER_TERMINATION_UNCONFIRMED','NATIVE_WORKER_RPC_UNSETTLED'].includes(code)))onWorkerRisk();
+      await writeFile(path.join(output,phase+'.json'),JSON.stringify(report,null,2)+'\n',{flag:'wx',mode:0o600});
+      assert.equal(report.verdict,defect?'failed':'passed','unchanged native suite detects the injected total defect');
+      for(const row of report.cases){
+        assert.equal(row.attempts,1);assert.ok(row.bodyAssertionsObserved>0);
+        assert.equal(row.cleanup.status,row.id==='anonymous-denied'?'not-required':'completed');
+        const failed=defect&&['editor-native-total','reviewer-native-approval'].includes(row.id);
+        assert.equal(row.status,failed?'failed':'passed');if(failed)assert.equal(row.reason,'NATIVE_ASSERTION_FAILED');
+      }
+      assert.equal(app.records().length,0,'independent controller proves no records remain');assert.equal(journals.size,0);
+      assert.equal(sha(await readFile(specFile)),specSha256);assert.equal(sha(await readFile(path.join(output,'plan.json'))),planSha256);
+      assert.equal(await digestTree(consumer.packageRoot),before);await assertBuildUnchanged();
+      runs.push({phase,verdict:report.verdict,passed:report.cases.filter(row=>row.status==='passed').length,failed:report.cases.filter(row=>row.status==='failed').length,recordsRemaining:0});
+    }finally{
+      currentPhase.elapsedMs=elapsed(phaseStart);currentPhase=undefined;
+      await writeFile(path.join(output,'timings.json'),JSON.stringify(timings,null,2)+'\n',{mode:0o600});
     }
-    assert.equal(app.records().length,0,'independent controller proves no records remain');assert.equal(journals.size,0);
-    assert.equal(sha(await readFile(specFile)),specSha256);assert.equal(sha(await readFile(path.join(output,'plan.json'))),planSha256);
-    assert.equal(await digestTree(consumer.packageRoot),before);await assertBuildUnchanged();
-    runs.push({phase,verdict:report.verdict,passed:report.cases.filter(row=>row.status==='passed').length,failed:report.cases.filter(row=>row.status==='failed').length,recordsRemaining:0});
   }
-  return {runs,planSha256,specSha256};
+  return {runs,planSha256,specSha256,timings};
 }

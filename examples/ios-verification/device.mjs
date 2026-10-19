@@ -16,6 +16,20 @@ const safePath = value => typeof value === 'string' && path.isAbsolute(value) &&
 const inside = (root, file) => { const rel = path.relative(root, file); return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel); };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// Fixed diagnostic labels only: never retain command arguments or environment.
+function commandKind(executable, args) {
+  if (executable === '/usr/bin/xcodebuild') return 'xcode-version';
+  if (executable === '/usr/sbin/lsof') return 'loopback-listeners';
+  if (executable === '/bin/ps') return 'process-identity';
+  if (executable === '/usr/bin/pgrep') return args[0] === '-P' ? 'owned-descendants' : 'owned-process-group';
+  if (executable !== '/usr/bin/xcrun' || args[0] !== 'simctl') return 'other';
+  const index = args[1] === '--set' ? 3 : 1;
+  if (args[index] === 'list') return { runtimes: 'runtime-list', devicetypes: 'device-type-list', devices: 'owned-device-list' }[args[index + 1]] ?? 'other';
+  return { create: 'owned-device-create', boot: 'owned-device-boot', bootstatus: 'owned-device-bootstatus',
+    shutdown: 'owned-device-shutdown', delete: 'owned-device-delete', install: 'owned-app-install',
+    get_app_container: 'owned-app-container' }[args[index]] ?? 'other';
+}
+
 export function selectIosTarget({ runtimes, devicetypes }, { runtimeId = 'com.apple.CoreSimulator.SimRuntime.iOS-26-4', deviceType = 'com.apple.CoreSimulator.SimDeviceType.iPhone-17' } = {}) {
   if (!/^com\.apple\.CoreSimulator\.SimRuntime\.iOS-\d+-\d+(?:-\d+)?$/.test(runtimeId) ||
       !/^com\.apple\.CoreSimulator\.SimDeviceType\.iPhone-[A-Za-z0-9-]+$/.test(deviceType)) throw fail('IOS_TARGET_SELECTOR_INVALID');
@@ -125,20 +139,30 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   async function run(executable, args, { timeoutMs = 30000, ignoreSignal = false } = {}) {
     if (!ignoreSignal) live();
     let stdout = '', stderr = '', bytes = 0, overflow = false;
+    const kind = commandKind(executable, args), began = performance.now();
     const state = launch(executable, args, { cwd: root, env, capture: () => {} });
+    const diagnostic = event => capture('\nIOS_DEVICE_COMMAND ' + JSON.stringify({ kind, event, spawned: state.spawned,
+      exited: state.exited, closed: state.closed, code: Number.isSafeInteger(state.code) ? state.code : null,
+      elapsedMs: Math.max(0, Math.round(performance.now() - began)) }) + '\n');
+    diagnostic('start');
     // Keep command streams separate without ever persisting their contents.
     stdout = ''; state.child.stdout.removeAllListeners('data'); state.child.stderr.removeAllListeners('data');
     for (const name of ['stdout', 'stderr']) state.child[name].on('data', chunk => { const text = chunk.toString('utf8'); capture(text); bytes += chunk.length;
       if (bytes > LIMIT) { overflow = true; return; } if (name === 'stdout') stdout += text; else stderr += text; });
     commands.add(state);
-    if (!await state.started) { commands.delete(state); throw fail('IOS_COMMAND_START_FAILED'); }
+    if (!await state.started) { diagnostic('start-failed'); commands.delete(state); throw fail('IOS_COMMAND_START_FAILED'); }
     state.child.stdin.end(); const deadline = Date.now() + timeoutMs;
+    let completed = false;
     try {
       while (!state.closed && Date.now() < deadline && !(signal?.aborted && !ignoreSignal) && !overflow && !captureFailed) await sleep(30);
-      if (!state.closed) { await stop(state); throw fail(signal?.aborted && !ignoreSignal ? 'IOS_CANCELLED' : overflow || captureFailed ? 'IOS_CAPTURE_LIMIT' : 'IOS_COMMAND_TIMEOUT'); }
+      if (!state.closed) {
+        diagnostic(signal?.aborted && !ignoreSignal ? 'cancelled-before-stop' : overflow || captureFailed ? 'capture-limit-before-stop' : 'timeout-before-stop');
+        await stop(state); throw fail(signal?.aborted && !ignoreSignal ? 'IOS_CANCELLED' : overflow || captureFailed ? 'IOS_CAPTURE_LIMIT' : 'IOS_COMMAND_TIMEOUT');
+      }
       if (overflow || captureFailed) throw fail('IOS_CAPTURE_LIMIT');
+      completed = true;
       return { code: state.code, stdout, stderr };
-    } finally { if (state.closed) commands.delete(state); }
+    } finally { diagnostic(completed ? 'end' : 'error'); if (state.closed) commands.delete(state); }
   }
   const simctl = (args, options) => run('/usr/bin/xcrun', ['simctl', '--set', deviceSetPath, ...args], options);
   async function assertRoot() {

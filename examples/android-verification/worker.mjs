@@ -1,6 +1,7 @@
 /** Private IPC worker. Credentials and app payloads never cross stdout or report fields. */
 import { runNativeCases } from './runner.mjs';
 import { createApprovalCases } from './proof-cases.mjs';
+import { NATIVE_PROOF_BUDGETS } from './budgets.mjs';
 import { loopbackOrigin, validateNativePlan, nativeFailureReport, appendNativeRunFailure, NATIVE_DRIVER_FAILURE_CODES, IOS_NATIVE_RUNNER } from './contracts.mjs';
 
 const controller = new AbortController(), pending = new Map();
@@ -104,7 +105,7 @@ async function main(payload) {
       },
     };
     report = await runNativeCases({ plan, cases: createApprovalCases(), context, signal: controller.signal,
-      timeoutMs: 45_000, cleanupTimeoutMs: 15_000, settleTimeoutMs: 5000 });
+      timeoutMs: NATIVE_PROOF_BUDGETS.bodyMs, cleanupTimeoutMs: NATIVE_PROOF_BUDGETS.cleanupMs, settleTimeoutMs: NATIVE_PROOF_BUDGETS.settleMs });
   } catch (error) {
     // Only this local driver's known class and allowlisted code select a static
     // diagnosis. Raw errors, messages, response bodies and RPC payloads never do.

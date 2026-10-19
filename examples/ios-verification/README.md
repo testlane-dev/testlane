@@ -134,10 +134,18 @@ before removing its owned temporary directories.
 
 ## Evidence and current limits
 
+Each compound role-loading and native UI case has a 90-second body budget,
+15 seconds for cleanup and up to 5 seconds to settle after abort. The installed
+shared `budgets.mjs` declares these bounds and the 600-second outer worker ceiling;
+cases run once without retries. Cold Appium/WebDriverAgent session creation has
+its own 240-second ceiling within that outer limit. Fixed numeric `timings.json`
+metrics retain per-phase elapsed time and ownership-check RPC counts/time even on
+phase failure, without identifiers, view text, raw errors or driver payloads.
+
 Successful output contains the reviewed plan, three fixed-shape JSON reports and a
 receipt with source, app-tree, build-manifest, plan, case and installed-package
-hashes, resolved tool versions and cleanup/leak-scan outcomes. Reports omit raw
-exceptions, response bodies, UI hierarchies, screenshots, recordings and device
+hashes, resolved tool versions, declared bounds, timings and cleanup/leak-scan
+outcomes. Reports omit raw exceptions, response bodies, UI hierarchies, screenshots, recordings and device
 logs. Temporary driver text stays bounded in memory and is checked for generated
 credential variants. Uncertain teardown fails the proof and retains private recovery
 metadata; failure output must be reviewed before sharing.

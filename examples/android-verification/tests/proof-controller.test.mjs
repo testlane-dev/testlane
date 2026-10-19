@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {mkdtemp,mkdir,readFile,readdir,rm,unlink,writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {setTimeout as delay} from 'node:timers/promises';
 import {digestTree,runProofPhases} from '../../../scripts/native-proof-support.mjs';
 
 test('package-tree binding distinguishes file boundaries even when raw concatenations are identical',async()=>{
@@ -30,6 +31,7 @@ async function fixture() {
     app:{origin:'http://127.0.0.1:1234',setDefect:value=>{defect=value;},records:()=>records},
     sanitize:report=>report,assertBuildUnchanged:async()=>{},workerTimeoutMs:1000};
   options.runWorker=async({onRequest})=>{
+    await onRequest({type:'assert-owned'});
     const marker='native-proof-'+randomUUID(),id=randomUUID(),caseId='editor-native-total';
     await onRequest({type:'intent',caseId,marker});
     records.push({id,marker});await onRequest({type:'record',caseId,marker,id});records.length=0;
@@ -45,10 +47,38 @@ async function fixture() {
 
 test('controller requires the unchanged five-case suite to pass, detect exactly two defects, then pass',async()=>{
   const f=await fixture();try{
+    f.options.device.assertOwned=()=>delay(5);
     const result=await runProofPhases(f.options);
     assert.deepEqual(result.runs.map(row=>[row.passed,row.failed,row.recordsRemaining]),[[5,0,0],[3,2,0],[5,0,0]]);
     assert.equal((await readdir(path.join(f.options.output,'recovery'))).length,0);
     assert.equal(JSON.parse(await readFile(path.join(f.options.output,'fault.json'))).verdict,'failed');
+    assert.deepEqual(result.timings,JSON.parse(await readFile(path.join(f.options.output,'timings.json'))));
+    assert.deepEqual(result.timings.phases.map(row=>row.phase),['positive','fault','corrected']);
+    assert.equal(result.timings.assertOwned.calls,3);assert.equal(result.timings.assertOwned.failed,0);
+    assert.equal(result.timings.assertOwned.elapsedMs,result.timings.phases.reduce((total,row)=>total+row.assertOwned.elapsedMs,0));
+    for(const row of result.timings.phases){
+      assert.ok(Number.isSafeInteger(row.elapsedMs)&&row.elapsedMs>=row.assertOwned.elapsedMs);
+      assert.equal(row.assertOwned.calls,1);assert.equal(row.assertOwned.failed,0);assert.ok(row.assertOwned.elapsedMs>=1);
+    }
+  }finally{await f.close();}
+});
+
+test('fixed numeric ownership timing evidence survives an early private failure without copying its payload',async()=>{
+  const f=await fixture(),secret='private-'+randomUUID();
+  try{
+    f.options.device.assertOwned=async()=>{await delay(5);throw Error(secret);};
+    await assert.rejects(runProofPhases(f.options),error=>error.message===secret);
+    const bytes=await readFile(path.join(f.options.output,'timings.json'),'utf8'),timings=JSON.parse(bytes);
+    assert.deepEqual(Object.keys(timings).sort(),['assertOwned','phases','schemaVersion']);
+    assert.equal(timings.schemaVersion,1);assert.equal(timings.phases.length,1);assert.equal(timings.phases[0].phase,'positive');
+    for(const row of [timings.assertOwned,timings.phases[0].assertOwned]){
+      assert.deepEqual(Object.keys(row).sort(),['calls','elapsedMs','failed']);
+      assert.equal(row.calls,1);assert.equal(row.failed,1);assert.ok(Number.isSafeInteger(row.elapsedMs)&&row.elapsedMs>=1);
+    }
+    assert.deepEqual(Object.keys(timings.phases[0]).sort(),['assertOwned','elapsedMs','phase']);
+    assert.ok(Number.isSafeInteger(timings.phases[0].elapsedMs)&&timings.phases[0].elapsedMs>=timings.assertOwned.elapsedMs);
+    for(const value of [secret,encodeURIComponent(secret),Buffer.from(secret).toString('base64')])assert.equal(bytes.includes(value),false);
+    assert.equal((await readdir(f.options.output)).includes('receipt.json'),false);
   }finally{await f.close();}
 });
 

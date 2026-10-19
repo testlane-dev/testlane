@@ -106,9 +106,11 @@ or a general guarantee for Expo. Trusted app code, test callbacks and the same O
 can access live session material. Real applications need a reviewed test-build
 contract, dedicated accounts and target policy before reuse.
 
-Each native case has a 45-second body budget, a 15-second cleanup budget and up to
-5 seconds to settle after an abort. Initial Appium session creation has a separate
-120-second ceiling for cold driver installation and app launch. The 360-second outer
+Each native case has a 90-second body budget for its compound role-loading and
+native UI flow, a 15-second cleanup budget and up to 5 seconds to settle after an
+abort. These bounds are declared in the installed proof's `budgets.mjs`; cases run
+once without retries. Initial Appium session creation has a separate
+120-second ceiling for cold driver installation and app launch. The 600-second outer
 worker process budget covers setup and code that ignores abort signals or blocks
 its event loop. Unsettled work
 stops subsequent cases and reports unknown cleanup. Device operations verify the
@@ -116,6 +118,12 @@ owned emulator; the runner does not kill a global ADB server or reset an existin
 Setup or teardown uncertainty is a failure and preserves recovery metadata. Inspect
 private recovery files before retrying; do not replace scoped backend cleanup with a
 device wipe. The synthetic backend is in-memory and ends with the proof process.
+
+The ignored output's `timings.json` records elapsed milliseconds per fixed proof
+phase and aggregate ownership-check RPC counts/time, including on phase failure.
+It contains no native view text, identifiers, payloads or raw errors. Successful
+receipts include these metrics and the declared bounds; timing does not replace
+the feature assertions or cleanup checks.
 
 This proof does not cover iOS, physical devices, WebViews, push notifications,
 biometrics, camera permissions, offline sync, purchases, deep links or device fleets.
