@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-10-19T13:16:09.114Z",
+  "trial": "existing-public-app-html-form-adaptation",
+  "verdict": "passed",
+  "boundReceipt": {
+    "filename": "acceptance.public.json",
+    "sha256": "83e37a7f919cea313421be78096715f23634699680df6d90a441bcd844e17b49"
+  },
+  "artifact": {
+    "name": "@testlane/cli",
+    "version": "0.7.0-beta.1",
+    "tarballSha256": "77ca384a3716c50d40906a27d340c5742aaee466e31c7662b2e77bb3a7c44aba",
+    "installedFiles": 218,
+    "allInstalledBytesEqualExactTarballAfterRun": true
+  },
+  "upstream": {
+    "repository": "https://github.com/expressjs/express",
+    "commit": "0dee2c52c7c873498f8ed7d8ee4ddd0a04d3ada8",
+    "license": "MIT",
+    "allDownloadedSourceViewsAndLicenseUnchanged": true
+  },
+  "report": {
+    "path": "output/acceptance/run-0939e04a-2b3e-45e6-8387-2ca5f6dbe6c9/report.json",
+    "sha256": "cb26df5c18ac9534cb602343adfbcb28b1269e6f632a286ee0622b30654798ab",
+    "helper": {
+      "version": "1",
+      "sha256": "df38a0474b32155091d9bba8efcad37605eb62901c0df1cb8eafa112a99d8f51"
+    },
+    "harness": {
+      "version": "1",
+      "sha256": "3b83aa1ed5ccd7d84d0d4c1cbee21584d1bf05acf9d53a5904a5aeaed5730ba4"
+    },
+    "plan": {
+      "sha256": "96a3fa793dcbf4094be5b0e682819baed3b7ccc96ad69a2d033c71ccedd83a47"
+    },
+    "specs": [
+      {
+        "id": "099df136972208eca83a8139ada3d6febfe1a954600cb9019d639606158ef084",
+        "sha256": "356e62c2dcd5cf409e840c466e2a5444bbcb1980e5236fbf82a847df81d68908"
+      }
+    ],
+    "summarySha256": "0abff6ab93bb2edd0b8915c9a0d59465e69858d41e26b8fbb9293be4a91b27ae"
+  },
+  "scope": "Existing upstream HTML authentication example with explicit runtime substitutions and read-only JSON identity adapter; no upstream role model or general agent-client certification."
+}

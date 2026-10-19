@@ -3,10 +3,10 @@
 Testlane is pre-1.0, so minor releases can change configuration and APIs. The full change list
 is in [CHANGELOG.md](../CHANGELOG.md).
 
-## Opting into 0.7.0-beta.1
+## Opting into 0.7.0-beta.2
 
 The verification preview adds `verify init`, `verify run`, `verify report` and the bundled
-`testlane-verify` skill. Install a reviewed `0.7.0-beta.1` tarball, or that exact npm version
+`testlane-verify` skill. Install a reviewed `0.7.0-beta.2` tarball, or that exact npm version
 when available, in the consuming app; its intended npm dist-tag is `next`. Stable `latest`
 remains 0.6.0 and does not include verification. The [preview quickstart](agent-verification.md)
 covers installation, skill copying and a complete run without a source checkout.

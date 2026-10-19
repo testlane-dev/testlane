@@ -243,6 +243,8 @@ describe("scanner rules", () => {
     expect(isAllowedUrl(u("github.com/actions/checkout"))).toBe(true);
     expect(isAllowedUrl(u("github.com/someone/repo"))).toBe(false);
     expect(isAllowedUrl(u("github.com/actionsx"))).toBe(false);
+    expect(isAllowedUrl(u("github.com/expressjs/express/tree/0dee2c52c7c873498f8ed7d8ee4ddd0a04d3ada8/examples/auth"))).toBe(true);
+    expect(isAllowedUrl(u("github.com/expressjs/express-lookalike"))).toBe(false);
     expect(isAllowedUrl(u("docs.github.com/en"))).toBe(true);
     expect(isAllowedUrl(u("www.npmjs.com/package/x"))).toBe(true);
     expect(isAllowedUrl(u("nodejs.org/en"))).toBe(true);

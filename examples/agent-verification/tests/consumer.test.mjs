@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import childProcess from 'node:child_process';
 import { mkdtemp, writeFile, readFile, cp, rm, symlink, readdir, realpath, lstat } from 'node:fs/promises';
-import { createRequire } from 'node:module';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
@@ -44,6 +45,75 @@ function spec(body, { declaration = 'test', annotation = 'create-note', cleanup 
     "await runCase(info, 'create-note', { run: async () => {" + body + "}, cleanup: " + cleanup + " }); });",
   ].join('\n');
 }
+integration('long report paths launch from the app project and preserve app-relative fixtures', async () => {
+  const source = [
+    "import { test, expect } from '@playwright/test';",
+    "import { readFile, writeFile, unlink, realpath } from 'node:fs/promises';",
+    "import { existsSync } from 'node:fs';",
+    "import { runCase } from './testlane-authoring.mjs';",
+    "test('app-relative fixture', { annotation: { type: 'testlane-case', description: 'create-note' } }, async ({ page }, info) => {",
+    "await runCase(info, 'create-note', { run: async () => {",
+    "expect(await realpath(process.cwd())).toBe(await realpath(new URL('.', import.meta.url)));",
+    "const fixture = JSON.parse(await readFile('relative-app-fixture.json', 'utf8'));",
+    'await page.setContent(' + JSON.stringify('<button onclick="document.querySelector(\'output\').textContent=\'Fixture applied\'">Apply</button><output aria-label="Result">Waiting</output>') + ');',
+    "await page.getByRole('button', { name: 'Apply', exact: true }).click();",
+    "await expect(page.getByLabel('Result', { exact: true })).toHaveText(fixture.expected);",
+    "await writeFile('owned-app-record.json', JSON.stringify({ owned: true }));",
+    "}, cleanup: async () => {",
+    "expect(JSON.parse(await readFile('owned-app-record.json', 'utf8')).owned).toBe(true);",
+    "await unlink('owned-app-record.json'); expect(existsSync('owned-app-record.json')).toBe(false);",
+    "await writeFile(new URL('./cleanup-completed', import.meta.url), '1');",
+    "} }); });",
+  ].join('\n');
+  const app = await project(source);
+  let outputDir = path.join(app.root, 'owned-output');
+  while (outputDir.length < 270) outputDir = path.join(outputDir, 'nested-output');
+  const projectDirectory = await realpath(app.root);
+  const originalSpawn = childProcess.spawn;
+  const bootstrap = path.resolve(here, '../bootstrap.mjs');
+  const capturedBootstrap = { stdout: '', stderr: '', errorCode: null };
+  const previousCI = Object.fromEntries(['CI', 'GITHUB_ACTIONS', 'GITHUB_EVENT_PATH'].map(name => [name, process.env[name]]));
+  try {
+    // Playwright enables Git discovery in GitHub Actions. Exercise that CI branch
+    // locally too, without reading any ambient event file.
+    process.env.CI = 'true'; process.env.GITHUB_ACTIONS = 'true';
+    process.env.GITHUB_EVENT_PATH = path.join(app.root, 'no-ambient-event.json');
+    // This generated fixture has no authentication or credentials. Observe the real
+    // bootstrap only for its owned project; never stub behavior or retain other children.
+    childProcess.spawn = function (executable, args, options) {
+      const child = originalSpawn.call(this, executable, args, options);
+      if (executable === process.execPath && args?.[0] === bootstrap && options?.cwd === projectDirectory) {
+        for (const stream of ['stdout', 'stderr']) child[stream]?.on('data', data => {
+          capturedBootstrap[stream] += String(data).slice(0, Math.max(0, 8192 - capturedBootstrap[stream].length));
+        });
+        child.once('error', error => { capturedBootstrap.errorCode = error.code ?? null; });
+      }
+      return child;
+    };
+    syncBuiltinESMExports();
+    await writeFile(path.join(app.root, 'relative-app-fixture.json'), JSON.stringify({ expected: 'Fixture applied' }));
+    const result = await runVerification({ planFile: app.planFile, outputDir });
+    assert.ok(path.join(result.directory, '.control').length > 260);
+    const launchDiagnostic = JSON.stringify({ platform: process.platform, node: process.version,
+      projectPathCharacters: app.root.length, outputPathCharacters: outputDir.length,
+      controlPathCharacters: path.join(result.directory, '.control').length,
+      verdict: result.report.verdict, reasonCodes: result.report.reasonCodes, execution: result.report.execution, capturedBootstrap,
+      cases: result.report.cases.map(item => ({ id: item.id, status: item.status, reason: item.reason,
+        failureLocation: item.failureLocation, assertionsObserved: item.assertionsObserved, cleanup: item.cleanup })) }, null, 2);
+    assert.equal(result.report.execution.exitCode, 0, launchDiagnostic);
+    assert.equal(result.report.verdict, 'passed');
+    assert.equal(result.report.cases[0].cleanup.status, 'completed');
+    assert.ok(result.report.cases[0].assertionsObserved >= 4);
+    assert.equal(await readFile(path.join(app.root, 'cleanup-completed'), 'utf8'), '1');
+    assert.equal((await readdir(app.root)).includes('owned-app-record.json'), false);
+  } finally {
+    childProcess.spawn = originalSpawn; syncBuiltinESMExports();
+    for (const [name, value] of Object.entries(previousCI)) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    await app.close();
+  }
+});
 integration('real Playwright rejects zero tests, skips, expected failures and missing helper/cleanup', async t => {
   for (const [label, source] of [
     ['zero', "import { test } from '@playwright/test';"],

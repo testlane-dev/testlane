@@ -4,6 +4,24 @@ All notable changes to Testlane are listed here, newest first. The format follow
 Changelog. Testlane is pre-1.0, so a minor version can change behaviour; each such change names
 what to do about it in [docs/upgrading.md](docs/upgrading.md).
 
+## [0.7.0-beta.2] - 2026-10-19
+
+### Fixed
+
+- Playwright starts from the canonical app project directory. Deep private output
+  directories no longer cause Windows child-process startup failure; app-relative
+  fixture reads use the app root.
+- Disable unused Playwright Git metadata collection in the generated configuration;
+  CI no longer launches Git from the deep private configuration directory.
+- The existing-app quickstart now locates globally installed examples under the
+  scoped `@testlane/cli` package directory.
+- Case-design guidance calls out full stable-state comparisons after denied mutations
+  and capture of owned IDs before a creation helper can fail an assertion.
+
+This carries the verification preview with corrected process startup and reviewed
+installation/case-design guidance. Credential profiles and stored-secret formats are unchanged.
+Use the exact reviewed beta version; stable npm `latest` remains 0.6.0.
+
 ## [0.7.0-beta.1] - 2026-10-19
 
 ### Added

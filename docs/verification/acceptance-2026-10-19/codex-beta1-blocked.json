@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "client": "Codex CLI",
+  "clientVersion": "0.163.0-alpha.10.2",
+  "platform": "win32",
+  "artifactSha256": "77ca384a3716c50d40906a27d340c5742aaee466e31c7662b2e77bb3a7c44aba",
+  "version": "0.7.0-beta.1",
+  "nativeStore": "scratch-dpapi",
+  "clientExit": 0,
+  "timedOut": false,
+  "clientConfig": {
+    "ignoreUserConfig": true,
+    "ephemeral": true,
+    "sandbox": "workspace-write",
+    "approvalPolicy": "never",
+    "network": "enabled for loopback target",
+    "mcpServersConfigured": 0,
+    "configuredModel": "gpt-6.1-sol",
+    "reasoningEffort": "xhigh",
+    "modelSelection": "preserved-user-configuration"
+  },
+  "verdict": "incomplete",
+  "commandCount": 20,
+  "failedCommandCount": 2,
+  "executions": [
+    {
+      "action": "init",
+      "exitCode": 0
+    },
+    {
+      "action": "run",
+      "exitCode": 2
+    },
+    {
+      "action": "report",
+      "exitCode": 0
+    }
+  ],
+  "recordsAfterClient": 0,
+  "secretVariantScanClear": true,
+  "authoredInputHashes": {
+    "plan.json": "730bbeb11fe26a38bf31b47625d822cde644b44c3480355937f0c0140dbdfda6",
+    "feature.spec.mjs": "93b139a93004a64884ba55d5295bbc9b6830c65028e3273b33ec8f81d883d682",
+    "test.mjs": "35e59d6ea85e8dd04e10ac40ed4ee57595c8a1168e06fc5c28b3fab1deb25402",
+    "testlane-authoring.mjs": "df38a0474b32155091d9bba8efcad37605eb62901c0df1cb8eafa112a99d8f51",
+    "fixtures.mjs": "9997bd2727d30cc2422d24dd02a98ed93ff699e67d1c97b7c0fc00365459fece"
+  },
+  "replay": null,
+  "reports": [
+    {
+      "relativePath": "output/testlane-verification/run-5bef8dc3-ecdc-4b38-9eb7-c2d4b39ef65e/report.json",
+      "sha256": "9eafca51247e86c0789d4fa79c90ddbcc4f259e5afd66180cb4de2462c40aee1",
+      "verdict": "blocked",
+      "cases": [
+        {
+          "id": "editor-draft-total",
+          "status": "blocked",
+          "cleanup": {
+            "required": true,
+            "status": "unknown"
+          },
+          "assertionsObserved": 0
+        },
+        {
+          "id": "editor-approval-denied",
+          "status": "blocked",
+          "cleanup": {
+            "required": true,
+            "status": "unknown"
+          },
+          "assertionsObserved": 0
+        },
+        {
+          "id": "reviewer-browser-approval",
+          "status": "blocked",
+          "cleanup": {
+            "required": true,
+            "status": "unknown"
+          },
+          "assertionsObserved": 0
+        },
+        {
+          "id": "reviewer-duplicate-denied",
+          "status": "blocked",
+          "cleanup": {
+            "required": true,
+            "status": "unknown"
+          },
+          "assertionsObserved": 0
+        },
+        {
+          "id": "anonymous-request-denied",
+          "status": "blocked",
+          "cleanup": {
+            "required": true,
+            "status": "unknown"
+          },
+          "assertionsObserved": 0
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "One installed client and one generated local app under the recorded settings, not general client certification.",
+    "The bounded local controller invokes installed CLI commands; generated test code remains trusted project code.",
+    "Existing user model preference was preserved while other user configuration was ignored; saved CLI login was reused."
+  ]
+}

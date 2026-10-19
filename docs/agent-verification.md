@@ -2,16 +2,16 @@
 
 Give your coding agent the feature description and the app repository. The `testlane-verify` skill helps it inspect the app, design concrete acceptance cases, write app-specific Playwright tests and run them with Testlane sessions. The report links each planned case to execution and cleanup evidence.
 
-This guide targets the opt-in **`@testlane/cli@0.7.0-beta.1` verification preview**. Install a reviewed beta tarball below, or the exact npm version when available. Its intended npm dist-tag is `next`; stable `latest` remains `0.6.0`, whose CLI has no `verify` commands. The preview package bundles the broker, skill, fixture and harness; no source clone is needed. No embedded model, API service or new API key is involved: your coding agent does the design and test authoring.
+This guide targets the opt-in **`@testlane/cli@0.7.0-beta.2` verification preview**. Install a reviewed beta tarball below, or the exact npm version when available. Its intended npm dist-tag is `next`; stable `latest` remains `0.6.0`, whose CLI has no `verify` commands. The preview package bundles the broker, skill, fixture and harness; no source clone is needed. No embedded model, API service or new API key is involved: your coding agent does the design and test authoring.
 
 ## Start with the app and existing authentication
 
 The app needs Node 22+, its own installed Playwright Test, a running non-production target, and reviewed, human-seeded Testlane profiles bound to that exact origin. Complete the human account/profile/store setup in the [existing-app quickstart](quickstart.md) first. The [project-local installation guide](project-install.md) explains the broker configuration; its stable package pin does not include verification. Use the project's package manager and lockfile.
 
-Use the versioned artifact and manifest from the [0.7.0-beta.1 preview release](https://github.com/testlane-dev/testlane/releases/tag/v0.7.0-beta.1) when available. From the **app repository**, install the reviewed tarball by its actual absolute path:
+Use the versioned artifact and manifest from the [0.7.0-beta.2 preview release](https://github.com/testlane-dev/testlane/releases/tag/v0.7.0-beta.2) when available. From the **app repository**, install the reviewed tarball by its actual absolute path:
 
 ```sh
-npm install --save-dev --save-exact /absolute/artifacts/testlane-cli-0.7.0-beta.1.tgz @playwright/test@1.64.0
+npm install --save-dev --save-exact /absolute/artifacts/testlane-cli-0.7.0-beta.2.tgz @playwright/test@1.64.0
 npx --no-install playwright install chromium
 npx --no-install testlane --version
 npx --no-install testlane doctor
@@ -20,10 +20,10 @@ npx --no-install testlane doctor
 When that exact preview version is available on npm, its equivalent package install is:
 
 ```sh
-npm install --save-dev --save-exact @testlane/cli@0.7.0-beta.1 @playwright/test@1.64.0
+npm install --save-dev --save-exact @testlane/cli@0.7.0-beta.2 @playwright/test@1.64.0
 ```
 
-Use the exact version rather than a moving dist-tag. For Windows tarballs use a quoted forward-slash path, such as `'C:/artifacts/testlane-cli-0.7.0-beta.1.tgz'`. If PowerShell blocks `npm.ps1`/`npx.ps1`, use `npm.cmd`/`npx.cmd`; the direct Node commands below need no script-policy change.
+Use the exact version rather than a moving dist-tag. For Windows tarballs use a quoted forward-slash path, such as `'C:/artifacts/testlane-cli-0.7.0-beta.2.tgz'`. If PowerShell blocks `npm.ps1`/`npx.ps1`, use `npm.cmd`/`npx.cmd`; the direct Node commands below need no script-policy change.
 
 Preserve an existing Playwright installation/configuration; inspect version differences rather than silently replacing it. Linux may need reviewed OS dependencies. Store access must be available in the same machine/session. The workflow does not create accounts, provision a test database or seed passwords. Do not send credentials through the feature brief.
 

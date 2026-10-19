@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-10-19T13:13:02.752Z",
+  "trial": "existing-public-app-html-form-adaptation",
+  "checks": {
+    "passiveDoctorProfileDiscoveryScratchDpapiSeedAndCheck": true,
+    "copiedQuickstartIdentityProtectedContentAnonymousDenialAndBrowserClose": true,
+    "bundledSkillCopiedInitDraftAndDraftExecutionRefused": true,
+    "installedVerifyAuthoredAssertionsLogoutCleanupAndReport": true
+  },
+  "limitations": [
+    "Existing Express auth example with explicit runtime-only account/session/module substitutions and a read-only identity adapter; not an unmodified end-to-end app.",
+    "One user, no upstream role model: declared profile role is not app authorization evidence.",
+    "No real coding-agent CLI client certification; installed-package documentation/integration acceptance only.",
+    "No screenshots/traces/videos requested or retained."
+  ],
+  "artifact": {
+    "name": "@testlane/cli",
+    "version": "0.7.0-beta.1",
+    "sha256": "77ca384a3716c50d40906a27d340c5742aaee466e31c7662b2e77bb3a7c44aba",
+    "source": "https://github.com/testlane-dev/testlane/releases/tag/v0.7.0-beta.1"
+  },
+  "upstream": {
+    "repository": "https://github.com/expressjs/express",
+    "commit": "0dee2c52c7c873498f8ed7d8ee4ddd0a04d3ada8",
+    "license": "MIT",
+    "authSourceSha256": "4acca9f794d50f57c41967b471031f7410cc61a2b979c86ad0f264567f06e69b",
+    "dependencies": {
+      "express": "5.3.0",
+      "ejs": "3.1.10",
+      "expressSession": "1.18.1",
+      "pbkdf2Password": "1.2.1"
+    }
+  },
+  "integration": {
+    "login": {
+      "path": "/login",
+      "method": "POST",
+      "bodyFormat": "form",
+      "fields": [
+        "username",
+        "password"
+      ],
+      "sessionCookie": "connect.sid"
+    },
+    "identity": {
+      "path": "/__acceptance/identity",
+      "addedTestOnlyAdapter": true,
+      "source": "Existing req.session.user.name",
+      "returnsAppRole": false
+    },
+    "protectedRoute": {
+      "path": "/restricted",
+      "assertion": "Existing restricted-area text and logout link; no new heading added",
+      "anonymousBehavior": "302 to /login"
+    },
+    "logout": {
+      "path": "/logout",
+      "behavior": "Upstream session.destroy and redirect"
+    },
+    "runtimeChanges": [
+      "Resolve parent-repository express import to pinned installed express.",
+      "Generate a fresh in-memory account, password and session-signing secret.",
+      "Use an explicit fresh MemoryStore and wait for upstream PBKDF2 initialization.",
+      "Load as child module to avoid upstream credential logging/hardcoded port; bind ephemeral loopback port.",
+      "Add only a read-only identity adapter; mask unexpected app errors with fixed text."
+    ],
+    "successPathLimitation": "Both upstream success and rejected sign-in end at /login; identity is independently asserted, not inferred from cookie presence or path."
+  },
+  "verifierAdaptations": {
+    "baseSha256": "41ef7611b216d98a799f22adae4aad88afb6f1f4a56d59a66468e63056bcbae5",
+    "adaptedSha256": "8f3a53d9562b18f18520c512bda1d2d70208f53a32160e30a20dd7b92022ce22",
+    "changes": [
+      "Assert actual identity email without inventing an upstream role.",
+      "Assert existing body text instead of requiring a new heading.",
+      "Fixed pass label says content rather than heading."
+    ]
+  },
+  "authored": {
+    "planSha256": "96a3fa793dcbf4094be5b0e682819baed3b7ccc96ad69a2d033c71ccedd83a47",
+    "specSha256": "356e62c2dcd5cf409e840c466e2a5444bbcb1980e5236fbf82a847df81d68908",
+    "helperSha256": "df38a0474b32155091d9bba8efcad37605eb62901c0df1cb8eafa112a99d8f51"
+  },
+  "report": {
+    "path": "output/acceptance/run-0939e04a-2b3e-45e6-8387-2ca5f6dbe6c9/report.json",
+    "sha256": "cb26df5c18ac9534cb602343adfbcb28b1269e6f632a286ee0622b30654798ab",
+    "summaryPath": "output/acceptance/run-0939e04a-2b3e-45e6-8387-2ca5f6dbe6c9/summary.html",
+    "cases": [
+      {
+        "id": "existing-html-authentication",
+        "status": "passed",
+        "reason": "CASE_PASSED",
+        "cleanup": {
+          "required": true,
+          "status": "completed"
+        },
+        "attempts": 1,
+        "failureLocation": null,
+        "assertionsObserved": 10,
+        "specId": "099df136972208eca83a8139ada3d6febfe1a954600cb9019d639606158ef084"
+      }
+    ],
+    "artifacts": []
+  },
+  "verdict": "passed",
+  "cleanup": {
+    "scratchProfileDeleteExit": 0,
+    "appSessionsRemaining": 0,
+    "ownedListenerClosed": true,
+    "fixtureSessionDirectoriesRemaining": 0,
+    "freshDpapiHomeRemoved": true,
+    "ownedTempRemoved": true,
+    "quickstartSessionFileRemoved": true,
+    "noGeneratedPasswordOrIssuedCookieInRetainedEvidenceOrOutput": true
+  },
+  "completedAt": "2026-10-19T13:14:16.699Z"
+}
