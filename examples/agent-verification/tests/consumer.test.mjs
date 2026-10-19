@@ -71,7 +71,13 @@ integration('long report paths launch from the app project and preserve app-rela
     await writeFile(path.join(app.root, 'relative-app-fixture.json'), JSON.stringify({ expected: 'Fixture applied' }));
     const result = await runVerification({ planFile: app.planFile, outputDir });
     assert.ok(path.join(result.directory, '.control').length > 260);
-    assert.equal(result.report.execution.exitCode, 0);
+    const launchDiagnostic = JSON.stringify({ platform: process.platform, node: process.version,
+      projectPathCharacters: app.root.length, outputPathCharacters: outputDir.length,
+      controlPathCharacters: path.join(result.directory, '.control').length,
+      verdict: result.report.verdict, reasonCodes: result.report.reasonCodes, execution: result.report.execution,
+      cases: result.report.cases.map(item => ({ id: item.id, status: item.status, reason: item.reason,
+        failureLocation: item.failureLocation, assertionsObserved: item.assertionsObserved, cleanup: item.cleanup })) }, null, 2);
+    assert.equal(result.report.execution.exitCode, 0, launchDiagnostic);
     assert.equal(result.report.verdict, 'passed');
     assert.equal(result.report.cases[0].cleanup.status, 'completed');
     assert.ok(result.report.cases[0].assertionsObserved >= 4);
