@@ -23,7 +23,7 @@ test('package and workflow changes select only relevant macOS jobs', () => {
   }
   for (const path of ['examples/workflows/feature-acceptance/run.mjs',
     'examples/playwright/fixtures.mjs', 'examples/playwright/package-lock.json',
-    'examples/existing-app/verify.mjs']) {
+    'examples/existing-app/verify.mjs', 'examples/agent-verification/runtime.mjs']) {
     assert.deepEqual(macOSCoverage(path), ['workflow', 'cleanRoom'], path);
   }
   assert.deepEqual(macOSCoverage('.github/workflows/ci.yml'),

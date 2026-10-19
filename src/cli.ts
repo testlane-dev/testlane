@@ -90,6 +90,7 @@ import {
 import { isReservedProfileName, PolicyError, PROFILE_NAME_RE, SignInError } from "./types.js";
 import { OriginMismatchError } from "./vault.js";
 import { runWorkflow, type WorkflowRunOptions } from "./workflow.js";
+import { runVerification, type VerificationOptions } from "./verification.js";
 import { VERSION } from "./version.js";
 
 export const EXIT_CODES = {
@@ -415,6 +416,56 @@ export function buildProgram(opts: BuildProgramOptions = {}): Command {
     preScan(argv);
     return parseSync(argv, parseOpts);
   }) as Command["parse"];
+
+  const verification = program.command("verify").description("prepare and run Playwright checks written by your coding agent");
+  verification.command("init")
+    .description("create a draft verification workspace; the coding agent designs the actual tests")
+    .requiredOption("--brief <file>", "feature requirements in a local text file")
+    .requiredOption("--target <origin>", "reviewed nonproduction app origin")
+    .requiredOption("--profile <name>", "existing human-approved Testlane profile")
+    .option("--environment <name>", "local, sandbox, testing or preview", "testing")
+    .option("--output-dir <dir>", "new app-local suite directory", "e2e/testlane-verification")
+    .option("--json", "structured scaffold result")
+    .action(async (o: { brief: string; target: string; profile: string; environment: string; outputDir: string; json?: boolean }, cmd: Command) => {
+      let code: number;
+      try {
+        const globals = cmd.optsWithGlobals<GlobalOptions>();
+        const options: VerificationOptions = { mode: "init", cwd, stdout, stderr, brief: o.brief, target: o.target, profile: o.profile, environment: o.environment, outputDir: o.outputDir, json: o.json === true || globals.json === true };
+        code = await runVerification(options);
+      } catch { err("Testlane verification scaffold could not start; check the local inputs.\n"); return exit(1); }
+      if (code !== 0) exit(code);
+    });
+  verification.command("run")
+    .description("run the exact app-owned specs mapped by a reviewed verification plan")
+    .requiredOption("--plan <file>", "reviewed plan with concrete cases and cleanup")
+    .option("--output-dir <dir>", "private local run reports and evidence")
+    .option("--json", "structured verification report")
+    .action(async (o: { plan: string; outputDir?: string; json?: boolean }, cmd: Command) => {
+      let code: number;
+      try {
+        const globals = cmd.optsWithGlobals<GlobalOptions>();
+        const options: VerificationOptions = { mode: "run", cwd, stdout, stderr, plan: o.plan, json: o.json === true || globals.json === true };
+        if (o.outputDir !== undefined) options.outputDir = o.outputDir;
+        if (globals.profiles !== undefined) options.profilesFile = globals.profiles;
+        if (globals.requester !== undefined) options.requester = globals.requester;
+        code = await runVerification(options);
+      } catch { err("Testlane verification could not start; check the reviewed plan and installation.\n"); return exit(1); }
+      if (code !== 0) exit(code);
+    });
+
+  verification.command("report")
+    .description("create a private local HTML summary beside an existing verification report")
+    .requiredOption("--report <file>", "existing verification JSON report")
+    .requiredOption("--plan <file>", "exact unchanged plan used by that run")
+    .option("--json", "structured render result")
+    .action(async (o: { report: string; plan: string; json?: boolean }, cmd: Command) => {
+      let code: number;
+      try {
+        const globals = cmd.optsWithGlobals<GlobalOptions>();
+        code = await runVerification({ mode: "report", cwd, stdout, stderr, report: o.report, plan: o.plan, json: o.json === true || globals.json === true });
+      } catch { err("Testlane verification report could not be rendered.\n"); return exit(1); }
+      if (code !== 0) exit(code);
+    });
 
   const workflows = program.command("workflow").description("run a shipped smoke or two-role feature workflow with a reviewed manifest");
   for (const kind of ["smoke", "feature"] as const) {

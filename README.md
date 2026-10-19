@@ -148,6 +148,15 @@ storage authentication is not implied by cookie support.
 
 ## Workflow templates
 
+For agent-designed checks beyond the two fixed templates, the
+[source-preview verification workflow](docs/agent-verification.md) packages a
+`testlane-verify` skill, a draft workspace initializer and a Playwright execution harness.
+Describe the behavior to your coding agent; it inspects your app and writes the tests.
+The harness maps planned cases to executed results and cleanup, with optional private
+screenshots. This **source-only `0.7.0-dev.0` preview is not a published release** and is absent
+from npm 0.6.0. `verify report` can render a private local HTML summary of the case
+expectations, results and screenshots; the agent remains responsible for assertion quality.
+
 Optional [smoke and two-role feature templates](docs/workflows/README.md) exercise fixed
 checks and emit sanitized reports. They accept loopback targets in this release;
 the feature template also requires a trusted test-environment receipt. They are separate

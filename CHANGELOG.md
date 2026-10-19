@@ -4,6 +4,26 @@ All notable changes to Testlane are listed here, newest first. The format follow
 Changelog. Testlane is pre-1.0, so a minor version can change behaviour; each such change names
 what to do about it in [docs/upgrading.md](docs/upgrading.md).
 
+## [Unreleased] — 0.7.0-dev.0 source preview
+
+### Added
+
+- A `testlane-verify` agent skill for turning feature requirements and app code into
+  concrete acceptance cases and app-owned Playwright tests.
+- `verify init` creates a draft verification workspace without replacing existing tests
+  or changing accounts, credentials or profiles.
+- `verify run` reconciles planned cases with actual Playwright outcomes, cleanup and
+  source hashes. Missing, skipped, duplicated and expected-failure cases cannot pass.
+  Passing cases need an observed Playwright `expect` step; assertion counts do not prove
+  the quality or coverage of the business checks.
+- `verify report` creates a private local HTML summary bound to the exact plan and
+  retained screenshot hashes, without rerunning tests or overwriting an existing summary.
+- Explicitly enabled local screenshots carry private/unreviewed artifact metadata;
+  traces, video and automatic screenshots stay disabled.
+
+These are unpublished `0.7.0-dev.0` source-preview additions. The published 0.6.0
+package remains unchanged.
+
 ## [0.6.0] - 2026-10-19
 
 ### Changed
