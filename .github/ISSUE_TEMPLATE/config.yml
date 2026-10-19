@@ -1,0 +1,9 @@
+blank_issues_enabled: false
+contact_links:
+  # GitHub requires absolute URLs here. The repository lives under the testlane-dev organisation.
+  - name: Report a security vulnerability
+    url: https://github.com/testlane-dev/testlane/security/policy
+    about: "Do not open a public issue for security problems. Follow SECURITY.md (GitHub private vulnerability reporting: the repository's Security tab, Report a vulnerability)."
+  - name: Threat model and known limits
+    url: https://github.com/testlane-dev/testlane/blob/main/docs/threat-model.md
+    about: Check whether the behaviour is a documented limit before filing.

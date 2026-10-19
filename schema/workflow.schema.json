@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:testlane:schema:workflow:v1",
+  "title": "Testlane authenticated smoke workflow manifest",
+  "description": "A strict, secret-free manifest for one bounded authenticated smoke run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "id", "profile", "target", "identity", "checks", "timeoutMs"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "kind": {"const": "authenticated-smoke"},
+    "id": {"$ref": "#/$defs/id"},
+    "profile": {"$ref": "#/$defs/profile"},
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "environment"],
+      "properties": {
+        "origin": {"$ref": "#/$defs/origin"},
+        "environment": {"enum": ["sandbox", "testing"]},
+        "buildId": {"$ref": "#/$defs/id"}
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["email", "role"],
+      "properties": {
+        "email": {"type": "string", "format": "email", "maxLength": 320},
+        "role": {"$ref": "#/$defs/text"}
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["readinessPath", "identityPath", "protectedPath", "protectedHeading", "apiPath"],
+      "properties": {
+        "readinessPath": {"$ref": "#/$defs/path"},
+        "identityPath": {"$ref": "#/$defs/path"},
+        "protectedPath": {"$ref": "#/$defs/path"},
+        "protectedHeading": {"$ref": "#/$defs/text"},
+        "apiPath": {"$ref": "#/$defs/path"}
+      }
+    },
+    "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 120000}
+  },
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+    "profile": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9._-]*(:[a-z0-9][a-z0-9._-]*)*$"},
+    "origin": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^https://(?![^/?#]*(?:^|\\.)(?:prod|production|live)(?:[.:/]|$))[^/?#@\\s]+/?$|^http://(?:localhost|127\\.0\\.0\\.1|\\[?::1\\]?)(?::[0-9]{1,5})?/?$"},
+    "path": {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^/(?!/)(?!.*://)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^%?#\\\\\\s\\u0000-\\u001f\\u007f]*$"},
+    "text": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(?!\\s)(?!.*\\s$)[^\\u0000-\\u001f\\u007f]+$"}
+  }
+}

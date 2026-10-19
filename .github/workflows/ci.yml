@@ -1,0 +1,459 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Catch cross-platform regressions even when no macOS-specific path changes.
+    - cron: "17 6 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    name: select CI matrix
+    runs-on: ubuntu-latest
+    outputs:
+      check_os: ${{ steps.select.outputs.check_os }}
+      workflow_os: ${{ steps.select.outputs.workflow_os }}
+      clean_room_os: ${{ steps.select.outputs.clean_room_os }}
+      keychain_os: ${{ steps.select.outputs.keychain_os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - run: node scripts/ci-matrix.test.mjs
+
+      - id: select
+        name: Select runners from changed paths
+        env:
+          CI_EVENT: ${{ github.event_name }}
+          CI_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/ci-matrix.mjs
+
+  check:
+    needs: matrix
+    # Node 22 jobs keep the names `typecheck + test (<os>)` (branch protection may
+    # require them); the extra Node 24 job is named `typecheck + test (ubuntu-latest, node 24)`.
+    name: typecheck + test (${{ matrix.os }}${{ matrix.node != 22 && format(', node {0}', matrix.node) || '' }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows exercises the real DPAPI store end to end; Ubuntu and macOS
+        # cover the POSIX-only cases (file modes) and prove the non-Windows
+        # store refuses. The real macOS/Linux keychains are exercised by the
+        # `keychain` job below.
+        os: ${{ fromJSON(needs.matrix.outputs.check_os) }}
+        # Node 22 (the engines floor) runs on every selected OS. Node 24 is one
+        # extra Ubuntu job, not an OS x Node matrix, to keep macOS and Windows
+        # minutes down. `node` must stay a matrix key (not only an include key):
+        # an include entry that overwrites no original key is merged into the
+        # existing ubuntu-latest job instead of adding a new one.
+        node: [22]
+        include:
+          - os: ubuntu-latest
+            node: 24
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - name: Release artifact integrity contracts
+        run: node --test scripts/release-artifact.test.mjs
+
+      - run: npx vitest run --reporter=default
+        env:
+          # Never let a runner touch a real ~/.testlane (runner context is step-level only).
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-home
+
+      - run: npm run build
+
+      - name: Install the packed tarball globally (testlane executable)
+        shell: bash
+        run: |
+          npm pack
+          npm install -g ./testlane-cli-*.tgz
+          version="$(node -p "require('./package.json').version")"
+          test "$(testlane --version)" = "$version"
+
+      - name: Packaged CLI refuses the production profile
+        shell: bash
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-home
+        run: |
+          set +e
+          testlane --profiles examples/testlane.profiles.json session acme:production
+          code=$?
+          set -e
+          echo "exit code: $code"
+          test "$code" -eq 2
+
+  authenticated-workflow:
+    needs: matrix
+    # The optional workflow template is exercised with a real Chromium browser
+    # on every supported desktop runner. The root build runs first so the
+    # template resolves the public workflow contracts from dist/.
+    name: authenticated-workflow (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.matrix.outputs.workflow_os) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            examples/workflows/authenticated-smoke/package-lock.json
+            examples/workflows/feature-acceptance/package-lock.json
+            examples/playwright/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Install workflow template dependencies
+        run: npm --prefix examples/workflows/authenticated-smoke ci --no-audit --no-fund
+
+      - name: Install feature-acceptance template dependencies
+        run: npm --prefix examples/workflows/feature-acceptance ci --no-audit --no-fund
+
+      - name: Install Playwright fixture test dependencies
+        run: npm --prefix examples/playwright ci --no-audit --no-fund
+
+      - name: Install Chromium and Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: npx --prefix examples/workflows/authenticated-smoke playwright install --with-deps chromium
+
+      - name: Install Chromium
+        if: runner.os != 'Linux'
+        shell: bash
+        run: npx --prefix examples/workflows/authenticated-smoke playwright install chromium
+
+      - name: Run workflow template tests
+        shell: bash
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-workflow-home
+          AGENT_AUTH_HOME: ${{ runner.temp }}/testlane-workflow-home
+        run: npm run test:workflow
+
+      - name: Verify the copied existing-app quickstart example
+        run: node --test examples/existing-app/tests/*.test.mjs
+
+      - name: Verify the packed Playwright fixture in a consumer app
+        run: npm run test:playwright
+
+      - name: Run browser-backed synthetic workflow
+        shell: bash
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-workflow-home
+          AGENT_AUTH_HOME: ${{ runner.temp }}/testlane-workflow-home
+        run: npm run workflow:smoke -- --self-test --json
+
+      - name: Run shared workflow test-support tests
+        shell: bash
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-support-home
+          AGENT_AUTH_HOME: ${{ runner.temp }}/testlane-support-home
+        run: npm run test:workflow-support
+
+      - name: Run feature-acceptance template tests
+        shell: bash
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-feature-home
+          AGENT_AUTH_HOME: ${{ runner.temp }}/testlane-feature-home
+        run: npm run test:workflow-feature
+
+  workflow-real-broker:
+    # Both real-broker proofs drive the actual built broker CLI (not a test double)
+    # against the shared reference app: real HTTP sign-in, the real vault store,
+    # policy and audit path, and a real Chromium browser. Windows uses the DPAPI
+    # store; Linux uses an isolated D-Bus session with a throwaway gnome-keyring
+    # (TESTLANE_REAL_KEYCHAIN=1), matching the `keychain` job above. Never macOS:
+    # the broker CLI has no path to a temporary macOS keychain, and a scratch
+    # TESTLANE_HOME/AGENT_AUTH_HOME does not isolate any OS keychain from the real
+    # one, so a real-broker run there would either fail to seed or touch the
+    # runner's real login keychain.
+    name: workflow-real-broker (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            examples/workflows/authenticated-smoke/package-lock.json
+            examples/workflows/feature-acceptance/package-lock.json
+            examples/playwright/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Install workflow template dependencies
+        run: npm --prefix examples/workflows/authenticated-smoke ci --no-audit --no-fund
+
+      - name: Install feature-acceptance template dependencies
+        run: npm --prefix examples/workflows/feature-acceptance ci --no-audit --no-fund
+
+      - name: Install Playwright fixture test dependencies
+        run: npm --prefix examples/playwright ci --no-audit --no-fund
+
+      - name: Install Chromium and Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: npx --prefix examples/workflows/authenticated-smoke playwright install --with-deps chromium
+
+      - name: Install Chromium
+        if: runner.os != 'Linux'
+        shell: bash
+        run: npx --prefix examples/workflows/authenticated-smoke playwright install chromium
+
+      - name: Real-broker proofs (DPAPI)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-real-broker-home
+          AGENT_AUTH_HOME: ${{ runner.temp }}/testlane-real-broker-home
+        run: |
+          npm run proof:smoke-real-broker -- --json
+          npm run proof:feature-real-broker -- --json
+          npm run proof:playwright-real-broker
+          npm run proof:launch-consumer
+
+      - name: Install Secret Service (gnome-keyring, secret-tool, dbus)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnome-keyring libsecret-tools dbus-x11
+
+      - name: Real-broker proofs (Linux secret-service)
+        if: runner.os == 'Linux'
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-real-broker-home
+          AGENT_AUTH_HOME: ${{ runner.temp }}/testlane-real-broker-home
+          TESTLANE_REAL_KEYCHAIN: "1"
+          # Each keyring-using step gets its own XDG_DATA_HOME under runner.temp.
+          # gnome-keyring-daemon --unlock reads a fresh random password from
+          # stdin every time, but if a login keyring file is already on disk
+          # under ~/.local/share/keyrings (left there by an earlier step's
+          # daemon, unlocked with *its* random password) a new daemon with a
+          # *different* random password cannot unlock it and secret-tool fails
+          # with "Cannot create an item in a locked collection". Pointing
+          # XDG_DATA_HOME at a step-private, empty directory guarantees this
+          # step's daemon always creates (and unlocks) a brand-new keyring
+          # instead of trying to unlock a stale one. Same isolation is applied
+          # to every other gnome-keyring-daemon step in this workflow.
+          XDG_DATA_HOME: ${{ runner.temp }}/keyring-workflow-real-broker
+        run: |
+          mkdir -p "$XDG_DATA_HOME"
+          dbus-run-session -- bash -c '
+            set -euo pipefail
+            echo -n "$(head -c 24 /dev/urandom | base64)" | gnome-keyring-daemon --unlock --components=secrets
+            npm run proof:smoke-real-broker -- --json
+            npm run proof:feature-real-broker -- --json
+            npm run proof:playwright-real-broker
+            npm run proof:launch-consumer
+          '
+
+  demo-smoke:
+    # The bundled demo app end to end: seeds a throwaway vault, starts the Next.js app,
+    # runs check / session / handoff / production refusal through the built CLI. Linux
+    # needs a keychain for the vault, so the smoke runs inside a private D-Bus session
+    # with an unlocked gnome-keyring (throwaway password, like the keychain job).
+    name: demo-smoke (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            examples/demo-app/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm --prefix examples/demo-app ci --no-audit --no-fund
+
+      - name: Install Secret Service (gnome-keyring, secret-tool, dbus)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnome-keyring libsecret-tools dbus-x11
+
+      - name: Demo smoke
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-home
+          # Step-private XDG_DATA_HOME so this step's throwaway gnome-keyring
+          # never leaves a login keyring file that a later step's daemon
+          # (started with a different random password) cannot unlock -- see
+          # the "Demo real-broker workflow proof" step below, and the fuller
+          # comment on the workflow-real-broker job's Linux secret-service step.
+          XDG_DATA_HOME: ${{ runner.temp }}/keyring-demo-smoke
+        run: |
+          mkdir -p "$XDG_DATA_HOME"
+          dbus-run-session -- bash -c '
+            set -euo pipefail
+            echo -n "$(head -c 24 /dev/urandom | base64)" | gnome-keyring-daemon --unlock --components=secrets
+            npm --prefix examples/demo-app run smoke
+          '
+
+      - name: Install workflow template dependencies
+        run: npm --prefix examples/workflows/authenticated-smoke ci --no-audit --no-fund
+
+      - name: Install Chromium and Linux dependencies
+        run: npx --prefix examples/workflows/authenticated-smoke playwright install --with-deps chromium
+
+      - name: Demo real-broker workflow proof (nextauth-credentials)
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-demo-real-broker-home
+          AGENT_AUTH_HOME: ${{ runner.temp }}/testlane-demo-real-broker-home
+          TESTLANE_REAL_KEYCHAIN: "1"
+          # Own XDG_DATA_HOME, distinct from the "Demo smoke" step above --
+          # this is the step that previously hit "Cannot create an item in a
+          # locked collection" by trying to unlock the on-disk keyring that
+          # step left behind, unlocked with a different random password.
+          XDG_DATA_HOME: ${{ runner.temp }}/keyring-demo-proof
+        run: |
+          mkdir -p "$XDG_DATA_HOME"
+          dbus-run-session -- bash -c '
+            set -euo pipefail
+            echo -n "$(head -c 24 /dev/urandom | base64)" | gnome-keyring-daemon --unlock --components=secrets
+            npm run proof:demo-real-broker -- --json
+          '
+
+  clean-room:
+    needs: matrix
+    # Scripted version of the manual clean-room walkthrough: packs the repo,
+    # installs the tarball globally into a throwaway prefix, and drives the
+    # installed CLI and workflow templates as a stranger who only has the
+    # published package would, catching packaging/template regressions that
+    # the other jobs (which run against the checkout, not the packed
+    # tarball) cannot see. See scripts/clean-room.mjs.
+    name: clean-room (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.matrix.outputs.clean_room_os) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Install Chromium system dependencies (Linux only)
+        if: runner.os == 'Linux'
+        shell: bash
+        # Derive the Playwright version from the template's own pin rather
+        # than duplicating it here, so the two can never drift apart.
+        run: |
+          version="$(node -e "
+            const v = require('./examples/workflows/authenticated-smoke/package.json').optionalDependencies.playwright;
+            if (!v) { console.error('optionalDependencies.playwright is missing/empty in examples/workflows/authenticated-smoke/package.json'); process.exit(1); }
+            process.stdout.write(v);
+          ")"
+          npx --yes "playwright@$version" install-deps chromium
+
+      - run: npm run check:clean-room -- --json
+
+  keychain:
+    needs: matrix
+    # Real-tool tests for the OS keychain adapters (tests/store-real-keychain.test.ts):
+    # macOS drives /usr/bin/security against a temporary keychain the test creates
+    # and deletes; Linux drives secret-tool against gnome-keyring in a private
+    # D-Bus session. Only throwaway values generated by the test are stored.
+    name: keychain (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.matrix.outputs.keychain_os) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install Secret Service (gnome-keyring, secret-tool, dbus)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnome-keyring libsecret-tools dbus-x11
+          dpkg-query -W gnome-keyring libsecret-tools libsecret-1-0
+
+      - name: Real keychain tests (macOS security, temporary keychain)
+        if: runner.os == 'macOS'
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-home
+          TESTLANE_REAL_KEYCHAIN: "1"
+        run: |
+          sw_vers
+          npx vitest run tests/store-real-keychain.test.ts --reporter=verbose
+
+      - name: Real keychain tests (Linux secret-tool, gnome-keyring)
+        if: runner.os == 'Linux'
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-home
+          TESTLANE_REAL_KEYCHAIN: "1"
+          # Own XDG_DATA_HOME so this step's throwaway gnome-keyring always
+          # creates a fresh keyring rather than an on-disk one another step
+          # left behind under a different random unlock password.
+          XDG_DATA_HOME: ${{ runner.temp }}/keyring-keychain-tests
+        # Standard headless recipe: a private session bus, and a login keyring
+        # created/unlocked with a random throwaway password read from stdin.
+        run: |
+          mkdir -p "$XDG_DATA_HOME"
+          dbus-run-session -- bash -c '
+            set -euo pipefail
+            echo -n "$(head -c 24 /dev/urandom | base64)" | gnome-keyring-daemon --unlock --components=secrets
+            npx vitest run tests/store-real-keychain.test.ts --reporter=verbose
+          '

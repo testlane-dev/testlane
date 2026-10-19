@@ -1,0 +1,30 @@
+{
+  "brand": "Testlane",
+  "version": "1.0.0",
+  "colors": {
+    "midnight": "#20283D",
+    "blue": "#5575E7",
+    "paper": "#F4F6FC",
+    "white": "#FFFFFF"
+  },
+  "wordmark": {
+    "font": "Outfit",
+    "weight": 800,
+    "letterSpacingEm": -0.02,
+    "exports": "Outlined paths; no runtime font dependency"
+  },
+  "clearSpace": "At least 24 units around visible artwork on the 192-unit mark grid",
+  "minimums": {
+    "markPx": 24,
+    "horizontalLogoWidthPx": 144
+  },
+  "iconGeometry": {
+    "viewBox": "0 0 192 192",
+    "visibleBounds": [
+      16,
+      16,
+      176,
+      172
+    ]
+  }
+}

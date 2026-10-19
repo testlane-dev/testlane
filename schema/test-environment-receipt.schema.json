@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:testlane:schema:test-environment-receipt:v1",
+  "title": "Testlane trusted test-environment receipt",
+  "description": "A strict, secret-free receipt issued by a trusted setup adapter, naming the live test environment one feature-acceptance run must target. This is a contract with the adapter, not cryptographic proof of an application's backing data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "runId", "workflowId", "environment", "origin", "buildId", "dataScope", "isolation", "issuedAt", "expiresAt"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "kind": {"const": "test-environment-receipt"},
+    "runId": {"$ref": "#/$defs/id"},
+    "workflowId": {"$ref": "#/$defs/id"},
+    "environment": {"enum": ["sandbox", "testing"]},
+    "origin": {"$ref": "#/$defs/origin"},
+    "buildId": {"$ref": "#/$defs/id"},
+    "dataScope": {"$ref": "#/$defs/id"},
+    "isolation": {"const": "dedicated-per-run"},
+    "issuedAt": {"type": "string", "format": "date-time"},
+    "expiresAt": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+    "origin": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^https://(?![^/?#]*(?:^|\\.)(?:prod|production|live)(?:[.:/]|$))[^/?#@\\s]+/?$|^http://(?:localhost|127\\.0\\.0\\.1|\\[?::1\\]?)(?::[0-9]{1,5})?/?$"}
+  }
+}

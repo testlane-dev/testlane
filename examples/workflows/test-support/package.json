@@ -1,0 +1,12 @@
+{
+  "name": "@testlane/workflow-test-support",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Shared, dependency-free fixtures for Testlane example workflows: an in-process reference app, a test-only broker double, a real-broker harness, a receipt issuer, and the real-broker smoke proof",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "proof:smoke": "node smoke-real-broker-proof.mjs"
+  }
+}

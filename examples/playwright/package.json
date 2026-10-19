@@ -1,0 +1,10 @@
+{
+  "name": "@testlane/playwright-example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Copyable Testlane fixtures for a consuming app's Playwright Test suite",
+  "scripts": { "test": "node --test tests/fixture.test.mjs" },
+  "devDependencies": { "@playwright/test": "1.64.0" }
+}

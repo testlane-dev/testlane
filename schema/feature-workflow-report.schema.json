@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:testlane:schema:feature-workflow-report:v1",
+  "title": "Testlane feature acceptance workflow report",
+  "description": "A sanitized report. Verdict and counts are derived by runtime code; JSON Schema covers the wire shape.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "workflowId", "runId", "startedAt", "finishedAt", "sourceTree", "target", "roles", "environmentRun", "steps", "cleanup", "verdict", "counts", "missingRequiredSteps", "skippedRequiredSteps", "zeroChecks"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "kind": {"const": "feature-acceptance-report"},
+    "workflowId": {"$ref": "#/$defs/id"},
+    "runId": {"$ref": "#/$defs/id"},
+    "startedAt": {"type": "string", "format": "date-time"},
+    "finishedAt": {"type": "string", "format": "date-time"},
+    "sourceTree": {"type": ["string", "null"], "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "target": {
+      "type": "object", "additionalProperties": false, "required": ["origin", "environment", "actualBuild"],
+      "properties": {"origin": {"$ref": "#/$defs/origin"}, "environment": {"enum": ["sandbox", "testing"]}, "actualBuild": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]}}
+    },
+    "roles": {
+      "type": "object", "additionalProperties": false, "required": ["writer", "reader"],
+      "properties": {"writer": {"$ref": "#/$defs/profile"}, "reader": {"$ref": "#/$defs/profile"}}
+    },
+    "environmentRun": {
+      "anyOf": [
+        {"type": "object", "additionalProperties": false, "required": ["runId", "dataScope"], "properties": {"runId": {"$ref": "#/$defs/id"}, "dataScope": {"$ref": "#/$defs/id"}}},
+        {"type": "null"}
+      ]
+    },
+    "steps": {"type": "array", "maxItems": 13, "items": {"$ref": "#/$defs/step"}},
+    "cleanup": {"$ref": "#/$defs/cleanup"},
+    "verdict": {"enum": ["passed", "failed", "blocked", "cancelled"]},
+    "counts": {"$ref": "#/$defs/counts"},
+    "missingRequiredSteps": {"type": "array", "items": {"$ref": "#/$defs/stepId"}},
+    "skippedRequiredSteps": {"type": "array", "items": {"$ref": "#/$defs/stepId"}},
+    "zeroChecks": {"type": "boolean"}
+  },
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+    "profile": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9._-]*(:[a-z0-9][a-z0-9._-]*)*$"},
+    "origin": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^https://(?![^/?#]*(?:^|\\.)(?:prod|production|live)(?:[.:/]|$))[^/?#@\\s]+/?$|^http://(?:localhost|127\\.0\\.0\\.1|\\[?::1\\]?)(?::[0-9]{1,5})?/?$"},
+    "stepId": {"enum": ["profile-policy", "readiness", "environment-receipt", "writer-session", "reader-session", "writer-identity", "reader-identity", "record-absent", "browser-create", "api-readback", "reader-read", "reader-mutation-denied", "unchanged-after-denial"]},
+    "reason": {"enum": ["ok", "assertion-failed", "blocked-prerequisite", "cancelled", "cleanup-failed", "environment", "launch-failed", "missing", "process-failed", "production-refused", "skipped", "target-refused", "timeout"]},
+    "cleanupReason": {"enum": ["ok", "cleanup-failed"]},
+    "cleanupRecord": {"enum": ["none", "absent-verified", "deleted-verified", "retained-unowned", "failed"]},
+    "evidence": {"type": "object", "additionalProperties": false, "required": ["log", "exit"], "properties": {"log": {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"}, "exit": {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"}}},
+    "step": {
+      "type": "object", "additionalProperties": false, "required": ["id", "status", "reasonCode", "durationMs", "attempt"],
+      "properties": {"id": {"$ref": "#/$defs/stepId"}, "status": {"enum": ["passed", "failed", "blocked", "cancelled", "skipped"]}, "reasonCode": {"$ref": "#/$defs/reason"}, "durationMs": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}, "attempt": {"type": "integer", "minimum": 1, "maximum": 100}, "processExitCode": {"type": "integer", "minimum": 0, "maximum": 255}, "evidence": {"$ref": "#/$defs/evidence"}}
+    },
+    "cleanup": {
+      "type": "object", "additionalProperties": false, "required": ["status", "record"],
+      "properties": {"status": {"enum": ["complete", "failed"]}, "reasonCode": {"$ref": "#/$defs/cleanupReason"}, "record": {"$ref": "#/$defs/cleanupRecord"}, "evidence": {"$ref": "#/$defs/evidence"}}
+    },
+    "counts": {
+      "type": "object", "additionalProperties": false, "required": ["required", "observed", "passed", "failed", "blocked", "cancelled", "skipped", "missing"],
+      "properties": {"required": {"const": 13}, "observed": {"type": "integer", "minimum": 0, "maximum": 13}, "passed": {"type": "integer", "minimum": 0, "maximum": 13}, "failed": {"type": "integer", "minimum": 0, "maximum": 13}, "blocked": {"type": "integer", "minimum": 0, "maximum": 13}, "cancelled": {"type": "integer", "minimum": 0, "maximum": 13}, "skipped": {"type": "integer", "minimum": 0, "maximum": 13}, "missing": {"type": "integer", "minimum": 0, "maximum": 13}}
+    }
+  }
+}

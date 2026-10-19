@@ -1,0 +1,5 @@
+# Throwaway demo state: profiles, the demo's TESTLANE_HOME (audit log; the DPAPI vault on Windows), cookie jars.
+.demo/
+node_modules/
+.next/
+.next-smoke/

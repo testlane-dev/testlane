@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "testlane": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/app/node_modules/@testlane/cli/dist/cli.js",
+        "mcp"
+      ],
+      "env": {
+        "TESTLANE_PROFILES": "/absolute/path/to/app/testlane.profiles.json",
+        "TESTLANE_REQUESTER": "claude-code"
+      }
+    }
+  }
+}

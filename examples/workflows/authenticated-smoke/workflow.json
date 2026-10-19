@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "kind": "authenticated-smoke",
+  "id": "acme-local-admin-smoke",
+  "profile": "acme:local:admin",
+  "target": { "origin": "http://127.0.0.1:3020", "environment": "testing", "buildId": "local" },
+  "identity": { "email": "sandbox-admin@example.test", "role": "Admin" },
+  "checks": {
+    "readinessPath": "/api/ready",
+    "identityPath": "/api/me",
+    "protectedPath": "/protected",
+    "protectedHeading": "Protected workspace",
+    "apiPath": "/api/data"
+  },
+  "timeoutMs": 30000
+}

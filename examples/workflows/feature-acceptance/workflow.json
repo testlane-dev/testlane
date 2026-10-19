@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "kind": "feature-acceptance",
+  "id": "reference-records-two-role",
+  "target": { "origin": "http://127.0.0.1:4310", "environment": "testing", "buildId": "local" },
+  "roles": {
+    "writer": { "profile": "reference:local:writer", "email": "writer@example.test", "role": "Writer" },
+    "reader": { "profile": "reference:local:reader", "email": "reader@example.test", "role": "Reader" }
+  },
+  "checks": { "readinessPath": "/ready", "identityPath": "/api/me", "environmentPath": "/api/test-environment" },
+  "record": {
+    "collectionPath": "/api/records",
+    "createPagePath": "/records/new",
+    "form": { "idLabel": "Record ID", "titleLabel": "Title", "submitLabel": "Create record", "createdText": "Record created" }
+  },
+  "timeoutMs": 60000,
+  "cleanupTimeoutMs": 10000
+}

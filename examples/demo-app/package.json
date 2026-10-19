@@ -1,0 +1,24 @@
+{
+  "name": "testlane-demo-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Five-minute demo for Testlane: a tiny Next.js + next-auth v4 app with the agent handoff route, run with throwaway secrets.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "demo": "node scripts/demo.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "workflow-proof": "node scripts/workflow-proof.mjs",
+    "agent-check": "node scripts/agent-check.mjs",
+    "clean": "node scripts/clean.mjs",
+    "dev": "next dev"
+  },
+  "dependencies": {
+    "next": "16.4.0",
+    "next-auth": "4.24.15",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

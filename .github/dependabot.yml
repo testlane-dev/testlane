@@ -1,0 +1,52 @@
+version: 2
+
+# Weekly version updates. Within each npm directory, minor and patch updates arrive as one
+# grouped pull request; major updates stay individual so each can be reviewed on its own.
+# Actions are pinned to commit SHAs with a trailing `# vX.Y.Z` comment, which Dependabot
+# keeps in step when it bumps them.
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      root-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /examples/demo-app
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      demo-app-minor-patch:
+        update-types: [minor, patch]
+
+  # The two workflow templates pin the same Playwright and CI installs one Chromium build for
+  # both, so a bump to only one of them cannot pass. One entry for both directories puts their
+  # grouped updates in a single pull request.
+  - package-ecosystem: npm
+    directories:
+      - /examples/workflows/authenticated-smoke
+      - /examples/workflows/feature-acceptance
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      workflow-templates-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci(deps)"

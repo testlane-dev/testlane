@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "profiles": {
+    "demo:local:admin": {
+      "app": "demo-app",
+      "environment": "sandbox",
+      "baseUrl": "http://localhost:3000",
+      "strategy": "nextauth-credentials",
+      "account": { "email": "admin@demo.test", "role": "Administrator" },
+      "session": { "ttlMinutes": 240 },
+      "rememberMe": "yes"
+    }
+  }
+}

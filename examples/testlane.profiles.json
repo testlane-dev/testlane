@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "profiles": {
+    "acme:local:admin": {
+      "app": "acme-shop",
+      "environment": "sandbox",
+      "baseUrl": "http://localhost:3000",
+      "strategy": "nextauth-credentials",
+      "account": {
+        "email": "admin@acme.test",
+        "role": "Admin"
+      },
+      "session": {
+        "ttlMinutes": 240
+      },
+      "notes": "Seeded admin on a local dev server (Next.js + NextAuth credentials provider). Create this account in your app first. The bundled demo has its own generated demo:admin profile and admin@demo.test account."
+    },
+    "acme:staging:handoff:qa": {
+      "app": "acme-shop",
+      "environment": "testing",
+      "baseUrl": "https://staging.acme.test",
+      "strategy": "app-handoff",
+      "account": {
+        "email": "qa.agent@acme.test",
+        "role": "QA"
+      },
+      "session": {
+        "ttlMinutes": 60
+      },
+      "options": {
+        "mePath": "/api/me",
+        "emailField": "email",
+        "roleField": "role"
+      },
+      "notes": "For browsers without a cookie-import API: `testlane handoff acme:staging:handoff:qa` prints a 60-second, single-use URL. Because options.mePath is set (the opt-in), `testlane session` / `check` also work: the broker consumes the same one-time URL itself, confirms the account at mePath and returns the session cookies (for curl or Playwright). Without mePath they would be refused. The stored secret is the staging deployment's AGENT_HANDOFF_SECRET (at least 32 characters), not a password. Needs the app-side route from docs/HANDOFF-ROUTE-CONTRACT.md."
+    },
+    "acme:staging:qa": {
+      "app": "acme-shop",
+      "environment": "testing",
+      "baseUrl": "https://staging.acme.test",
+      "strategy": "form-post",
+      "account": {
+        "email": "qa.agent@acme.test",
+        "role": "QA"
+      },
+      "session": {
+        "ttlMinutes": 120
+      },
+      "options": {
+        "loginPath": "/api/auth/sign-in",
+        "bodyFormat": "json",
+        "fields": "{\"email\":\"{{email}}\",\"password\":\"{{secret}}\"}",
+        "sessionCookieName": "acme_session",
+        "mePath": "/api/me",
+        "emailField": "email",
+        "roleField": "role"
+      },
+      "notes": "JSON sign-in endpoint: POST /api/auth/sign-in with {email, password}; success sets the acme_session cookie, and GET /api/me returns {email, role}. A dedicated agent account, never a human's login."
+    },
+    "acme:production": {
+      "app": "acme-shop",
+      "environment": "production",
+      "baseUrl": "https://acme.example",
+      "strategy": "nextauth-credentials",
+      "account": {
+        "email": "",
+        "role": ""
+      },
+      "session": {
+        "ttlMinutes": 0
+      },
+      "notes": "Listed only so the broker can refuse it by name and by host: every session, check, handoff or store set for it exits 2, and no other profile may share its hostname. There is no override."
+    },
+    "acme:testing:service": {
+      "app": "acme-shop",
+      "environment": "testing",
+      "baseUrl": "https://staging.acme.test",
+      "strategy": "form-post",
+      "account": {
+        "email": "service.agent@acme.test",
+        "role": "Service"
+      },
+      "session": {
+        "ttlMinutes": 120
+      },
+      "options": {
+        "loginPath": "/api/auth/sign-in",
+        "bodyFormat": "json",
+        "fields": "{\"email\":\"{{email}}\",\"password\":\"{{secret}}\"}",
+        "sessionCookieName": "acme_session",
+        "mePath": "/api/me",
+        "emailField": "email",
+        "roleField": "role"
+      },
+      "notes": "Dedicated testing service account used only to authorize the illustrative scoped-session exchange below."
+    },
+    "acme:testing:reader": {
+      "app": "acme-shop",
+      "environment": "testing",
+      "baseUrl": "https://staging.acme.test",
+      "strategy": "dependent-token",
+      "account": {
+        "email": "reader.agent@acme.test",
+        "role": "Reader",
+        "identifier": "subject-42"
+      },
+      "session": {
+        "ttlMinutes": 30
+      },
+      "options": {
+        "dependsOn": "acme:testing:service",
+        "tokenPath": "/api/device/exchange",
+        "fields": "{\"subject\":\"{{identifier}}\",\"credential\":\"{{secret}}\"}",
+        "tokenField": "accessToken",
+        "tokenHeader": "x-device-access",
+        "expiresAtField": "expiresAt",
+        "mePath": "/api/device/identity",
+        "emailField": "subject.email",
+        "roleField": "subject.role"
+      },
+      "notes": "Fictional API example: explicitly configure your app paths, request fields, response fields and identity contract. The returned artifact includes the dedicated dependency session. Use --format headers to carry the additional header."
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "profiles": {
+    "demo:local:bad": {
+      "app": "demo-app",
+      "environment": "staging",
+      "baseUrl": "https://demo.testing.test/?next=/home",
+      "strategy": "nextauth-credentials",
+      "account": { "email": "", "role": "Sales" },
+      "session": { "ttlMinutes": 2000 },
+      "allowedHosts": ["API.Demo.Testing.Test"]
+    },
+    "Demo Bad Name": {
+      "app": "demo-app",
+      "environment": "sandbox",
+      "baseUrl": "http://localhost:3000",
+      "strategy": "nextauth-credentials",
+      "account": { "email": "x@demo.test", "role": "Sales" },
+      "session": { "ttlMinutes": 1.5 }
+    }
+  }
+}

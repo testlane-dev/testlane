@@ -1,0 +1,28 @@
+# Merge the relevant sections into existing Codex config; preserve other settings.
+# Human-controlled setup only. No stored password or session value belongs here.
+
+# Example workspace policy; use your existing approved policy where it differs.
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+# Needed for shell curl/Playwright to reach the app when network access is restricted.
+network_access = true
+# The CLI also appends to the broker audit log. Prefer MCP for discovery/checks.
+# Adding the whole broker home as a writable root also makes file-based stores writable;
+# use normal command approval instead if the CLI's audit append is blocked.
+
+[mcp_servers.testlane]
+command = "node"
+args = ["/absolute/path/to/app/node_modules/@testlane/cli/dist/cli.js", "mcp"]
+# Set the reviewed registry explicitly so server startup cwd does not choose another repo.
+# Windows TOML paths use forward slashes (C:/projects/shop/...).
+env = { TESTLANE_PROFILES = "/absolute/path/to/app/testlane.profiles.json", TESTLANE_REQUESTER = "codex" }
+
+# Optional non-default home, e.g. the demo's generated registry/audit directory.
+# On macOS/Linux TESTLANE_HOME does not isolate keychain entries.
+# Declare env only once; duplicate keys are invalid TOML. Combine values:
+# env = { TESTLANE_PROFILES = "/absolute/path/to/app/testlane.profiles.json", TESTLANE_HOME = "/absolute/path/to/app/.demo/home", TESTLANE_REQUESTER = "codex" }
+
+# For discovery instead of an explicit registry, choose the server's startup directory:
+# cwd = "/absolute/path/to/app"

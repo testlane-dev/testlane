@@ -1,0 +1,13 @@
+node_modules/
+dist/
+output/
+coverage/
+*.log
+*.exit
+.DS_Store
+# Never commit anything that could hold a secret.
+.env
+.env.*
+*.dpapi
+*.enc
+.local/

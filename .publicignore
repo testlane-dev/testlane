@@ -1,0 +1,10 @@
+# Extra exclusions for `node scripts/export-public.mjs` (on top of .gitignore and the
+# built-in docs/private/, output/ and .claude/). One pattern per line, .gitignore-like:
+# `*` within a path segment, `**` across segments, a trailing `/` for a directory, a
+# leading `/` (or any inner `/`) anchors the pattern at the repository root.
+
+# Local-only scratch and tooling state that is sometimes left untracked.
+.local/
+coverage/
+*.log
+*.exit

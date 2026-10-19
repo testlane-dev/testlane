@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Testlane application icon" >
+<title>Testlane application icon</title>
+<rect width="512" height="512" fill="#F4F6FC"/><g transform="translate(76 76) scale(1.875)"><g id="testlane-monogram">
+  <path fill="#20283D" d="M44 16H80V48H104V86H16V48H44Z"/>
+  <path fill="#20283D" d="M44 96H80V119Q80 136 97 136H176V172H98Q44 172 44 118Z"/>
+  <path fill="#5575E7" d="M112 48H130Q152 48 152 70V128H112Z"/>
+</g></g>
+</svg>

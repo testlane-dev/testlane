@@ -1,0 +1,8 @@
+{
+  "baseUrl": "http://localhost:3000",
+  "identityPath": "/api/me",
+  "protectedPath": "/dashboard",
+  "heading": "Dashboard",
+  "expectedEmail": "qa.agent@example.test",
+  "expectedRole": "QA"
+}

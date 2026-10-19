@@ -1,0 +1,353 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:testlane:schema:profiles:v1",
+  "title": "Testlane profile registry",
+  "description": "testlane.profiles.json (formerly agent-auth.profiles.json): named sign-in profiles for the Testlane broker. Committed to consuming repos. Holds zero secrets: passwords, PINs and keys live only in the broker's secret store under agent-auth/<profile name> (a stable storage key kept from before the rename). Kept in sync by hand with the zod schema in src/profiles.ts, which is authoritative.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "profiles"],
+  "properties": {
+    "$schema": {
+      "description": "Optional pointer to this schema, for editor validation.",
+      "type": "string"
+    },
+    "version": {
+      "description": "Registry format version.",
+      "const": 1
+    },
+    "profiles": {
+      "description": "Profiles keyed by name, e.g. \"acme:local:admin\". The name is also the secret-store key suffix.",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^(?!encrypted-file\\.)[a-z0-9][a-z0-9._-]*(:[a-z0-9][a-z0-9._-]*)*$",
+        "description": "Profile name. Names starting with \"encrypted-file.\" are reserved for the secret store itself."
+      },
+      "additionalProperties": { "$ref": "#/$defs/profile" }
+    }
+  },
+  "$defs": {
+    "profile": {
+      "description": "One sign-in profile.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app", "environment", "baseUrl", "strategy", "account", "session"],
+      "properties": {
+        "app": {
+          "description": "Consuming application id, e.g. \"acme-shop\".",
+          "type": "string",
+          "minLength": 1
+        },
+        "environment": {
+          "description": "Environment tag. \"production\" profiles are always refused by the broker; they exist only so they can be refused by name.",
+          "enum": ["sandbox", "testing", "production"]
+        },
+        "baseUrl": {
+          "description": "Origin (optionally with a path) of the app. http or https only; https is required unless the host is loopback. No credentials, query string or fragment.",
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://[^/?#@\\s]+(/[^?#\\s]*)?$"
+        },
+        "strategy": {
+          "description": "Login strategy the broker uses to sign in.",
+          "enum": [
+            "nextauth-credentials",
+            "form-post",
+            "dependent-token",
+            "oauth-client-credentials",
+            "api-key",
+            "app-handoff"
+          ]
+        },
+        "account": {
+          "description": "The account the profile signs in as. Not secret.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["email", "role"],
+          "properties": {
+            "email": {
+              "description": "Account identifier shown to the agent. May be empty only on production entries.",
+              "type": "string"
+            },
+            "role": {
+              "description": "Human-readable role the account is expected to have, e.g. \"Sales\".",
+              "type": "string"
+            },
+            "identifier": {
+              "description": "Optional non-secret account identifier, used by dependent-token when fields contain {{identifier}}.",
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "session": {
+          "description": "Session issuance settings.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ttlMinutes"],
+          "properties": {
+            "ttlMinutes": {
+              "description": "Session lifetime in minutes. 0 means the profile never issues sessions. The broker issues at most min(ttlMinutes, 480); a requested TTL above that limit is refused, never silently capped. For nextauth-credentials this bounds the artifact the broker hands out but is advisory towards the server (the app's JWT keeps its own maxAge until the Phase-2 handoff route).",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1440
+            }
+          }
+        },
+        "allowedHosts": {
+          "description": "Extra hosts this profile may talk to besides baseUrl's host, as lowercase \"host\" or \"host:port\". Each entry must parse as a host and is stored in canonical form (for example 127.1 becomes 127.0.0.1). Default ports are omitted when comparing.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(\\[[0-9a-f:.]+\\]|[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*)(:[0-9]{1,5})?$"
+          }
+        },
+        "options": {
+          "description": "Strategy-specific, non-secret options. Only the keys documented for the profile's strategy are allowed (see allOf below); every *Path option is a path on the baseUrl origin starting with \"/\", never an absolute or protocol-relative URL.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "notes": {
+          "description": "Free-form notes for humans.",
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["environment"],
+            "properties": { "environment": { "not": { "const": "production" } } }
+          },
+          "then": {
+            "properties": { "account": { "properties": { "email": { "minLength": 1 } } } }
+          }
+        },
+        {
+          "if": { "required": ["strategy"], "properties": { "strategy": { "const": "nextauth-credentials" } } },
+          "then": {
+            "properties": {
+              "options": {
+                "additionalProperties": false,
+                "properties": {
+                  "csrfPath": { "$ref": "#/$defs/optionPath" },
+                  "callbackPath": { "$ref": "#/$defs/optionPath" },
+                  "sessionPath": { "$ref": "#/$defs/optionPath" },
+                  "sessionCookieName": { "$ref": "#/$defs/httpToken" },
+                  "emailField": { "$ref": "#/$defs/formField" },
+                  "passwordField": { "$ref": "#/$defs/formField" },
+                  "roleField": { "type": "string", "pattern": "^[A-Za-z0-9_$-]{1,64}(\\.[A-Za-z0-9_$-]{1,64}){0,7}$" },
+                  "rotatePath": { "$ref": "#/$defs/rotatePath" },
+                  "rotateMethod": { "$ref": "#/$defs/rotateMethod" },
+                  "rotateBodyFormat": { "$ref": "#/$defs/rotateBodyFormat" },
+                  "rotateBody": { "$ref": "#/$defs/rotateBody" },
+                  "rotateVia": { "$ref": "#/$defs/rotateVia" },
+                  "rotateEveryDays": { "$ref": "#/$defs/rotateEveryDays" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "required": ["strategy"], "properties": { "strategy": { "const": "form-post" } } },
+          "then": {
+            "properties": {
+              "options": {
+                "additionalProperties": false,
+                "properties": {
+                  "loginPath": { "$ref": "#/$defs/optionPath" },
+                  "fields": {
+                    "description": "JSON object string mapping field names to string values; values may contain {{email}} and {{secret}} (form fields, or JSON body keys when bodyFormat is \"json\").",
+                    "type": "string"
+                  },
+                  "sessionCookieName": { "$ref": "#/$defs/httpToken" },
+                  "bodyFormat": {
+                    "description": "\"form\" (default): application/x-www-form-urlencoded. \"json\": application/json object of the substituted string fields.",
+                    "enum": ["form", "json"]
+                  },
+                  "primeCookies": { "enum": ["true", "false"] },
+                  "successPath": { "$ref": "#/$defs/optionPath" },
+                  "successBodyField": {
+                    "description": "Dot path into the final login response JSON that must hold a non-empty string (presence only; the value is never logged or returned).",
+                    "$ref": "#/$defs/dotPath"
+                  },
+                  "mePath": { "$ref": "#/$defs/optionPath" },
+                  "roleField": { "$ref": "#/$defs/dotPath" },
+                  "emailField": { "$ref": "#/$defs/dotPath" },
+                  "rotatePath": { "$ref": "#/$defs/rotatePath" },
+                  "rotateMethod": { "$ref": "#/$defs/rotateMethod" },
+                  "rotateBodyFormat": { "$ref": "#/$defs/rotateBodyFormat" },
+                  "rotateBody": { "$ref": "#/$defs/rotateBody" },
+                  "rotateVia": { "$ref": "#/$defs/rotateVia" },
+                  "rotateEveryDays": { "$ref": "#/$defs/rotateEveryDays" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "required": ["strategy"], "properties": { "strategy": { "const": "dependent-token" } } },
+          "then": {
+            "properties": {
+              "options": {
+                "additionalProperties": false,
+                "not": { "required": ["tokenField", "sessionCookieName"] },
+                "dependentRequired": { "tokenHeader": ["tokenField"] },
+                "properties": {
+                  "dependsOn": {
+                    "description": "Profile (same host, non-production) signed in first; its session authenticates the POST to tokenPath. Required to sign in.",
+                    "$ref": "#/$defs/profileName"
+                  },
+                  "tokenPath": {
+                    "description": "Path on the profile origin that exchanges this profile's secret for a token or cookie. Required to sign in.",
+                    "$ref": "#/$defs/optionPath"
+                  },
+                  "bodyFormat": {
+                    "description": "\"json\" (default): application/json object of the substituted fields. \"form\": application/x-www-form-urlencoded.",
+                    "enum": ["json", "form"]
+                  },
+                  "fields": {
+                    "description": "JSON object string mapping field names to string values; values may contain {{secret}} (required somewhere), {{email}} and {{identifier}}; no other {{...}} placeholder. Required to sign in.",
+                    "type": "string",
+                    "pattern": "\\{\\{secret\\}\\}"
+                  },
+                  "secretPattern": {
+                    "description": "JavaScript regular expression (\"u\" flag) the secret must match before any request, e.g. \"^\\d{4,8}$\". Used as written, so anchor it. The secret is never echoed on a mismatch.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "tokenField": {
+                    "description": "Dot path of the token in the JSON response. The token is returned as header tokenHeader. Exactly one of tokenField / sessionCookieName is required to sign in.",
+                    "$ref": "#/$defs/dotPath"
+                  },
+                  "tokenHeader": {
+                    "description": "Header that carries the token (requires tokenField). Omitted: \"Authorization\" with a \"Bearer \" prefix. Set: this exact name with the raw token. Transport and cookie headers (Cookie, Set-Cookie, Host, Content-Length, Content-Type, Origin, Transfer-Encoding, Connection, TE, Upgrade, Keep-Alive, Proxy-Authorization, Proxy-Connection; any case) are refused by the broker.",
+                    "$ref": "#/$defs/httpToken"
+                  },
+                  "expiresAtField": {
+                    "description": "Dot path of the server's expiry in the JSON response: ISO 8601, unix seconds or unix milliseconds (autodetected). Bounds the artifact's expiresAt.",
+                    "$ref": "#/$defs/dotPath"
+                  },
+                  "sessionCookieName": {
+                    "description": "Cookie the tokenPath response must set (alternative to tokenField).",
+                    "$ref": "#/$defs/httpToken"
+                  },
+                  "mePath": {
+                    "description": "Identity endpoint for check / whoami (GET with the artifact's cookies and headers).",
+                    "$ref": "#/$defs/optionPath"
+                  },
+                  "emailField": { "description": "Dot path of the email in the mePath JSON (default \"email\").", "$ref": "#/$defs/dotPath" },
+                  "roleField": { "description": "Dot path of the role in the mePath JSON (default \"role\").", "$ref": "#/$defs/dotPath" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "required": ["strategy"], "properties": { "strategy": { "const": "oauth-client-credentials" } } },
+          "then": {
+            "properties": {
+              "options": {
+                "additionalProperties": false,
+                "properties": {
+                  "tokenPath": { "$ref": "#/$defs/optionPath" },
+                  "scope": { "type": "string", "pattern": "^[\\x21\\x23-\\x5b\\x5d-\\x7e]+( [\\x21\\x23-\\x5b\\x5d-\\x7e]+)*$" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "required": ["strategy"], "properties": { "strategy": { "const": "api-key" } } },
+          "then": {
+            "properties": {
+              "options": { "additionalProperties": false, "properties": { "headerName": { "$ref": "#/$defs/httpToken" } } }
+            }
+          }
+        },
+        {
+          "if": { "required": ["strategy"], "properties": { "strategy": { "const": "app-handoff" } } },
+          "then": {
+            "properties": {
+              "options": {
+                "description": "handoff prints the one-time URL; with mePath set (the opt-in), session and check consume it inside the broker and hand out the host-only cookies the route set.",
+                "additionalProperties": false,
+                "properties": {
+                  "handoffPath": {
+                    "description": "The app's handoff route (default \"/api/auth/agent-handoff\").",
+                    "$ref": "#/$defs/optionPath"
+                  },
+                  "mePath": {
+                    "description": "Identity endpoint (GET with the captured cookies). Setting it opts the profile in to session, check and use as a dependsOn; without it they are refused. session refuses unless it reports account.email.",
+                    "$ref": "#/$defs/optionPath"
+                  },
+                  "emailField": {
+                    "description": "Dot path of the email in the mePath JSON (default \"email\"; NextAuth's /api/auth/session: \"user.email\").",
+                    "$ref": "#/$defs/dotPath"
+                  },
+                  "roleField": {
+                    "description": "Dot path of the role in the mePath JSON (default \"role\").",
+                    "$ref": "#/$defs/dotPath"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "profileName": {
+      "description": "A profile name in this or the user registry.",
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]*(:[a-z0-9][a-z0-9._-]*)*$"
+    },
+    "optionPath": {
+      "description": "A path on the profile's baseUrl origin: starts with a single \"/\", no whitespace, backslash, query or fragment.",
+      "type": "string",
+      "pattern": "^/(?!/)[^\\s?#\\\\]*$"
+    },
+    "httpToken": {
+      "description": "RFC 7230 token (cookie or header name).",
+      "type": "string",
+      "pattern": "^[!#$%&'*+\\-.^_`|~0-9A-Za-z]{1,128}$"
+    },
+    "dotPath": {
+      "description": "Dot path into a JSON value, e.g. \"user.role\"; numeric segments index arrays, e.g. \"workspaces.0.role\".",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_$-]{1,64}(\\.[A-Za-z0-9_$-]{1,64}){0,7}$"
+    },
+    "formField": {
+      "description": "HTML form field name.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.\\[\\]-]{1,64}$"
+    },
+    "rotatePath": {
+      "description": "testlane rotate: path on the profile origin of the app's password-change endpoint. Without it rotation is not configured for the profile.",
+      "$ref": "#/$defs/optionPath"
+    },
+    "rotateMethod": {
+      "description": "testlane rotate: HTTP method of the password-change request (default POST).",
+      "enum": ["POST", "PUT", "PATCH"]
+    },
+    "rotateBodyFormat": {
+      "description": "testlane rotate: \"json\" (default) sends application/json; \"form\" sends application/x-www-form-urlencoded.",
+      "enum": ["json", "form"]
+    },
+    "rotateBody": {
+      "description": "testlane rotate: JSON object string mapping field names to string values of the password-change request. Values may contain {{email}}, {{secret}} (the current secret) and {{newSecret}} (required in at least one value); no other {{...}} placeholder is allowed.",
+      "type": "string",
+      "pattern": "\\{\\{newSecret\\}\\}"
+    },
+    "rotateVia": {
+      "description": "testlane rotate: profile (same host, non-production) whose session (cookies and headers) authenticates the request, e.g. an admin profile. Default: the profile's own session.",
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]*(:[a-z0-9][a-z0-9._-]*)*$"
+    },
+    "rotateEveryDays": {
+      "description": "testlane status: maximum age in whole days of the stored secret before the \"rotation-overdue\" alert (default: --max-age-days, else 90). A string, like every option.",
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,4}$"
+    }
+  }
+}

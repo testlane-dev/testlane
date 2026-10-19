@@ -1,0 +1,210 @@
+name: Release candidate
+
+# A version tag prepares an artifact; it does not publish a package. A maintainer
+# reviews its manifest, then dispatches this workflow with the reviewed integrity.
+# CI may only stage that artifact. npm approval with 2FA is a separate human step.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Reviewed version tag (for example v0.6.0)"
+        required: true
+        type: string
+      artifact_run_id:
+        description: "Successful tag-triggered candidate workflow run ID"
+        required: true
+        type: string
+      integrity:
+        description: "Reviewed tarball SHA-512 integrity from release-manifest.json"
+        required: true
+        type: string
+      dist_tag:
+        description: "npm dist-tag applied after human approval"
+        default: latest
+        required: true
+        type: choice
+        options: [latest, next, beta]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate-macos:
+    if: github.event_name == 'push' && github.repository == 'testlane-dev/testlane'
+    name: release validation (macos-latest)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-home
+      - name: Real macOS keychain adapter tests (temporary keychain only)
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-home
+          TESTLANE_REAL_KEYCHAIN: "1"
+        run: npx vitest run tests/store-real-keychain.test.ts --reporter=verbose
+      - run: npm run build
+      - run: npm run check:clean-room -- --json
+      - run: node scripts/export-public.mjs --check --release
+
+  prepare:
+    if: github.event_name == 'push' && github.repository == 'testlane-dev/testlane'
+    needs: validate-macos
+    name: prepare and prove exact release tarball
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - run: npm install --global npm@11.21.0 --ignore-scripts
+      - name: Tag must match package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node -e 'const p=require("./package.json"); if(process.env.RELEASE_TAG!=="v"+p.version) process.exit(1)'
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-home
+      - run: npm run build
+      - run: node scripts/export-public.mjs --check --release
+      - run: node --test scripts/release-artifact.test.mjs
+      - run: npm --prefix examples/playwright ci --no-audit --no-fund
+      - run: npx --prefix examples/playwright playwright install --with-deps chromium
+      - name: Install isolated Secret Service prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnome-keyring libsecret-tools dbus-x11
+      - name: Pack candidate once
+        id: candidate
+        run: node scripts/release-artifact.mjs prepare --directory output/release
+      - name: Real installed-package launch proof against the candidate bytes
+        env:
+          TESTLANE_PACKAGE_TARBALL: ${{ github.workspace }}/output/release/${{ steps.candidate.outputs.filename }}
+          TESTLANE_REAL_KEYCHAIN: "1"
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-release-home
+          AGENT_AUTH_HOME: ${{ runner.temp }}/testlane-release-home
+          XDG_DATA_HOME: ${{ runner.temp }}/keyring-release-candidate
+        run: |
+          set -euo pipefail
+          mkdir -p "$XDG_DATA_HOME"
+          dbus-run-session -- bash -c '
+            set -euo pipefail
+            head -c 24 /dev/urandom | base64 | tr -d "\n" | gnome-keyring-daemon --unlock --components=secrets
+            npm run proof:launch-consumer
+          ' | tee output/release/consumer-proof.txt
+      - name: Verify the proof did not change the candidate bytes
+        env:
+          REVIEWED_INTEGRITY: ${{ steps.candidate.outputs.integrity }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/release-artifact.mjs verify --directory output/release --integrity "$REVIEWED_INTEGRITY" --commit "$GITHUB_SHA" --tag "$RELEASE_TAG" --run-id "$GITHUB_RUN_ID"
+      - name: Record review instructions
+        env:
+          REVIEWED_INTEGRITY: ${{ steps.candidate.outputs.integrity }}
+        run: |
+          printf 'Candidate commit: `%s`\n\nSHA-512 integrity: `%s`\n\nRun ID: `%s`\n\nDownload and review the candidate artifact and consumer proof before dispatching this workflow. Staging still requires separate npm approval.\n' "$GITHUB_SHA" "$REVIEWED_INTEGRITY" "$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ github.ref_name }}
+          path: output/release/
+          if-no-files-found: error
+          retention-days: 14
+
+  review:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'testlane-dev/testlane'
+    name: verify reviewed candidate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.release_tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ inputs.release_tag }}
+          path: output/release
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+      - name: Match source run, tag, commit and reviewed bytes
+        env:
+          REVIEWED_INTEGRITY: ${{ inputs.integrity }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          CANDIDATE_RUN_ID: ${{ inputs.artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          export CANDIDATE_COMMIT="$(git rev-parse HEAD)"
+          test "$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility)" = public
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID" > "$RUNNER_TEMP/candidate-run.json"
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/candidate-run.json","utf8"));
+            if(r.event!=="push" || r.conclusion!=="success" || r.path!==".github/workflows/publish.yml" || r.head_sha!==process.env.CANDIDATE_COMMIT || r.head_branch!==process.env.RELEASE_TAG) process.exit(1);
+          '
+          node scripts/release-artifact.mjs verify --directory output/release --integrity "$REVIEWED_INTEGRITY" --commit "$CANDIDATE_COMMIT" --tag "$RELEASE_TAG" --run-id "$CANDIDATE_RUN_ID" --require-tag-dispatch
+
+  stage:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'testlane-dev/testlane'
+    needs: review
+    name: stage reviewed tarball (human npm approval still required)
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.release_tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@11.21.0 --ignore-scripts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ inputs.release_tag }}
+          path: output/release
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify exact reviewed artifact again
+        id: verified
+        env:
+          REVIEWED_INTEGRITY: ${{ inputs.integrity }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          CANDIDATE_RUN_ID: ${{ inputs.artifact_run_id }}
+        run: node scripts/release-artifact.mjs verify --directory output/release --integrity "$REVIEWED_INTEGRITY" --commit "$(git rev-parse HEAD)" --tag "$RELEASE_TAG" --run-id "$CANDIDATE_RUN_ID" --require-tag-dispatch
+      - name: Stage tarball with OIDC and provenance; do not publish directly
+        env:
+          RELEASE_FILE: ${{ steps.verified.outputs.filename }}
+          RELEASE_DIST_TAG: ${{ inputs.dist_tag }}
+        run: npm stage publish "./output/release/$RELEASE_FILE" --ignore-scripts --provenance --access public --tag "$RELEASE_DIST_TAG" --registry=https://registry.npmjs.org

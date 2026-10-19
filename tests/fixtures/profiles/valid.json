@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "profiles": {
+    "demo:local:admin": {
+      "app": "demo-app",
+      "environment": "sandbox",
+      "baseUrl": "http://localhost:3000",
+      "strategy": "nextauth-credentials",
+      "account": { "email": "admin@demo.test", "role": "Administrator" },
+      "session": { "ttlMinutes": 240 }
+    },
+    "demo:testing:sales": {
+      "app": "demo-app",
+      "environment": "testing",
+      "baseUrl": "https://demo.testing.test",
+      "strategy": "form-post",
+      "account": { "email": "agent.sales@demo.test", "role": "Sales" },
+      "session": { "ttlMinutes": 600 },
+      "allowedHosts": ["api.demo.testing.test", "assets.demo.testing.test:8443"],
+      "options": { "loginPath": "/login", "successPath": "/home" },
+      "notes": "Throwaway fixture."
+    },
+    "demo:testing:member": {
+      "app": "demo-app",
+      "environment": "testing",
+      "baseUrl": "https://demo.testing.test",
+      "strategy": "dependent-token",
+      "account": { "email": "agent.member@demo.test", "role": "Member", "identifier": "member-test" },
+      "session": { "ttlMinutes": 60 }
+    }
+  }
+}
