@@ -103,6 +103,7 @@ export const URL_ALLOWLIST = [
   "anthropic.com",
   // Official Codex MCP configuration reference used by the integration guide.
   "learn.chatgpt.com/docs/extend/mcp",
+  "learn.chatgpt.com/guides/best-practices",
   "json.schemastore.org",
   "json-schema.org",
   "apache.org",

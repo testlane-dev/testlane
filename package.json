@@ -1,6 +1,6 @@
 {
   "name": "@testlane/cli",
-  "version": "0.6.0",
+  "version": "0.7.0-dev.0",
   "description": "A local credential broker for coding agents: keep stored passwords out of normal agent interactions and issue sessions for approved sandbox and test apps.",
   "keywords": [
     "agents",
@@ -49,6 +49,11 @@
     "docs/quickstart.md",
     "docs/sessions.md",
     "docs/compatibility.md",
+    "docs/agent-verification.md",
+    "skills/testlane-verify",
+    "examples/agent-verification",
+    "!examples/agent-verification/tests",
+    "!examples/agent-verification/tests/**",
     "docs/verification",
     "examples/playwright/README.md",
     "examples/playwright/fixtures.mjs",
@@ -89,6 +94,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:agent-verification": "node --test examples/agent-verification/tests/*.test.mjs",
     "dev": "tsx src/cli.ts",
     "check": "npm run typecheck && npm run test",
     "export:public": "node scripts/export-public.mjs",

@@ -166,6 +166,9 @@ jobs:
       - name: Verify the copied existing-app quickstart example
         run: node --test examples/existing-app/tests/*.test.mjs
 
+      - name: Verify agent-authored case and evidence contracts
+        run: npm run test:agent-verification
+
       - name: Verify the packed Playwright fixture in a consumer app
         run: npm run test:playwright
 

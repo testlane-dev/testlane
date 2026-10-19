@@ -18,7 +18,7 @@ Contexts close during fixture teardown, including when the test fails.
 3. As the human, edit the public configuration in `app.spec.mjs`. Set the exact app
    origin, approved profile names and absolute installed `dist/cli.js` path. With an
    npm global installation, `npm root -g` prints the directory containing
-   `testlane/dist/cli.js`. Use forward slashes in Windows JavaScript strings.
+   `@testlane/cli/dist/cli.js`. Use forward slashes in Windows JavaScript strings.
 4. Create and human-seed the profiles/accounts using the quickstart. The example needs
    separate QA and admin accounts, with `/api/me` returning top-level `email`/`role`
    and `/dashboard` showing `Dashboard`. Change those public route/assertion values
@@ -32,7 +32,7 @@ Contexts close during fixture teardown, including when the test fails.
 On Windows use `npm.cmd`/`npx.cmd` when PowerShell blocks npm's script shims. The fixture
 itself invokes Node with an argv array and the configured CLI path; it uses no shell.
 For an npm-only Testlane installation, these files are under
-`<npm root -g>/testlane/examples/playwright/`.
+`<npm root -g>/@testlane/cli/examples/playwright/`.
 
 The expected result is one passing test that checks both accounts and protected pages.
 Run it again; it issues new sessions without overwriting a file or using `--force`.
