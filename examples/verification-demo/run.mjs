@@ -127,9 +127,14 @@ export async function runDemo({ projectRoot = process.env.TESTLANE_VERIFICATION_
     if (outputs.some(output => variants.some(value => output.includes(value)))) failure = new Error('DEMO_SECRET_OUTPUT_BLOCKED');
     try { await scanText(output, variants); await scanText(temporary.root, variants); }
     catch { failure = new Error('DEMO_SECRET_OUTPUT_BLOCKED'); }
-    if (app?.records().length) cleanupFailed = true;
+    // A child whose exit was not confirmed can still hold a live session or use
+    // its broker home. Preserve recovery metadata even if deletion checks passed.
+    const terminationUnconfirmed = failure?.message === 'DEMO_CHILD_TERMINATION_UNCONFIRMED';
+    if (terminationUnconfirmed || app?.records().length) cleanupFailed = true;
     try { await app?.close(); } catch { cleanupFailed = true; }
-    try { await removeDemoTemporaryDirectory(temporary); } catch { cleanupFailed = true; }
+    if (!terminationUnconfirmed) {
+      try { await removeDemoTemporaryDirectory(temporary); } catch { cleanupFailed = true; }
+    }
     if (!cleanupFailed) {
       try {
         if (!within(output, home) || (await lstat(home)).isSymbolicLink() || await realpath(home) !== home) throw new Error('DEMO_OUTPUT_PATH_INVALID');
