@@ -1,4 +1,4 @@
-# Synthetic React Native Android approval proof
+# Synthetic React Native approval proof
 
 This is a new, disposable frontend for the public [approval demo backend](../verification-demo/README.md).
 It renders native React Native controls for disposable sandbox accounts. The source
@@ -54,6 +54,73 @@ tree within a bounded wait and retain private recovery information. An unconfirm
 stop is reported explicitly and never treated as a successful cancellation.
 `--prepare-only` stops after install/prebuild and retains the owned root for toolchain
 inspection; it does not claim a completed APK.
+
+## Unsigned iOS Simulator Release build
+
+The iOS example reuses `App.js`, `bootstrap.mjs` and the pinned dependency lockfile.
+It adds a separate `app.ios.config.cjs` and reviewed iOS config plugin. Android's
+configuration stays separate. On iOS, the shared value controls expose their actual
+text through `accessibilityValue`, while stable test IDs identify the controls.
+Android keeps its original exact accessibility descriptions and native text.
+
+Build on macOS with supported Node, **Xcode 26.4+**, an iOS Simulator SDK 26.4+,
+and an already installed CocoaPods executable. The selected Xcode must have its
+license and first-launch setup completed. The helper checks these prerequisites;
+it does not accept licenses, install Xcode or select a different developer directory.
+The [Expo SDK matrix](https://docs.expo.dev/versions/v58.0.0/) documents the minimum
+Xcode version. The proof is intended for the separately owned iOS 26.4+ Simulator.
+
+From this example directory on macOS:
+
+```sh
+mkdir -p output
+node build-ios.mjs --output-dir "$(pwd -P)/output/ios-build-001"
+```
+
+The output parent must already exist at its canonical path, and the final output
+directory must be new. `buildIosProof({ outputDir, signal, onStage })` provides the
+same operation as an importable API; `onStage` receives fixed stage names. A
+non-macOS host refuses before creating output or a temporary build root. This
+refusal and the local fixture tests are not evidence of a successful iOS build.
+
+The helper copies seven explicit public inputs into a short owned OS temporary
+directory. It maps the iOS config to `app.config.cjs`, verifies the pinned
+`expo-template-bare-minimum@58.0.25` archive's SHA-512 integrity, runs `npm ci`,
+prebuilds iOS without automatic installation, then runs CocoaPods and an unsigned
+`iphonesimulator` **Release** build. It supplies no team, provisioning profile or
+Apple account. It never launches a Simulator, chooses an existing device, starts
+Metro or installs the result. Each subprocess has a fixed timeout and output cap;
+Ctrl+C, termination requests and an API abort signal stop the owned process group.
+An unconfirmed stop retains a fixed failure code and recovery information.
+
+The product is `TestlaneIOSProof.app`, bundle ID `dev.testlane.iosproof`. Its
+embedded `main.jsbundle`, Simulator platform, actual architecture, unsigned app
+and narrow ATS configuration are checked before success. The plugin sets
+`NSAllowsArbitraryLoads` to false and permits cleartext HTTP only for the
+`127.0.0.1` exception domain. It does not enable a blanket local-network exemption.
+[Apple documents IP-address exception domains](https://developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsexceptiondomains)
+for iOS 17 and later; bootstrap validation separately permits only an exact
+`http://127.0.0.1:<owned-port>` origin.
+
+Success returns an absolute `appDirectory`, `appSHA256`, `manifestFile` and resolved
+package versions. `build-manifest.json` records every public input hash, their
+source-to-destination mapping, the template, npm and CocoaPods dependency locks,
+actual Xcode/SDK/package versions, and the copied app's canonical tree digest.
+`hashIosTree(appDirectory)` is exported so the proof controller can verify that
+exact bundle before and after execution. Its deterministic entries cover every
+relative path, entry type, POSIX mode and file byte hash. Internal relative
+symlinks retain their literal targets without being traversed; absolute, dangling
+or escaping links are refused. Timestamps and extended attributes are outside
+this digest. A successful copy must match the built tree before the owned build
+root is removed. Failure retains that root, private logs and `recovery.json`.
+
+On iOS, `Paths.document` maps the bootstrap to `Documents/testlane-bootstrap.json`
+inside this app's data container. A separately controlled, newly created Simulator
+can deliver that file through its private container. The unchanged app reads and
+deletes it before accepting the generated session; it never displays or persists
+the cookie. This unsigned synthetic build is for a Simulator proof, not App Store
+distribution, a physical phone, a real account or a general Expo-support claim.
+Only the macOS build and actual native proof can establish that this path works.
 
 ## Session delivery and backend contract
 
@@ -111,5 +178,7 @@ node --test tests/*.test.mjs
 ```
 
 These check loopback/cookie validation, deletion ordering and missing-tool refusal
-before build allocation. They do not replace APK build inspection or real
-emulator/UI acceptance.
+before build allocation. The iOS helper tests also cover canonical tree hashing,
+symlink refusal, scoped removal, bounded subprocesses and cancellation using local
+fixtures. They do not compile iOS on Windows or replace APK/app inspection and real
+emulator/Simulator acceptance.

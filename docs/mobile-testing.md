@@ -4,11 +4,14 @@ Native Android and iOS testing is planned work. Testlane 0.7.0-beta.2 verifies w
 applications with Playwright; it has no native app runner, device manager or native
 session bootstrap. Changing a browser viewport does not verify a native app.
 
-The unreleased checkout now includes an [Android emulator experiment](../examples/android-verification/README.md)
-and its [synthetic React Native/Expo app](../examples/mobile-approval-app/README.md).
-It uses Appium/UiAutomator2, a separate native report contract and a test-only session
-bootstrap. Run its installed-package positive/fault/corrected proof before relying
-on it. This is separate from the published web CLI and the broader roadmap below.
+The unreleased checkout now includes an [Android emulator experiment](../examples/android-verification/README.md),
+an [iOS Simulator experiment](../examples/ios-verification/README.md), and their
+[synthetic React Native/Expo app](../examples/mobile-approval-app/README.md).
+They use Appium platform drivers, a separate native report contract and an
+app-specific test session bootstrap. Each target needs its own installed-package
+positive/fault/corrected proof. The iOS implementation and policy tests do not
+establish a successful macOS build or native run. This work is separate from the
+published web CLI and the broader roadmap below.
 
 The intended workflow stays the same: describe a feature to an existing coding agent,
 review app-owned tests, run them against a dedicated test environment, and inspect
@@ -33,7 +36,7 @@ revision and detect changes during execution.
 | First target | Required environment | Acceptance status |
 | --- | --- | --- |
 | React Native/Expo on Android | A pinned test build, Android SDK, emulator and platform driver | Unreleased synthetic emulator proof; see its recipe and limits |
-| React Native/Expo on iOS | A pinned simulator build, macOS, Xcode, iOS Simulator and platform driver | Planned; must be validated independently of Android |
+| React Native/Expo on iOS | An unsigned pinned simulator build, macOS, Xcode, iOS Simulator and XCUITest | Unreleased implementation; hosted macOS proof and cleanup must pass independently of Android |
 
 The first proof must cover:
 
@@ -48,6 +51,28 @@ The first proof must cover:
 An emulator-only proof will be labeled as such. Physical devices, notifications,
 biometrics, camera permissions, offline synchronization, store purchases and mixed
 native/WebView flows each require additional tests and evidence.
+
+## iOS experiment boundary
+
+The iOS controller is restricted to an explicitly opted-in, ephemeral GitHub-hosted
+macOS job. It builds an unsigned Simulator Release app with embedded JavaScript,
+creates a new nonce-named Simulator in a private device set, and uses pinned Appium
+3.8.0, XCUITest 12.19.1 and WebDriverAgent 16.16.3. It does not select an existing
+phone or Simulator, require an Apple/Expo account, or accept SDK licenses.
+
+Generated sandbox credentials pass through the real installed CLI and an explicitly
+selected temporary macOS keychain. A private file in the owned app container delivers
+the resulting session; the app deletes it before parsing, and the controller checks
+absence. Keychain entries, owned native processes, Simulator state and backend
+records each have separate cleanup checks. Unconfirmed cleanup prevents success.
+
+The required result is five passes, exactly two expected assertion failures after
+the injected total defect, then five passes after correction, with unchanged build
+and test inputs and zero owned records after every phase. This is an acceptance
+criterion until a real hosted run records it. It does not establish independent
+agent-authored case quality, arbitrary existing-app integration or physical-device
+support. See the [iOS recipe](../examples/ios-verification/README.md) for prerequisites,
+commands, credential boundaries and retained evidence.
 
 ## Runner evaluation
 
