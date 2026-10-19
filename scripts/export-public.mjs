@@ -132,6 +132,7 @@ export const URL_ALLOWLIST = [
   "docs.maestro.dev/",
   "docs.maestro.dev/reference/commands-available/asserttrue.md",
   "docs.expo.dev/develop/development-builds/introduction",
+  "docs.expo.dev/versions/v58.0.0/",
   "example.com",
   "example.net",
   "example.org",

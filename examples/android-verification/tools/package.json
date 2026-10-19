@@ -1,0 +1,13 @@
+{
+  "name": "testlane-owned-android-tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Explicitly installed, project-local Appium tooling for the owned Android proof.",
+  "engines": { "node": "^22.14.0 || >=24.0.0", "npm": ">=10" },
+  "scripts": { "setup": "node setup.mjs" },
+  "dependencies": {
+    "appium": "3.8.0",
+    "appium-uiautomator2-driver": "8.7.0"
+  }
+}

@@ -1,0 +1,242 @@
+{
+  "schemaVersion": 1,
+  "evidenceKind": "local-controller-observation",
+  "recordedOn": "2026-10-19",
+  "sourceCommit": "d1619f919fc4a71a37ed3f203ec2cebffa1d84bb",
+  "sourceStatus": "unreleased",
+  "publishedPackageTested": false,
+  "hostOS": "Windows",
+  "emulatorAbi": "x86_64",
+  "testAuthoring": "prewritten",
+  "limits": [
+    "One synthetic React Native/Expo app on an API 34 emulator; no general existing-app integration or iOS acceptance.",
+    "The package was packed and freshly installed from the unreleased source candidate, not fetched from the published beta.2 archive.",
+    "Controller-observed results and hashes are not a signed attestation and do not establish arbitrary test quality.",
+    "No physical device, WebView, notification, biometric, camera, offline-sync or purchase coverage."
+  ],
+  "proof": {
+    "schemaVersion": 1,
+    "passed": true,
+    "runner": "android-uiautomator2",
+    "context": "NATIVE_APP",
+    "proofOnly": true,
+    "nativeStore": "dpapi",
+    "packageTreeSha256": "c4292f33007affccb44e3fed9fb80ef604a4db12428ecd906a10282e1b953024",
+    "apkSha256": "4fbf0f87d63fccbc354601dc75aa46cfd7a24205332c445caf709c74ebdd0e7e",
+    "buildManifestSha256": "4e32f5b1c78cd36e4c5bd0d93bd0589ce5c009decc7af27da6eed9ba4f180da1",
+    "publicAppSourceSha256": {
+      "package.json": "767b8605e7a2d1ae2ed487570eed947f84c840673d1e09029f1094d34bdfc52c",
+      "package-lock.json": "eb8ec94d64d6c9135d6a2175c5c4b78a9f13a4906b74e3403b773bcfdb130ace",
+      "app.config.cjs": "5de846fc6fcd469e1d03971b06d52d5adc9587b820888372ca46bbedd1b203f6",
+      "index.js": "7a206cb9a18c6ee95a18ea6eea5fd4cbe119ac1db3094c545aa94c2f8b8588e0",
+      "App.js": "3647b020a62830b0952a1f9a5f636176353942a0ae7ee7846b715ba0223f3d69",
+      "bootstrap.mjs": "db569d9d5dca36f0a2e6ae6377dfe3fecdfd7e0b161fee9a2a11778514c7c5b3",
+      "plugins/withProofBuild.cjs": "2895697fc9c47fa5f489dcc962dad176a453575647d20fcfe1cf47d1af671669"
+    },
+    "planSha256": "5d73264f00d956b30372681c75adc759be1f6de17bf62be5e09b1c46d18138f5",
+    "specSha256": "87c1212f52d048dd7f13e14cea769a849935918418e0d4ede3726e07f1e67ed0",
+    "versions": {
+      "appium": "3.8.0",
+      "uiautomator2": "8.7.0",
+      "androidApi": "34",
+      "systemImageRevision": "14",
+      "automationApks": [
+        {
+          "file": "settings.apk",
+          "version": "8.0.9",
+          "sha256": "bcfc5e6c2547d83beb3202c43c54cd0a0d3fe48511c87e43585db214259e11f8"
+        },
+        {
+          "file": "uiautomator2-server.apk",
+          "version": "10.6.6",
+          "sha256": "8ff760a2a86b487f53090fbdcd5b0360e67d02bb811887d527a9557b0d59c80d"
+        },
+        {
+          "file": "uiautomator2-test.apk",
+          "version": "10.6.6",
+          "sha256": "e6f729287d72351388fd66597c35b69988b9091a7011954bf92a55d416cb1e1c"
+        }
+      ]
+    },
+    "runs": [
+      {
+        "phase": "positive",
+        "verdict": "passed",
+        "passed": 5,
+        "failed": 0,
+        "recordsRemaining": 0
+      },
+      {
+        "phase": "fault",
+        "verdict": "failed",
+        "passed": 3,
+        "failed": 2,
+        "recordsRemaining": 0
+      },
+      {
+        "phase": "corrected",
+        "verdict": "passed",
+        "passed": 5,
+        "failed": 0,
+        "recordsRemaining": 0
+      }
+    ],
+    "cleanupVerified": true,
+    "credentialLeakScanPassed": true
+  },
+  "cases": {
+    "positive": [
+      {
+        "id": "editor-native-total",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 14,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "editor-cannot-approve",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 16,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "reviewer-native-approval",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 18,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "duplicate-approval-unchanged",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 17,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "anonymous-denied",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 7,
+        "cleanupAssertionsObserved": 0,
+        "cleanup": "not-required"
+      }
+    ],
+    "fault": [
+      {
+        "id": "editor-native-total",
+        "status": "failed",
+        "reason": "NATIVE_ASSERTION_FAILED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 11,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "editor-cannot-approve",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 16,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "reviewer-native-approval",
+        "status": "failed",
+        "reason": "NATIVE_ASSERTION_FAILED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 14,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "duplicate-approval-unchanged",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 17,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "anonymous-denied",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 7,
+        "cleanupAssertionsObserved": 0,
+        "cleanup": "not-required"
+      }
+    ],
+    "corrected": [
+      {
+        "id": "editor-native-total",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 14,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "editor-cannot-approve",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 16,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "reviewer-native-approval",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 18,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "duplicate-approval-unchanged",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 17,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "anonymous-denied",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 7,
+        "cleanupAssertionsObserved": 0,
+        "cleanup": "not-required"
+      }
+    ]
+  },
+  "sourceFileSha256": {
+    "scripts/android-proof.mjs": "a01dd6251243a2a0379d950acb766c507a65d36770b170bd65a47913e2512a70",
+    "examples/playwright/tests/consumer.mjs": "6db34bb1389709daa7355f81f4c93ac65795bd7526ce9c8c1d24efdba13e8676",
+    "examples/workflows/test-support/real-broker.mjs": "d138cbea3460071979edef2b21a6705265819d1f257722893149c921410ef57f",
+    "examples/android-verification/device.mjs": "949e68c3ed1b68faace97f4acf9824fac380cd52a31a1304d5825b65a2394748",
+    "examples/android-verification/contracts.mjs": "f78850e2c0403c9a0894cb272576a28aa5a27e86a08e09f1be18bfa7413e486c",
+    "examples/android-verification/driver.mjs": "c1af11d33eb8df1c2f0d044de0f819e42cd540960dd6347bf43176bfb9188654",
+    "examples/android-verification/runner.mjs": "109afeaf43d9291b870d6ac2e68dd3c0422a5ff06bbfdc0ce9cfbbc3df5622eb",
+    "examples/android-verification/worker.mjs": "504b7a1d6022979eb78884ac5b50e0e0efb131ddb41c4a95f183192beb801b9b",
+    "examples/android-verification/worker-host.mjs": "b1963276cc8c76867cf2a3cd4e136fa9dcf5b8bf861e7fb5f5bb72deca7b8cf5",
+    "examples/android-verification/proof-cases.mjs": "87c1212f52d048dd7f13e14cea769a849935918418e0d4ede3726e07f1e67ed0"
+  }
+}
