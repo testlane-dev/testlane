@@ -11,6 +11,9 @@ on:
       - examples/ios-verification/**
       - examples/mobile-approval-app/**
       - examples/android-verification/**
+      - examples/verification-demo/native.mjs
+      - examples/workflows/test-support/real-broker.mjs
+      - examples/playwright/tests/consumer.mjs
   pull_request:
     paths:
       - .github/workflows/ios-simulator-proof.yml
@@ -19,6 +22,9 @@ on:
       - examples/ios-verification/**
       - examples/mobile-approval-app/**
       - examples/android-verification/**
+      - examples/verification-demo/native.mjs
+      - examples/workflows/test-support/real-broker.mjs
+      - examples/playwright/tests/consumer.mjs
       - package.json
   workflow_dispatch:
 
@@ -59,6 +65,10 @@ jobs:
           echo "IOS_PROOF_ROOT=$proof_root" >> "$GITHUB_ENV"
       - name: Install the pinned optional Appium and XCUITest tools
         run: npm --prefix examples/ios-verification/tools run setup -- --output-dir "$IOS_PROOF_ROOT/tools"
+      - name: Verify and remove one owned simulator before compiling or authenticating
+        id: device-preflight
+        timeout-minutes: 15
+        run: node scripts/ios-device-preflight.mjs --tools-root "$IOS_PROOF_ROOT/tools" --output-dir "$GITHUB_WORKSPACE/output/ios-device-preflight"
       - name: Build the Release simulator app without Apple signing credentials
         id: build
         run: npm run build:ios-proof -- --output-dir "$IOS_PROOF_ROOT/build"
@@ -74,12 +84,24 @@ jobs:
           retention-days: 14
           path: |
             output/ios-preflight.json
+            output/ios-device-preflight/status.json
             output/ios-proof/plan.json
             output/ios-proof/positive.json
             output/ios-proof/fault.json
             output/ios-proof/corrected.json
             output/ios-proof/receipt.json
             ${{ env.IOS_PROOF_ROOT }}/build/build-manifest.json
+      # This standalone check never allocates application accounts or sessions.
+      - name: Retain device readiness diagnostics before compilation or authentication
+        if: failure() && steps.device-preflight.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-device-preflight-diagnostics
+          if-no-files-found: ignore
+          retention-days: 3
+          path: |
+            output/ios-device-preflight/status.json
+            output/ios-device-preflight/preauth-device.log
       # Compilation happens before any accounts, broker or sessions exist.
       # Never upload Appium logs, native-store homes or post-auth failure output.
       - name: Retain synthetic compilation diagnostics before authentication
@@ -90,3 +112,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
           path: ${{ env.IOS_PROOF_ROOT }}/build/*.log
+      - name: Retain fixed failure codes and independently sanitized native reports
+        if: failure() && steps.proof.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-proof-failure-summary
+          if-no-files-found: ignore
+          retention-days: 3
+          path: |
+            output/ios-proof/public-failure.json
+            output/ios-proof/preauth-device.log

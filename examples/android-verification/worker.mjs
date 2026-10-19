@@ -51,10 +51,11 @@ async function main(payload) {
     // only for this app-owned readiness element; no test action is retried.
     await driver.waitFor('session-status');
     const waitText = async (id, expected, signal, timeoutMs = 10_000) => {
+      const activeDriver = driver.withSignal(signal);
       const until = Date.now() + Math.max(1, Math.min(timeoutMs, 10_000));
       while (Date.now() < until) {
         if (signal?.aborted || controller.signal.aborted) throw fixed();
-        const value = await driver.text(id);
+        const value = await activeDriver.text(id);
         if (value === expected) return value;
         await delay(Math.min(200, Math.max(1, until - Date.now())), signal);
       }
@@ -88,9 +89,10 @@ async function main(payload) {
       driver, identities: payload.identities, api, waitText,
       async loadRole(role, signal) {
         if (!['editor', 'reviewer'].includes(role) || signal?.aborted) throw fixed();
-        await driver.click('sign-out'); await waitText('session-status', 'signed-out', signal);
+        const activeDriver = driver.withSignal(signal);
+        await activeDriver.click('sign-out'); await waitText('session-status', 'signed-out', signal);
         await rpc({ type: 'load-role', role });
-        await driver.click('load-session'); await waitText('session-status', 'ready', signal);
+        await activeDriver.click('load-session'); await waitText('session-status', 'ready', signal);
         await waitText('identity-email', payload.identities[role].email, signal);
         await waitText('identity-role', payload.identities[role].role, signal);
         await rpc({ type: 'bootstrap-consumed' });

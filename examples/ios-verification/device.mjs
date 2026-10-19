@@ -303,9 +303,11 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     const created = await simctl(['create', marker.name, marker.deviceType, marker.runtimeId]);
     if (created.code !== 0 || !UUID.test(created.stdout.trim())) throw fail('IOS_SIMULATOR_CREATE_FAILED');
     createSettled = true; marker.udid = created.stdout.trim(); await writeMarker();
+    onStage('owned-simulator-created');
     const current = await assertRoot(); verifyOwnedSimulator({ expected: marker, marker: current, devices: await listOwned(), requireBooted: false });
     const boot = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'boot'));
     if (boot.code !== 0) throw fail('IOS_SIMULATOR_BOOT_FAILED');
+    onStage('owned-simulator-boot-started');
     signal?.addEventListener('abort', abortLifecycle, { once: true });
     const bootStatus = await simctl(['bootstatus', marker.udid, '-b'], { timeoutMs: 180000 });
     if (bootStatus.code !== 0) throw fail('IOS_SIMULATOR_BOOT_TIMEOUT');

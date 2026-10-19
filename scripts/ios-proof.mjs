@@ -8,11 +8,12 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {consumerProject} from '../examples/playwright/tests/consumer.mjs';
 import {sha,tree,digestTree,installedModule,proofProfiles,runProofPhases} from './native-proof-support.mjs';
+import {publicIosFailure} from '../examples/ios-verification/failure.mjs';
 
 const BUNDLE='dev.testlane.iosproof';
 export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,signal,onStage=()=>{}}) {
   const load=file=>installedModule(consumer.packageRoot,file);
-  const {startIosBroker,requireIosBrokerCi}=await load('examples/ios-verification/broker.mjs');
+  const {startIosBroker,requireIosBrokerCi,scanIosCredentials}=await load('examples/ios-verification/broker.mjs');
   requireIosBrokerCi();signal?.throwIfAborted();
   const output=path.resolve(outputDir);await mkdir(output,{mode:0o700});await writeFile(path.join(output,'.gitignore'),'*\n',{flag:'wx'});
   const recovery=path.join(output,'recovery');await mkdir(recovery,{mode:0o700});
@@ -79,6 +80,13 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
       receipt.ci={sourceCommit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID};
   }catch(error){
     if(typeof error?.capturedText==='function')captured+=error.capturedText();
+    // Startup has not launched the backend, keychain, broker or any session. No
+    // credential has been supplied to native tools. Retain only this pre-auth log.
+    if(!app&&!broker){
+      const startupText=captured+(device?.capturedText()??'');
+      scanIosCredentials(startupText,Object.values(accounts).map(item=>item.password));
+      await writeFile(path.join(output,'preauth-device.log'),startupText,{flag:'wx',mode:0o600});
+    }
     if(/TERMINATION_UNCONFIRMED|STOP_UNCONFIRMED/.test(String(error?.code??error?.message??'')))workerUnconfirmed=true;
     throw error;
   }finally{
@@ -121,7 +129,12 @@ async function main(){
     consumer=await consumerProject({tarball:process.env.TESTLANE_PACKAGE_TARBALL});
     const result=await runIosProof({...options,consumer,signal:controller.signal,onStage:name=>{stage=name;console.log('IOS_PROOF_STAGE '+name);}});
     console.log(JSON.stringify(result));
-  }catch(error){preserve=error.preserveConsumer===true;console.error('FAIL iOS proof at fixed stage: '+stage);process.exitCode=1;}
+  }catch(error){
+    preserve=error.preserveConsumer===true;
+    const summary=await publicIosFailure({output:options.outputDir,stage,error});
+    try{await writeFile(path.join(options.outputDir,'public-failure.json'),JSON.stringify(summary,null,2)+'\n',{flag:'wx',mode:0o600});}catch{}
+    console.error('FAIL iOS proof at fixed stage: '+summary.stage+' ('+summary.code+')');process.exitCode=1;
+  }
   finally{
     try{if(!preserve)await consumer?.dispose();}catch{console.error('FAIL iOS proof consumer cleanup');process.exitCode=1;}
     process.off('SIGINT',cancel);process.off('SIGTERM',cancel);
