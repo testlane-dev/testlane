@@ -7,10 +7,13 @@
 
 # Testlane
 
-Testlane is a local credential broker for coding agents working with **sandbox and test
-apps**. A human stores a dedicated test account's password in the OS keychain once. The
-broker signs in on the agent's behalf and issues a session for curl, Playwright, an MCP
-client or a browser handoff.
+Testlane provides open-source authenticated verification for coding agents working with
+**sandbox and test web apps**. Your existing agent writes ordinary Playwright tests;
+Testlane supplies sign-in, case execution and reports tied to the reviewed inputs.
+
+A human stores a dedicated test account's password in the OS keychain once. The local
+credential broker signs in on the agent's behalf and issues a session for curl,
+Playwright, an MCP client or a browser handoff.
 
 Stored passwords stay out of normal agent interactions. Issued cookies, session files
 and handoff URLs are live credentials; MCP session results enter the conversation.
@@ -30,6 +33,18 @@ project-local preview installation. To try a disposable app first, use the
 
 Requires Node 22 or newer. Pre-1.0; no independent security audit yet
 ([security policy](SECURITY.md)).
+
+## Development direction
+
+We are focusing on teams that use coding agents to build applications with roles,
+approvals and persistent business data. The aim is a complete workflow: tests the
+team owns, exact browser and API assertions, and verified removal of test records.
+The next milestone adds a reproducible approval example, useful failure diagnostics
+and an installed-package acceptance gate. Native Android and iOS testing is a planned
+track; the current release runs web tests with Playwright.
+
+See the [prioritized roadmap](docs/roadmap.md) and
+[native mobile proposal](docs/mobile-testing.md) for scope and release criteria.
 
 ## The 60-second mental model
 

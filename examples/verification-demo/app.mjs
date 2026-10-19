@@ -1,0 +1,149 @@
+/** A wholly local, in-memory teaching app. Never deploy it or use real accounts. */
+import { createServer } from 'node:http';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+
+const COOKIE = 'tldemo_session';
+const copy = value => structuredClone(value);
+const equal = (left, right) => {
+  const a = Buffer.from(String(left)), b = Buffer.from(String(right));
+  return a.length === b.length && timingSafeEqual(a, b);
+};
+function accountsFor(input) {
+  if (!input || !input.editor || !input.reviewer) throw new Error('DEMO_ACCOUNTS_INVALID');
+  const entries = [['Editor', input.editor], ['Reviewer', input.reviewer]].map(([role, account]) => {
+    if (!account || typeof account.email !== 'string' || !/^[a-z0-9._+-]+@[a-z0-9.-]+$/i.test(account.email) ||
+        typeof account.password !== 'string' || account.password.length < 24 || account.password.length > 256) {
+      throw new Error('DEMO_ACCOUNTS_INVALID');
+    }
+    return Object.freeze({ email: account.email, password: account.password, role });
+  });
+  if (entries[0].email.toLowerCase() === entries[1].email.toLowerCase() || equal(entries[0].password, entries[1].password)) {
+    throw new Error('DEMO_ACCOUNTS_INVALID');
+  }
+  return entries;
+}
+async function jsonBody(request) {
+  if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] ?? '')) throw new Error('BODY_INVALID');
+  const chunks = []; let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > 4096) throw new Error('BODY_INVALID');
+    chunks.push(chunk);
+  }
+  const result = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('BODY_INVALID');
+  return result;
+}
+const document = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Testlane approval demo</title><style>body{font:16px system-ui;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6}label{display:block;margin:12px 0}input,button{font:inherit;padding:8px}article{border:1px solid #ccd4df;padding:16px;margin:12px 0}output{display:block;margin:12px 0}small{color:#465569}</style>
+<h1>Request approvals</h1><p>A local, disposable app for learning authenticated feature verification.</p>
+<p id="identity">Checking sandbox identity…</p><section id="editor" hidden><h2>Create a request</h2>
+<form id="create"><label>Run marker <input name="marker" required maxlength="90"></label>
+<label>Quantity <input name="quantity" type="number" value="3" min="1" max="100" required></label>
+<label>Unit price (cents) <input name="unitPriceCents" type="number" value="1400" min="1" max="1000000" required></label>
+<button>Create request</button></form></section><output id="result" aria-live="polite"></output>
+<h2>Saved requests</h2><div id="requests"></div><script src="/app.js" defer></script></html>`;
+const javascript = `const identity=document.querySelector('#identity'),result=document.querySelector('#result');
+let role;async function read(response){if(!response.ok)throw Error('Request was refused');return response.json();}
+async function refresh(){const rows=await read(await fetch('/api/requests'));const parent=document.querySelector('#requests');parent.replaceChildren();
+for(const row of rows){const article=document.createElement('article');article.dataset.requestId=row.id;const title=document.createElement('h3');title.textContent=row.marker;article.append(title);
+const detail=document.createElement('p');detail.textContent=row.quantity+' items × '+row.unitPriceCents+' cents = '+row.totalCents+' cents · '+row.status;article.append(detail);
+if(role==='Reviewer'&&row.status==='draft'){const button=document.createElement('button');button.textContent='Approve request';button.addEventListener('click',async()=>{try{await read(await fetch('/api/requests/'+encodeURIComponent(row.id)+'/approve',{method:'POST'}));result.textContent='Request approved';await refresh();}catch{result.textContent='Approval was refused';}});article.append(button);}parent.append(article);}}
+document.querySelector('#create').addEventListener('submit',async event=>{event.preventDefault();const form=new FormData(event.target);try{const row=await read(await fetch('/api/requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({marker:form.get('marker'),quantity:Number(form.get('quantity')),unitPriceCents:Number(form.get('unitPriceCents'))})}));result.textContent='Request saved: '+row.totalCents+' cents';await refresh();}catch{result.textContent='Creation was refused';}});
+(async()=>{try{const me=await read(await fetch('/api/me'));role=me.role;identity.textContent=me.role+' sandbox account';document.querySelector('#editor').hidden=role!=='Editor';await refresh();}catch{identity.textContent='Use a Testlane-authenticated browser context to open this app.';}})();`;
+
+/** Accounts are generated by the caller and stay only in memory. No controller HTTP routes exist. */
+export async function startDemoApp({ accounts }) {
+  const users = accountsFor(accounts), sessions = new Map(), records = new Map(), issued = new Set();
+  let defect = false, origin, closed = false;
+  const server = createServer((request, response) => {
+    void handle(request, response).catch(() => {
+      if (!response.headersSent) send(response, 400, { error: 'REQUEST_INVALID' });
+      else response.destroy();
+    });
+  });
+  server.requestTimeout = 10_000; server.headersTimeout = 10_000; server.keepAliveTimeout = 1000;
+  function send(response, status, body, extra = {}) {
+    response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff', ...extra });
+    response.end(JSON.stringify(body));
+  }
+  function identify(request) {
+    const token = (request.headers.cookie ?? '').split(';').map(value => value.trim()).find(value => value.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
+    const session = sessions.get(token);
+    if (!session || session.expiresAt <= Date.now()) return null;
+    return session.user;
+  }
+  async function handle(request, response) {
+    if (closed || request.headers.host !== new URL(origin).host ||
+        (request.headers.origin && request.headers.origin !== origin)) return send(response, 403, { error: 'ORIGIN_REFUSED' });
+    const url = new URL(request.url, origin), method = request.method;
+    if (url.search || url.hash) return send(response, 400, { error: 'REQUEST_INVALID' });
+    if (method === 'GET' && ['/', '/app.js'].includes(url.pathname)) {
+      response.writeHead(200, { 'Content-Type': url.pathname === '/' ? 'text/html; charset=utf-8' : 'text/javascript; charset=utf-8',
+        'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" });
+      response.end(url.pathname === '/' ? document : javascript); return;
+    }
+    if (method === 'POST' && url.pathname === '/api/login') {
+      const body = await jsonBody(request);
+      if (Object.keys(body).some(key => !['email', 'password'].includes(key)) || typeof body.email !== 'string' || typeof body.password !== 'string') {
+        return send(response, 400, { error: 'REQUEST_INVALID' });
+      }
+      const user = users.find(item => equal(item.email, body.email) && equal(item.password, body.password));
+      if (!user) return send(response, 401, { error: 'SIGN_IN_REFUSED' });
+      const token = randomBytes(32).toString('base64url'); issued.add(token);
+      sessions.set(token, { user, expiresAt: Date.now() + 10 * 60_000 });
+      return send(response, 200, { ok: true }, { 'Set-Cookie': COOKIE + '=' + token + '; Path=/; HttpOnly; SameSite=Strict' });
+    }
+    if (!url.pathname.startsWith('/api/')) return send(response, 404, { error: 'NOT_FOUND' });
+    const user = identify(request);
+    if (!user) return send(response, 401, { error: 'AUTHENTICATION_REQUIRED' });
+    if (method === 'GET' && url.pathname === '/api/me') return send(response, 200, { email: user.email, role: user.role });
+    if (method === 'GET' && url.pathname === '/api/requests') {
+      return send(response, 200, [...records.values()].filter(row => user.role === 'Reviewer' || row.ownerEmail === user.email).map(copy));
+    }
+    if (method === 'POST' && url.pathname === '/api/requests') {
+      if (user.role !== 'Editor') return send(response, 403, { error: 'ROLE_REFUSED' });
+      const body = await jsonBody(request);
+      if (Object.keys(body).sort().join(',') !== 'marker,quantity,unitPriceCents' || typeof body.marker !== 'string' ||
+          !/^[a-z0-9-]{1,90}$/.test(body.marker) || !Number.isSafeInteger(body.quantity) || body.quantity < 1 || body.quantity > 100 ||
+          !Number.isSafeInteger(body.unitPriceCents) || body.unitPriceCents < 1 || body.unitPriceCents > 1_000_000) {
+        return send(response, 400, { error: 'REQUEST_INVALID' });
+      }
+      const row = { id: randomUUID(), marker: body.marker, ownerEmail: user.email, quantity: body.quantity,
+        unitPriceCents: body.unitPriceCents, totalCents: body.quantity * body.unitPriceCents - (defect ? 1 : 0),
+        status: 'draft', approverEmail: null, version: 1 };
+      records.set(row.id, row); return send(response, 201, copy(row));
+    }
+    const match = /^\/api\/requests\/([a-f0-9-]{36})(\/approve)?$/.exec(url.pathname);
+    if (!match) return send(response, 404, { error: 'NOT_FOUND' });
+    const row = records.get(match[1]);
+    if (!row || (user.role === 'Editor' && row.ownerEmail !== user.email)) return send(response, 404, { error: 'NOT_FOUND' });
+    if (method === 'GET' && !match[2]) return send(response, 200, copy(row));
+    if (method === 'DELETE' && !match[2]) {
+      if (user.role !== 'Editor' || row.ownerEmail !== user.email) return send(response, 403, { error: 'ROLE_REFUSED' });
+      records.delete(row.id); response.writeHead(204, { 'Cache-Control': 'no-store' }); response.end(); return;
+    }
+    if (method === 'POST' && match[2]) {
+      if (user.role !== 'Reviewer') return send(response, 403, { error: 'ROLE_REFUSED' });
+      if (row.status !== 'draft') return send(response, 409, { error: 'ALREADY_APPROVED' });
+      row.status = 'approved'; row.approverEmail = user.email; row.version += 1;
+      return send(response, 200, copy(row));
+    }
+    return send(response, 405, { error: 'METHOD_REFUSED' });
+  }
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  origin = 'http://127.0.0.1:' + server.address().port;
+  return Object.freeze({
+    origin,
+    setDefect(value) { if (typeof value !== 'boolean' || closed) throw new Error('DEMO_CONTROLLER_INVALID'); defect = value; },
+    records() { return [...records.values()].map(copy); },
+    issuedSessionTokens() { return [...issued]; },
+    async close() {
+      if (closed) return; closed = true;
+      await new Promise((resolve, reject) => { server.close(error => error ? reject(new Error('DEMO_CLOSE_FAILED')) : resolve()); server.closeAllConnections(); });
+      sessions.clear(); issued.clear(); records.clear();
+    },
+  });
+}

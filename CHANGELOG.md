@@ -6,6 +6,19 @@ what to do about it in [docs/upgrading.md](docs/upgrading.md).
 
 ## Unreleased
 
+### Added
+
+- A public, disposable request approval example with app-owned Playwright tests for
+  exact saved totals, editor/reviewer authorization, duplicate approval, anonymous
+  denial and verified cleanup. Its unchanged suite detects an injected one-cent defect.
+- An installed-package verification gate in the launch consumer proof. Candidate
+  tarballs must exercise init, draft refusal, positive/fault/corrected runs and HTML
+  reports through the real CLI, browser and native scratch credential store.
+- Fixed failure diagnostics and suggested next steps for verification reports,
+  preserving the omission of raw error messages, browser output and app values.
+- A prioritized development roadmap and native Android/iOS testing proposal. Native
+  mobile execution is planned and is not a capability of the published beta.2 runner.
+
 ### Documentation
 
 - Make the published 0.7.0-beta.2 npm package the continuous project-local onboarding
@@ -15,8 +28,9 @@ what to do about it in [docs/upgrading.md](docs/upgrading.md).
 - State authentication and platform prerequisites, generated Playwright configuration,
   and the beta runner’s fixed timeout, worker and retry limits.
 
-These are current-documentation corrections for the existing beta.2 release. Published
-npm bytes, immutable release assets and runtime behavior are unchanged.
+The onboarding and compatibility corrections describe the existing beta.2 release.
+The new runtime and example work above is unreleased; published npm bytes and immutable
+release assets are unchanged.
 
 ## [0.7.0-beta.2] - 2026-10-19
 

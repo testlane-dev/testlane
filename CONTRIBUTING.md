@@ -44,6 +44,11 @@ add `--with-deps`), and likewise for `examples/workflows/feature-acceptance`.
 | Script | What it does |
 | --- | --- |
 | `npm run test:playwright` | packs the package and checks the copied Playwright fixture in a consumer project; first install `examples/playwright` dependencies and Chromium |
+| `npm run test:agent-verification` | checks plan/reporter contracts and browser-backed verification regressions; first install `examples/playwright` dependencies and Chromium so the consumer cases run |
+| `npm run test:verification-demo` | checks the disposable approval app, native-store policy and demo preparation contracts |
+| `npm run demo:verification` | runs the new public approval demonstration from source; see its [setup and cleanup instructions](examples/verification-demo/README.md) |
+| `npm run proof:verification-demo` | runs installed candidate init/draft refusal and the same five cases through positive/fault/corrected phases, on Windows DPAPI or isolated Linux Secret Service |
+| `npm run proof:launch-consumer` | includes that verification gate along with diagnostics, MCP file delivery and both workflow commands; release CI supplies the exact candidate tarball |
 | `npm run proof:playwright-real-broker` | the packed fixture against the real CLI/native scratch store on Windows or isolated Linux; never macOS |
 | `npm run test:workflow` | authenticated-smoke template's own tests (`node --test`) |
 | `npm run test:workflow-support` | shared `test-support` fixture tests (dependency-free, no browser) |

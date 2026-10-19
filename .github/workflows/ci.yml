@@ -169,6 +169,9 @@ jobs:
       - name: Verify agent-authored case and evidence contracts
         run: npm run test:agent-verification
 
+      - name: Verify the public approval demo contracts
+        run: npm run test:verification-demo
+
       - name: Verify the packed Playwright fixture in a consumer app
         run: npm run test:playwright
 

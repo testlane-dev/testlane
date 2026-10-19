@@ -16,7 +16,7 @@ const TARBALL_PREFIX = 'testlane-cli-';
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
 const COMMIT = /^[a-f0-9]{40}$/;
-const REQUIRED = ['package.json', 'README.md', 'LICENSE', 'SECURITY.md', 'dist/cli.js', 'dist/index.js', 'dist/verification.js', 'docs/doctor.md', 'docs/project-install.md', 'docs/quickstart.md', 'examples/playwright/fixtures.mjs', 'docs/agent-verification.md', 'skills/testlane-verify/SKILL.md', 'skills/testlane-verify/references/harness.md', 'skills/testlane-verify/references/case-design.md', ...['run', 'authoring', 'init', 'bootstrap', 'contracts', 'reporter', 'runtime', 'render'].map(name => `examples/agent-verification/${name}.mjs`)];
+const REQUIRED = ['package.json', 'README.md', 'LICENSE', 'SECURITY.md', 'dist/cli.js', 'dist/index.js', 'dist/verification.js', 'docs/doctor.md', 'docs/project-install.md', 'docs/quickstart.md', 'examples/playwright/fixtures.mjs', 'docs/agent-verification.md', 'skills/testlane-verify/SKILL.md', 'skills/testlane-verify/references/harness.md', 'skills/testlane-verify/references/case-design.md', ...['run', 'authoring', 'init', 'bootstrap', 'contracts', 'reporter', 'runtime', 'render'].map(name => `examples/agent-verification/${name}.mjs`), ...['app.mjs', 'suite.mjs', 'native.mjs', 'run.mjs', 'feature.spec.mjs', 'brief.md', 'README.md'].map(name => `examples/verification-demo/${name}`)];
 
 export function integrity(bytes) {
   return 'sha512-' + createHash('sha512').update(bytes).digest('base64');

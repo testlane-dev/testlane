@@ -294,3 +294,83 @@ integration('cancellation is bounded and cannot claim a pass', async t => {
       forced: result.report.execution.forced, status: result.report.cases[0].status, cleanup: result.report.cases[0].cleanup.status }));
   } finally { await app.close(); }
 });
+
+integration('real Playwright failures produce safe lifecycle diagnostics without raw or encoded app values', async t => {
+  const secret = randomBytes(24).toString('base64url') + '+ /?' + String.fromCharCode(34, 92);
+  const variants = [secret, JSON.stringify(secret).slice(1, -1), encodeURIComponent(secret),
+    new URLSearchParams({ v: secret }).toString().slice(2), Buffer.from(secret).toString('base64'), Buffer.from(secret).toString('base64url')];
+  const payload = JSON.stringify(variants.join('\n'));
+  const setup = [
+    "import { test as base, expect } from '@playwright/test';",
+    "import { runCase } from './testlane-authoring.mjs';",
+    'const test = base.extend({ setup: [async ({}, use) => { throw new Error(' + payload + '); }, { auto: true }] });',
+    "test('private setup title', { annotation: { type: 'testlane-case', description: 'create-note' } }, async ({}, info) => {",
+    "await runCase(info, 'create-note', { run: async () => expect(1).toBe(1), cleanup: async () => {} }); });",
+  ].join('\n');
+  for (const [name, source, code] of [
+    ['body-throw', spec('console.log(' + payload + '); throw new Error(' + payload + ');'), 'CASE_BODY_FAILED'],
+    ['setup', setup, 'CASE_SETUP_OR_CONTRACT_FAILED'],
+    ['assertion', spec('expect(0, ' + payload + ').toBe(1);'), 'ASSERTION_FAILED'],
+    ['caught-assertion', spec('try { expect(0, ' + payload + ').toBe(1); } catch {}'), 'ASSERTION_FAILED'],
+    ['cleanup', spec('expect(1).toBe(1);', { cleanup: 'async () => { throw new Error(' + payload + '); }' }), 'CLEANUP_FAILED'],
+    ['timeout', spec('test.setTimeout(500); await new Promise(resolve => setTimeout(resolve, 1500));'), 'CASE_TIMED_OUT'],
+  ]) await t.test(name, async () => {
+    const app = await project(source);
+    try {
+      const result = await app.run();
+      assert.notEqual(result.report.verdict, 'passed');
+      assert.equal(result.report.cases[0].diagnostic.code, code);
+      assert.equal(typeof result.report.cases[0].diagnostic.remedy, 'string');
+      if (code === 'ASSERTION_FAILED') assert.ok(result.report.cases[0].failureLocation?.line > 0);
+      else assert.equal(result.report.cases[0].failureLocation, null);
+      const retained = await readFile(result.reportPath, 'utf8');
+      for (const value of variants) assert.equal(retained.includes(value), false);
+      assert.equal(retained.includes('private setup title'), false);
+      assert.equal(retained.includes(app.root), false);
+    } finally { await app.close(); }
+  });
+});
+
+integration('a real spec-load error produces only fixed run-level recovery guidance', async () => {
+  const secret = randomBytes(32).toString('hex');
+  const app = await project('throw new Error(' + JSON.stringify(secret) + ');');
+  try {
+    const { report } = await app.run();
+    assert.equal(report.verdict, 'blocked');
+    assert.ok(report.diagnostics.some(value => value.code === 'GLOBAL_TEST_ERROR'));
+    assert.equal(report.cases[0].diagnostic.code, 'CASE_NOT_RUN');
+    assert.equal(JSON.stringify(report).includes(secret), false);
+    assert.equal(JSON.stringify(report).includes(app.root), false);
+  } finally { await app.close(); }
+});
+
+integration('a real spawn refusal produces a fixed startup diagnostic without an OS error or path', async () => {
+  const app = await project(spec('expect(1).toBe(1);'));
+  const originalSpawn = childProcess.spawn;
+  const projectDirectory = await realpath(app.root);
+  const bootstrap = path.resolve(here, '../bootstrap.mjs');
+  let refused = 0;
+  try {
+    // Refuse only this generated app's real bootstrap by giving it an owned,
+    // nonexistent working directory; no process or browser is substituted.
+    childProcess.spawn = function (executable, args, options) {
+      if (executable === process.execPath && args?.[0] === bootstrap && options?.cwd === projectDirectory) {
+        refused++;
+        return originalSpawn.call(this, executable, args, { ...options, cwd: path.join(projectDirectory, 'owned-missing-launch-directory') });
+      }
+      return originalSpawn.call(this, executable, args, options);
+    };
+    syncBuiltinESMExports();
+    const { report } = await app.run();
+    assert.equal(refused, 1);
+    assert.equal(report.verdict, 'blocked');
+    assert.ok(report.diagnostics.some(value => value.code === 'RUNNER_START_FAILED'));
+    assert.equal(report.cases[0].attempts, 0);
+    assert.equal(JSON.stringify(report).includes(projectDirectory), false);
+    assert.equal(JSON.stringify(report).includes('ENOENT'), false);
+  } finally {
+    childProcess.spawn = originalSpawn;
+    syncBuiltinESMExports();
+    await app.close();
+  }
+});
