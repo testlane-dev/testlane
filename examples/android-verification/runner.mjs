@@ -1,6 +1,6 @@
 /** Bounded cooperative native cases. An external owner must bound the worker process. */
 import { isDeepStrictEqual } from 'node:util';
-import { NATIVE_RUNNER, NATIVE_LIMITS, NativeVerificationError, validateNativePlan, nativeDiagnostic } from './contracts.mjs';
+import { NATIVE_RUNNER, nativeLimits, NativeVerificationError, validateNativePlan, nativeDiagnostic } from './contracts.mjs';
 
 function wait(promise, milliseconds, signal) {
   return new Promise(resolve => {
@@ -40,43 +40,43 @@ async function phase(callback, context, state, timeoutMs, settleTimeoutMs, signa
   return { ...outcome, unsettled: settled.kind !== 'settled' };
 }
 const bounded = (value, max) => Number.isSafeInteger(value) && value >= 1 && value <= max;
-function rowFor(item) {
+function rowFor(item, runner) {
   return { id: item.id, status: 'blocked', reason: 'NATIVE_CASE_NOT_RUN', attempts: 0,
     assertionsObserved: 0, bodyAssertionsObserved: 0, cleanupAssertionsObserved: 0,
-    cleanup: { required: item.cleanup.required, status: 'unknown' }, diagnostics: [nativeDiagnostic('NATIVE_CASE_NOT_RUN')] };
+    cleanup: { required: item.cleanup.required, status: 'unknown' }, diagnostics: [nativeDiagnostic('NATIVE_CASE_NOT_RUN', runner)] };
 }
-function failedReport(code, rows = []) {
-  return { schemaVersion: 1, runner: NATIVE_RUNNER, verdict: 'blocked', reasonCodes: [code],
-    diagnostics: [nativeDiagnostic(code)], cases: rows, limits: [...NATIVE_LIMITS] };
+function failedReport(code, rows = [], plan) {
+  return { schemaVersion: 1, runner: plan?.runner ?? NATIVE_RUNNER, verdict: 'blocked', reasonCodes: [code],
+    diagnostics: [nativeDiagnostic(code, plan?.runner)], cases: rows, limits: [...nativeLimits(plan)] };
 }
 export async function runNativeCases({ plan: input, cases, context = {}, signal, timeoutMs = 30_000,
   cleanupTimeoutMs = 5000, settleTimeoutMs = 5000 } = {}) {
   let plan;
   try { plan = validateNativePlan(input); } catch { return failedReport('NATIVE_PLAN_INVALID'); }
-  const rows = plan.cases.map(rowFor);
-  if (!bounded(timeoutMs, 180_000) || !bounded(cleanupTimeoutMs, 30_000) || !bounded(settleTimeoutMs, 10_000)) return failedReport('NATIVE_CONFIGURATION_INVALID', rows);
-  if (plan.status !== 'reviewed') return failedReport('NATIVE_PLAN_NOT_REVIEWED', rows);
+  const rows = plan.cases.map(item => rowFor(item, plan.runner)), diagnosis = code => nativeDiagnostic(code, plan.runner);
+  if (!bounded(timeoutMs, 180_000) || !bounded(cleanupTimeoutMs, 30_000) || !bounded(settleTimeoutMs, 10_000)) return failedReport('NATIVE_CONFIGURATION_INVALID', rows, plan);
+  if (plan.status !== 'reviewed') return failedReport('NATIVE_PLAN_NOT_REVIEWED', rows, plan);
   const ids = new Set(plan.cases.map(item => item.id));
   if (!Array.isArray(cases) || cases.length !== ids.size || new Set(cases.map(item => item?.id)).size !== ids.size ||
     cases.some(item => !item || typeof item !== 'object' || Object.keys(item).some(key => !['id', 'run', 'cleanup'].includes(key)) ||
       !ids.has(item.id) || typeof item.run !== 'function' || (item.cleanup !== undefined && typeof item.cleanup !== 'function'))) {
-    return failedReport('NATIVE_CASE_MAPPING_INVALID', rows);
+    return failedReport('NATIVE_CASE_MAPPING_INVALID', rows, plan);
   }
   const authoredById = new Map(cases.map(item => [item.id, { run: item.run, cleanup: item.cleanup }]));
   const missingCleanup = plan.cases.findIndex(item => item.cleanup.required && !authoredById.get(item.id).cleanup);
   if (missingCleanup !== -1) {
     rows[missingCleanup].reason = 'NATIVE_CLEANUP_REQUIRED';
-    rows[missingCleanup].diagnostics = [nativeDiagnostic('NATIVE_CLEANUP_REQUIRED')];
-    return failedReport('NATIVE_CLEANUP_REQUIRED', rows);
+    rows[missingCleanup].diagnostics = [diagnosis('NATIVE_CLEANUP_REQUIRED')];
+    return failedReport('NATIVE_CLEANUP_REQUIRED', rows, plan);
   }
-  const report = { schemaVersion: 1, runner: NATIVE_RUNNER, verdict: 'passed', reasonCodes: [], diagnostics: [], cases: rows, limits: [...NATIVE_LIMITS] };
+  const report = { schemaVersion: 1, runner: plan.runner, verdict: 'passed', reasonCodes: [], diagnostics: [], cases: rows, limits: [...nativeLimits(plan)] };
   let stop = false;
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index], item = plan.cases[index], authored = authoredById.get(item.id);
     if (stop) continue;
     if (signal?.aborted) {
       stop = true; report.reasonCodes.push('NATIVE_RUN_CANCELLED');
-      row.status = 'cancelled'; row.reason = 'NATIVE_RUN_CANCELLED'; row.diagnostics = [nativeDiagnostic(row.reason)];
+      row.status = 'cancelled'; row.reason = 'NATIVE_RUN_CANCELLED'; row.diagnostics = [diagnosis(row.reason)];
       continue;
     }
     row.attempts = 1;
@@ -108,13 +108,13 @@ export async function runNativeCases({ plan: input, cases, context = {}, signal,
     row.bodyAssertionsObserved = body.observed; row.cleanupAssertionsObserved = cleanup.observed;
     row.assertionsObserved = body.observed + cleanup.observed;
     row.reason = failures[0] ?? 'NATIVE_CASE_PASSED';
-    row.diagnostics = failures.map(nativeDiagnostic);
+    row.diagnostics = failures.map(diagnosis);
     if (failures.includes('NATIVE_RUN_CANCELLED')) report.reasonCodes.push('NATIVE_RUN_CANCELLED');
     if (bodyResult.unsettled || failures.includes('NATIVE_CLEANUP_UNSETTLED')) report.reasonCodes.push('NATIVE_BODY_UNSETTLED' === row.reason ? row.reason : 'NATIVE_CLEANUP_UNSETTLED');
   }
   if (signal?.aborted) report.reasonCodes.push('NATIVE_RUN_CANCELLED');
   report.reasonCodes = [...new Set(report.reasonCodes)];
-  report.diagnostics = report.reasonCodes.map(nativeDiagnostic);
+  report.diagnostics = report.reasonCodes.map(diagnosis);
   if (rows.some(row => row.status === 'cancelled') || report.reasonCodes.includes('NATIVE_RUN_CANCELLED')) report.verdict = 'cancelled';
   else if (rows.some(row => row.status === 'failed')) report.verdict = 'failed';
   else if (rows.some(row => row.status !== 'passed')) report.verdict = 'blocked';

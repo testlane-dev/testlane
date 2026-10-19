@@ -1,5 +1,6 @@
-/** Experimental native Android contracts. Independent of Playwright reports. */
+/** Experimental native contracts. Independent of Playwright reports. */
 export const NATIVE_RUNNER = 'android-uiautomator2';
+export const IOS_NATIVE_RUNNER = 'ios-xcuitest';
 export const NATIVE_CASE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const NATIVE_DRIVER_FAILURE_CODES = Object.freeze([
   'NATIVE_DRIVER_CONFIGURATION_INVALID', 'NATIVE_DRIVER_OWNERSHIP_REFUSED', 'NATIVE_DRIVER_CONTEXT_REFUSED',
@@ -15,6 +16,11 @@ export const NATIVE_LIMITS = Object.freeze([
   'Unsettled callbacks stop later cases and leave cleanup unknown. The process owner must enforce an outer worker budget, including code that blocks the event loop.',
   'Reports omit callback returns, expected/actual values, descriptions, exception messages, stacks, native view contents and driver payloads.',
 ]);
+const IOS_LIMITS = Object.freeze([
+  'Experimental local iOS Simulator execution; no general Expo, real-device or coding-agent certification is claimed.',
+  ...NATIVE_LIMITS.slice(1),
+]);
+export const nativeLimits = plan => plan?.runner === IOS_NATIVE_RUNNER ? IOS_LIMITS : NATIVE_LIMITS;
 export class NativeVerificationError extends Error {
   constructor(code) { super(code); this.name = 'NativeVerificationError'; this.code = code; }
 }
@@ -32,12 +38,13 @@ export function loopbackOrigin(value) {
 }
 export function validateNativePlan(value) {
   if (!keys(value, ['schemaVersion', 'runner', 'status', 'title', 'target', 'app', 'cases']) ||
-    value.schemaVersion !== 1 || value.runner !== NATIVE_RUNNER || !['draft', 'reviewed'].includes(value.status) || !text(value.title, 160) ||
+    value.schemaVersion !== 1 || ![NATIVE_RUNNER, IOS_NATIVE_RUNNER].includes(value.runner) || !['draft', 'reviewed'].includes(value.status) || !text(value.title, 160) ||
     !keys(value.target, ['baseUrl', 'environment']) || !['local', 'sandbox', 'testing', 'preview'].includes(value.target.environment) ||
-    !keys(value.app, ['package', 'apkSha256']) || typeof value.app.package !== 'string' || value.app.package.length > 160 ||
-    !/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/.test(value.app.package) ||
-    typeof value.app.apkSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.app.apkSha256) ||
     !Array.isArray(value.cases) || value.cases.length === 0 || value.cases.length > 50) throw new NativeVerificationError('NATIVE_PLAN_INVALID');
+  const ios = value.runner === IOS_NATIVE_RUNNER, appId = ios ? 'bundleId' : 'package', appHash = ios ? 'buildSha256' : 'apkSha256';
+  if (!keys(value.app, [appId, appHash]) || typeof value.app[appId] !== 'string' || value.app[appId].length > 160 ||
+    !(ios ? /^[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z][A-Za-z0-9-]*)+$/ : /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/).test(value.app[appId]) ||
+    typeof value.app[appHash] !== 'string' || !/^[a-f0-9]{64}$/.test(value.app[appHash])) throw new NativeVerificationError('NATIVE_PLAN_INVALID');
   const baseUrl = loopbackOrigin(value.target.baseUrl);
   const ids = new Set();
   for (const item of value.cases) {
@@ -91,22 +98,30 @@ const diagnoses = {
   NATIVE_WORKER_TERMINATION_UNCONFIRMED: ['execution', 'Owned native worker termination could not be confirmed.', 'Stop the owned process tree and device processes manually before recovery or another run.'],
   NATIVE_WORKER_RPC_UNSETTLED: ['cleanup', 'A parent-owned native operation did not settle.', 'Do not start another run. Stop the owned device processes and inspect retained recovery state before continuing.'],
 };
-export function nativeDiagnostic(code) {
+const iosDiagnoses = {
+  NATIVE_PLAN_INVALID: ['setup', 'The native plan is invalid.', 'Review the iOS runner, exact bundle ID/build hash, loopback target and case contract.'],
+  NATIVE_DRIVER_FAILED: ['setup', 'The owned native driver could not complete setup or execution.', 'Inspect the owned Simulator and Appium lifecycle privately; no driver payload is retained.'],
+  NATIVE_DRIVER_CONFIGURATION_INVALID: ['setup', 'The native driver configuration was refused.', 'Review the loopback Appium origin, exact Simulator UDID/bundle, owned device-set/build paths and required privacy capabilities.'],
+  NATIVE_DRIVER_CONTEXT_REFUSED: ['setup', 'The driver did not observe the required NATIVE_APP context.', 'Use XCUITest for the owned Simulator app; WebViews and browser contexts are not accepted by this proof.'],
+  NATIVE_DRIVER_SESSION_TIMEOUT: ['setup', 'Native session creation exceeded its 240-second setup budget.', 'Inspect the owned cold WebDriverAgent build and Simulator startup privately before retrying. Business-case budgets remain separate.'],
+  NATIVE_DRIVER_CLEANUP_FAILED: ['cleanup', 'The owned native driver session did not close successfully.', 'Stop the owned Appium/Simulator processes and inspect cleanup before accepting the run.'],
+};
+export function nativeDiagnostic(code, runner = NATIVE_RUNNER) {
   if (!Object.hasOwn(diagnoses, code)) throw new NativeVerificationError('NATIVE_CONFIGURATION_INVALID');
-  const [phase, summary, remedy] = diagnoses[code];
+  const [phase, summary, remedy] = runner === IOS_NATIVE_RUNNER && Object.hasOwn(iosDiagnoses, code) ? iosDiagnoses[code] : diagnoses[code];
   return { code, phase, summary, remedy };
 }
 export function nativeFailureReport(inputPlan, code) {
   const plan = validateNativePlan(inputPlan);
-  return { schemaVersion: 1, runner: NATIVE_RUNNER, verdict: code === 'NATIVE_RUN_CANCELLED' ? 'cancelled' : 'blocked',
-    reasonCodes: [code], diagnostics: [nativeDiagnostic(code)], limits: [...NATIVE_LIMITS],
+  return { schemaVersion: 1, runner: plan.runner, verdict: code === 'NATIVE_RUN_CANCELLED' ? 'cancelled' : 'blocked',
+    reasonCodes: [code], diagnostics: [nativeDiagnostic(code, plan.runner)], limits: [...nativeLimits(plan)],
     cases: plan.cases.map(item => ({ id: item.id, status: 'blocked', reason: 'NATIVE_CASE_NOT_RUN', attempts: 0,
       assertionsObserved: 0, bodyAssertionsObserved: 0, cleanupAssertionsObserved: 0,
-      cleanup: { required: item.cleanup.required, status: 'unknown' }, diagnostics: [nativeDiagnostic('NATIVE_CASE_NOT_RUN')] })) };
+      cleanup: { required: item.cleanup.required, status: 'unknown' }, diagnostics: [nativeDiagnostic('NATIVE_CASE_NOT_RUN', plan.runner)] })) };
 }
 export function appendNativeRunFailure(input, code) {
   const report = structuredClone(input);
-  report.reasonCodes = [...new Set([...report.reasonCodes, code])]; report.diagnostics = report.reasonCodes.map(nativeDiagnostic);
+  report.reasonCodes = [...new Set([...report.reasonCodes, code])]; report.diagnostics = report.reasonCodes.map(value => nativeDiagnostic(value, report.runner));
   report.verdict = report.cases.some(row => row.status === 'cancelled') || report.reasonCodes.includes('NATIVE_RUN_CANCELLED') ? 'cancelled' :
     report.cases.some(row => row.status === 'failed') ? 'failed' : 'blocked';
   return report;
@@ -120,18 +135,18 @@ export function sanitizeNativeReport(value, inputPlan) {
   const validDiagnostic = item => {
     if (!keys(item, ['code', 'phase', 'summary', 'remedy']) || Object.keys(item).length !== 4 ||
       typeof item.code !== 'string' || !Object.hasOwn(diagnoses, item.code)) return false;
-    const expected = nativeDiagnostic(item.code);
+    const expected = nativeDiagnostic(item.code, plan.runner);
     return ['phase', 'summary', 'remedy'].every(key => item[key] === expected[key]);
   };
   const count = (number, max = 1_000_000) => Number.isSafeInteger(number) && number >= 0 && number <= max;
   const statuses = ['passed', 'failed', 'blocked', 'cancelled'];
   if (!keys(value, ['schemaVersion', 'runner', 'verdict', 'reasonCodes', 'diagnostics', 'cases', 'limits']) ||
-    value.schemaVersion !== 1 || value.runner !== NATIVE_RUNNER || !statuses.includes(value.verdict) ||
+    value.schemaVersion !== 1 || value.runner !== plan.runner || !statuses.includes(value.verdict) ||
     !Array.isArray(value.reasonCodes) || value.reasonCodes.some(code => typeof code !== 'string' || !Object.hasOwn(diagnoses, code)) ||
     new Set(value.reasonCodes).size !== value.reasonCodes.length || !Array.isArray(value.diagnostics) ||
     value.diagnostics.length !== value.reasonCodes.length || value.diagnostics.some((item, index) => !validDiagnostic(item) || item.code !== value.reasonCodes[index]) ||
     !Array.isArray(value.cases) || value.cases.length !== plan.cases.length ||
-    JSON.stringify(value.limits) !== JSON.stringify(NATIVE_LIMITS)) return refuse();
+    JSON.stringify(value.limits) !== JSON.stringify(nativeLimits(plan))) return refuse();
   const rows = [];
   for (let index = 0; index < plan.cases.length; index++) {
     const row = value.cases[index], planned = plan.cases[index];
@@ -155,13 +170,13 @@ export function sanitizeNativeReport(value, inputPlan) {
     rows.push({ id: planned.id, status: row.status, reason: row.reason, attempts: row.attempts,
       assertionsObserved: row.assertionsObserved, bodyAssertionsObserved: row.bodyAssertionsObserved,
       cleanupAssertionsObserved: row.cleanupAssertionsObserved,
-      cleanup: { required: planned.cleanup.required, status: row.cleanup.status }, diagnostics: row.diagnostics.map(item => nativeDiagnostic(item.code)) });
+      cleanup: { required: planned.cleanup.required, status: row.cleanup.status }, diagnostics: row.diagnostics.map(item => nativeDiagnostic(item.code, plan.runner)) });
   }
   const expectedVerdict = rows.some(row => row.status === 'cancelled') || value.reasonCodes.includes('NATIVE_RUN_CANCELLED') ? 'cancelled' :
     rows.some(row => row.status === 'failed') ? 'failed' : rows.some(row => row.status !== 'passed') || value.reasonCodes.length ? 'blocked' : 'passed';
   if (value.verdict !== expectedVerdict || (value.verdict === 'passed' && plan.status !== 'reviewed')) return refuse();
-  return { schemaVersion: 1, runner: NATIVE_RUNNER, verdict: value.verdict, reasonCodes: [...value.reasonCodes],
-    diagnostics: value.reasonCodes.map(nativeDiagnostic), cases: rows, limits: [...NATIVE_LIMITS] };
+  return { schemaVersion: 1, runner: plan.runner, verdict: value.verdict, reasonCodes: [...value.reasonCodes],
+    diagnostics: value.reasonCodes.map(code => nativeDiagnostic(code, plan.runner)), cases: rows, limits: [...nativeLimits(plan)] };
 }
 
 const string = { type: 'string', minLength: 1 };
@@ -169,13 +184,11 @@ export const NATIVE_PLAN_SCHEMA = Object.freeze({
   $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', additionalProperties: false,
   required: ['schemaVersion', 'runner', 'status', 'title', 'target', 'app', 'cases'],
   properties: {
-    schemaVersion: { const: 1 }, runner: { const: NATIVE_RUNNER }, status: { enum: ['draft', 'reviewed'] }, title: { ...string, maxLength: 160 },
+    schemaVersion: { const: 1 }, runner: { enum: [NATIVE_RUNNER, IOS_NATIVE_RUNNER] }, status: { enum: ['draft', 'reviewed'] }, title: { ...string, maxLength: 160 },
     target: { type: 'object', additionalProperties: false, required: ['baseUrl', 'environment'], properties: {
       baseUrl: { ...string, format: 'uri' }, environment: { enum: ['local', 'sandbox', 'testing', 'preview'] },
     } },
-    app: { type: 'object', additionalProperties: false, required: ['package', 'apkSha256'], properties: {
-      package: { ...string, maxLength: 160, pattern: '^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$' }, apkSha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
-    } },
+    app: { type: 'object' },
     cases: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'object', additionalProperties: false,
       required: ['id', 'title', 'expected', 'cleanup'], properties: {
         id: { ...string, pattern: '^[a-z0-9][a-z0-9-]{0,63}$' }, title: { ...string, maxLength: 160 },
@@ -186,4 +199,12 @@ export const NATIVE_PLAN_SCHEMA = Object.freeze({
       },
     } },
   },
+  oneOf: [
+    { properties: { runner: { const: NATIVE_RUNNER }, app: { type: 'object', additionalProperties: false, required: ['package', 'apkSha256'], properties: {
+      package: { ...string, maxLength: 160, pattern: '^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$' }, apkSha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+    } } } },
+    { properties: { runner: { const: IOS_NATIVE_RUNNER }, app: { type: 'object', additionalProperties: false, required: ['bundleId', 'buildSha256'], properties: {
+      bundleId: { ...string, maxLength: 160, pattern: '^[A-Za-z][A-Za-z0-9-]*(?:\\.[A-Za-z][A-Za-z0-9-]*)+$' }, buildSha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+    } } } },
+  ],
 });

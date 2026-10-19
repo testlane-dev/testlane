@@ -1,9 +1,9 @@
 import React, { useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import { consumeBootstrap } from './bootstrap.mjs';
 
-function Value({ id, children }) { return <Text accessible testID={id} accessibilityLabel={id} style={styles.value}>{String(children ?? '-')}</Text>; }
+function Value({ id, children }) { return <Text accessible testID={id} accessibilityLabel={id} accessibilityValue={Platform.OS === 'ios' ? { text: String(children ?? '-') } : undefined} style={styles.value}>{String(children ?? '-')}</Text>; }
 function Action({ id, title, onPress, disabled }) { return <Pressable testID={id} accessibilityLabel={id} accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.button, disabled && styles.disabled]}><Text style={styles.buttonText}>{title}</Text></Pressable>; }
 function Input({ id, value, onChangeText, label, numeric }) { return <View style={styles.inputBox}><Text style={styles.label}>{label}</Text><TextInput testID={id} accessibilityLabel={id} value={value} onChangeText={onChangeText} keyboardType={numeric ? 'number-pad' : 'default'} autoCapitalize="none" autoCorrect={false} style={styles.input}/></View>; }
 function Field({ name, value }) { return <View style={styles.field}><Text style={styles.label}>{name}</Text><Value id={'request-' + name}>{value}</Value></View>; }

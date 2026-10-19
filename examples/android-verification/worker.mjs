@@ -1,8 +1,7 @@
 /** Private IPC worker. Credentials and app payloads never cross stdout or report fields. */
 import { runNativeCases } from './runner.mjs';
-import { createNativeDriver, NativeDriverError } from './driver.mjs';
 import { createApprovalCases } from './proof-cases.mjs';
-import { loopbackOrigin, validateNativePlan, nativeFailureReport, appendNativeRunFailure, NATIVE_DRIVER_FAILURE_CODES } from './contracts.mjs';
+import { loopbackOrigin, validateNativePlan, nativeFailureReport, appendNativeRunFailure, NATIVE_DRIVER_FAILURE_CODES, IOS_NATIVE_RUNNER } from './contracts.mjs';
 
 const controller = new AbortController(), pending = new Map();
 let started = false, sequence = 0;
@@ -30,7 +29,7 @@ function delay(milliseconds, signal) {
   });
 }
 async function main(payload) {
-  let driver, report;
+  let driver, report, DriverError;
   const plan = validateNativePlan(payload.plan), origin = loopbackOrigin(payload.origin);
   if (origin !== plan.target.baseUrl || !payload.identities || !payload.cookies) throw fixed();
   for (const role of ['editor', 'reviewer']) {
@@ -39,8 +38,15 @@ async function main(payload) {
       payload.identities[role].role !== (role === 'editor' ? 'Editor' : 'Reviewer')) throw fixed();
   }
   try {
+    // A reviewed enum chooses exactly one local implementation. Caller-supplied
+    // module paths, code, driver names or remote sources are never imported.
+    const implementation = plan.runner === IOS_NATIVE_RUNNER ? await import('../ios-verification/driver.mjs') : await import('./driver.mjs');
+    const createNativeDriver = implementation.createNativeDriver; DriverError = implementation.NativeDriverError;
+    const appCapability = plan.runner === IOS_NATIVE_RUNNER ? 'appium:bundleId' : 'appium:appPackage';
+    const plannedApp = plan.runner === IOS_NATIVE_RUNNER ? plan.app.bundleId : plan.app.package;
+    if (payload.driverOptions?.capabilities?.[appCapability] !== plannedApp) throw new DriverError('NATIVE_DRIVER_CONFIGURATION_INVALID');
     driver = await createNativeDriver({ ...payload.driverOptions, signal: controller.signal,
-      assertOwned: () => rpc({ type: 'assert-owned' }) });
+      assertOwned: async () => { await rpc({ type: 'assert-owned' }); return true; } });
     // Appium session creation precedes React Native's initial view mount. Wait
     // only for this app-owned readiness element; no test action is retried.
     await driver.waitFor('session-status');
@@ -101,7 +107,7 @@ async function main(payload) {
     // Only this local driver's known class and allowlisted code select a static
     // diagnosis. Raw errors, messages, response bodies and RPC payloads never do.
     const code = controller.signal.aborted ? 'NATIVE_RUN_CANCELLED' :
-      error instanceof NativeDriverError && NATIVE_DRIVER_FAILURE_CODES.includes(error.code) ? error.code : 'NATIVE_DRIVER_FAILED';
+      DriverError && error instanceof DriverError && NATIVE_DRIVER_FAILURE_CODES.includes(error.code) ? error.code : 'NATIVE_DRIVER_FAILED';
     report = nativeFailureReport(plan, code);
   } finally {
     const unsettled = report?.cases.some(item => item.diagnostics.some(value => ['NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_UNSETTLED'].includes(value.code)));

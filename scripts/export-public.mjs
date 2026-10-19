@@ -133,6 +133,8 @@ export const URL_ALLOWLIST = [
   "docs.maestro.dev/reference/commands-available/asserttrue.md",
   "docs.expo.dev/develop/development-builds/introduction",
   "docs.expo.dev/versions/v58.0.0/",
+  // Exact Apple ATS reference used by the proof-only iOS build recipe.
+  "developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsexceptiondomains",
   "example.com",
   "example.net",
   "example.org",

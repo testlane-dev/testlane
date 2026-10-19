@@ -82,8 +82,8 @@ jobs:
       - name: Release artifact integrity contracts
         run: node --test scripts/release-artifact.test.mjs
 
-      - name: Native Android contracts, ownership and worker bounds
-        run: npm run test:android
+      - name: Native mobile contracts, ownership and worker bounds
+        run: npm run test:mobile
 
       - run: npx vitest run --reporter=default
         env:
