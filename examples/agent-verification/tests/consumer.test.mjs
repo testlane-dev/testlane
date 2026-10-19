@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import childProcess from 'node:child_process';
 import { mkdtemp, writeFile, readFile, cp, rm, symlink, readdir, realpath, lstat } from 'node:fs/promises';
-import { createRequire } from 'node:module';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
@@ -67,14 +68,31 @@ integration('long report paths launch from the app project and preserve app-rela
   const app = await project(source);
   let outputDir = path.join(app.root, 'owned-output');
   while (outputDir.length < 270) outputDir = path.join(outputDir, 'nested-output');
+  const projectDirectory = await realpath(app.root);
+  const originalSpawn = childProcess.spawn;
+  const bootstrap = path.resolve(here, '../bootstrap.mjs');
+  const capturedBootstrap = { stdout: '', stderr: '', errorCode: null };
   try {
+    // This generated fixture has no authentication or credentials. Observe the real
+    // bootstrap only for its owned project; never stub behavior or retain other children.
+    childProcess.spawn = function (executable, args, options) {
+      const child = originalSpawn.call(this, executable, args, options);
+      if (executable === process.execPath && args?.[0] === bootstrap && options?.cwd === projectDirectory) {
+        for (const stream of ['stdout', 'stderr']) child[stream]?.on('data', data => {
+          capturedBootstrap[stream] += String(data).slice(0, Math.max(0, 8192 - capturedBootstrap[stream].length));
+        });
+        child.once('error', error => { capturedBootstrap.errorCode = error.code ?? null; });
+      }
+      return child;
+    };
+    syncBuiltinESMExports();
     await writeFile(path.join(app.root, 'relative-app-fixture.json'), JSON.stringify({ expected: 'Fixture applied' }));
     const result = await runVerification({ planFile: app.planFile, outputDir });
     assert.ok(path.join(result.directory, '.control').length > 260);
     const launchDiagnostic = JSON.stringify({ platform: process.platform, node: process.version,
       projectPathCharacters: app.root.length, outputPathCharacters: outputDir.length,
       controlPathCharacters: path.join(result.directory, '.control').length,
-      verdict: result.report.verdict, reasonCodes: result.report.reasonCodes, execution: result.report.execution,
+      verdict: result.report.verdict, reasonCodes: result.report.reasonCodes, execution: result.report.execution, capturedBootstrap,
       cases: result.report.cases.map(item => ({ id: item.id, status: item.status, reason: item.reason,
         failureLocation: item.failureLocation, assertionsObserved: item.assertionsObserved, cleanup: item.cleanup })) }, null, 2);
     assert.equal(result.report.execution.exitCode, 0, launchDiagnostic);
@@ -83,7 +101,10 @@ integration('long report paths launch from the app project and preserve app-rela
     assert.ok(result.report.cases[0].assertionsObserved >= 4);
     assert.equal(await readFile(path.join(app.root, 'cleanup-completed'), 'utf8'), '1');
     assert.equal((await readdir(app.root)).includes('owned-app-record.json'), false);
-  } finally { await app.close(); }
+  } finally {
+    childProcess.spawn = originalSpawn; syncBuiltinESMExports();
+    await app.close();
+  }
 });
 integration('real Playwright rejects zero tests, skips, expected failures and missing helper/cleanup', async t => {
   for (const [label, source] of [
