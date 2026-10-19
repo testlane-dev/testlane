@@ -23,20 +23,24 @@ export function parseIosPrerequisites({xcode,sdk,runtimes,deviceTypes,architectu
   return {schemaVersion:1,hostOS:'macOS',architecture,xcodeVersion:match.slice(1,4).filter(Boolean).join('.'),xcodeBuild:match[4],
     simulatorSdkVersion:sdk.trim(),runtimeId:IOS_RUNTIME,deviceTypeId:IOS_DEVICE_TYPE};
 }
-export async function inspectIosPrerequisites({platform=process.platform,architecture=process.arch,run}={}) {
+export async function inspectIosPrerequisites({platform=process.platform,architecture=process.arch,run,onStage=()=>{}}={}) {
   if(platform!=='darwin')throw refused('IOS_MACOS_REQUIRED');
   const env={...process.env,DEBUG:'',NODE_DEBUG:''};delete env.NODE_OPTIONS;
-  const command=run??(async(entry,args)=>(await execute(entry,args,{env,timeout:30000,maxBuffer:256*1024,windowsHide:true})).stdout);
-  let values;
-  try {values=await Promise.all([
-    command('/usr/bin/xcodebuild',['-version']),command('/usr/bin/xcrun',['--sdk','iphonesimulator','--show-sdk-version']),
-    command('/usr/bin/xcrun',['simctl','list','runtimes','--json']),command('/usr/bin/xcrun',['simctl','list','devicetypes','--json']),
-  ]);}catch{throw refused('IOS_TOOLCHAIN_INSPECTION_FAILED');}
+  const command=run??(async(entry,args,timeout)=>(await execute(entry,args,{env,timeout,maxBuffer:1024*1024,windowsHide:true})).stdout);
+  const values=[];
+  for(const [name,entry,args,budget] of [
+    ['XCODE','/usr/bin/xcodebuild',['-version'],60000],['SDK','/usr/bin/xcrun',['--sdk','iphonesimulator','--show-sdk-version'],60000],
+    ['RUNTIMES','/usr/bin/xcrun',['simctl','list','runtimes','--json'],120000],['DEVICE_TYPES','/usr/bin/xcrun',['simctl','list','devicetypes','--json'],60000],
+  ]) {
+    onStage(name);
+    try {values.push(await command(entry,args,budget));}
+    catch(error){throw refused('IOS_PREFLIGHT_'+name+(error?.killed===true?'_TIMEOUT':'_FAILED'));}
+  }
   return parseIosPrerequisites({xcode:values[0],sdk:values[1],runtimes:values[2],deviceTypes:values[3],architecture});
 }
 async function main() {
   if(process.argv.length!==3)throw refused('IOS_PREFLIGHT_ARGUMENTS_INVALID');
-  const result=await inspectIosPrerequisites(),file=path.resolve(process.argv[2]);
+  const result=await inspectIosPrerequisites({onStage:name=>console.log('IOS_PREFLIGHT_STAGE '+name)}),file=path.resolve(process.argv[2]);
   await mkdir(path.dirname(file),{recursive:true});
   await writeFile(file,JSON.stringify({...result,node:process.version},null,2)+'\n',{flag:'wx',mode:0o600});
   console.log(JSON.stringify(result));

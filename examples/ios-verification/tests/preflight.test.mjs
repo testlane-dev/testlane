@@ -12,5 +12,5 @@ test('preflight binds the supported Xcode and exact available simulator metadata
     {architecture:'ia32'},{sdk:'raw-payload'},{runtimes:'invalid'}])assert.throws(()=>parseIosPrerequisites({...values(),...change}),/^Error: IOS_/);
 });
 test('tool failures keep arbitrary stderr out of the fixed preflight error',async()=>{
-  await assert.rejects(inspectIosPrerequisites({platform:'darwin',run:()=>{throw Error('private-tool-payload');}}),error=>error.message==='IOS_TOOLCHAIN_INSPECTION_FAILED');
+  await assert.rejects(inspectIosPrerequisites({platform:'darwin',run:()=>{throw Error('private-tool-payload');}}),error=>error.message==='IOS_PREFLIGHT_XCODE_FAILED');
 });
