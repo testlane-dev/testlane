@@ -5,9 +5,9 @@ description: Design and run app-specific authenticated Playwright checks from a 
 
 # Testlane Verify
 
-Turn the user's feature description into concrete checks against their app. You design and write the tests; Testlane supplies reviewed authentication, and the source verification harness records execution. Do not substitute the shipped smoke cases for the requested feature.
+Turn the user's feature description into concrete checks against their app. You design and write the tests; Testlane supplies reviewed authentication, and the verification harness records execution. Do not substitute the shipped smoke cases for the requested feature.
 
-This skill and harness are a source-only `0.7.0-dev.0` preview, not a published release. They can use the installed `@testlane/cli@0.6.0` broker and its Playwright fixture; installing that published version alone does not install this workflow. Read [the harness contract](references/harness.md) for setup and invocation.
+Use the opt-in `@testlane/cli@0.7.0-beta.1` preview: a reviewed package tarball, or that exact npm version when available. Its intended tag is `next`; stable 0.6.0 lacks `verify` commands. The preview bundles the broker, fixture, helper and skill; no source clone or embedded model is needed. Read [the harness contract](references/harness.md) for installed-package invocation and optional source use.
 
 ## Establish the target and test oracle
 
@@ -19,7 +19,7 @@ Existing task authorization carries forward. Creating a plan is not an automatic
 
 ## Design a reviewable case plan
 
-Initialize a new source scaffold with the confirmed `verify init` contract, or preserve/adapt an existing reviewed suite. Keep the brief local and ignored. Init creates no assertions; replace its intentionally skipped spec with your actual app-specific tests. Persist a concise plan in the app repository before running tests. Give each case a stable ID, concrete expected observations, spec path, required account/role, owned data and cleanup obligations. Tie cases to the brief and record uncovered requirements explicitly. Read [case design](references/case-design.md) when choosing oracles and boundaries.
+Initialize a new scaffold with the installed `verify init` contract, or preserve/adapt an existing reviewed suite. Keep the brief local and ignored. Init creates no assertions; replace its intentionally skipped spec with your actual app-specific tests. Persist a concise plan in the app repository before running tests. Give each case a stable ID, concrete expected observations, spec path, required account/role, owned data and cleanup obligations. Tie cases to the brief and record uncovered requirements explicitly. Read [case design](references/case-design.md) when choosing oracles and boundaries.
 
 Include an assertion about the changed feature beyond login or rendering. Select cases that could catch a plausible broken implementation: live identity; the affected page/action; server/API readback; relevant alternate role or anonymous denial; rejected operations leaving state unchanged; and cleanup. Choose the cases the actual feature needs rather than forcing a fixed count or every category. Declared profile roles, a successful login, a heading or a screenshot alone do not prove application authorization.
 
@@ -37,10 +37,12 @@ Use genuine Playwright `expect` assertions. An otherwise completed case with non
 
 ## Run and report evidence
 
-Use the exact source harness contract. Read `reportPath` relative to the chosen output root; the retained report and manual screenshot inventory differ from Playwright's temporary files. Use `verify report` with the unchanged plan for an optional private HTML summary; it restores app descriptions and is not public-safe by default. Keep trace, video and automatic screenshots off. Screenshots are optional only within the user's existing evidence authorization or explicit opt-in; they can expose app data. Binary artifacts are not redacted or made safe by the report. Keep evidence local and ignored; do not upload, commit or publish it automatically.
+Use the exact installed harness contract. Read `reportPath` relative to the chosen output root; the retained report and manual screenshot inventory differ from Playwright's temporary files. Use `verify report` with the unchanged plan for an optional private HTML summary; it restores app descriptions and is not public-safe by default. Keep trace, video and automatic screenshots off. Screenshots are optional only within the user's existing evidence authorization or explicit opt-in; they can expose app data. Binary artifacts are not redacted or made safe by the report. Keep evidence local and ignored; do not upload, commit or publish it automatically.
 
 Read both process exit status and the final report, including fixture teardown and app cleanup. A partial/blocked/skipped/cancelled run is not feature acceptance. Distinguish a failed assertion from unavailable authentication or a broken test environment. Do not repeatedly replay a possibly mutating case after timeout, expiry, cancellation or interrupted cleanup; inspect the owned data first.
 
 Return the case plan, changed test paths, concrete command, verdict per case, cleanup results, local report/evidence paths, and any untested requirement or blocker. Say what the assertions establish and their limits. A passing suite is evidence for those configured cases, not an independent security audit or a claim of complete agent/client compatibility.
 
-Use source `verify report --report <report.json> --plan <exact-plan.json> --json` to create a readable private `summary.html` beside the report when useful. Preserve the machine report, the unchanged plan and relative artifacts together. Hash checks bind these local inputs; they are not a signed attestation.
+Use `npx --no-install testlane verify report --report <report.json> --plan <exact-plan.json> --json` to create a readable private `summary.html` beside the report when useful. Preserve the machine report, the unchanged plan and relative artifacts together. Hash checks bind these local inputs; they are not a signed attestation.
+
+If a failed case includes `failureLocation`, inspect that line/column only in its hash-matching planned spec. Missing/null locations do not include raw error details. An observed failed Playwright expect cannot be made passing by catching its exception.

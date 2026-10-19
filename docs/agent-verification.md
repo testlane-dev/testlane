@@ -2,25 +2,36 @@
 
 Give your coding agent the feature description and the app repository. The `testlane-verify` skill helps it inspect the app, design concrete acceptance cases, write app-specific Playwright tests and run them with Testlane sessions. The report links each planned case to execution and cleanup evidence.
 
-**This is a source-only `0.7.0-dev.0` preview, not a published release.** The skill, verification harness and source CLI additions are not in the published `@testlane/cli@0.6.0` package. They can use that installed broker and its existing cookie-based Playwright fixture. Use a reviewed source checkout containing this guide; do not expect `npx --no-install testlane verify` to work against the published 0.6.0 binary. No embedded model, API service or new API key is involved: your coding agent does the design and test authoring.
+This guide targets the opt-in **`@testlane/cli@0.7.0-beta.1` verification preview**. Install a reviewed beta tarball below, or the exact npm version when available. Its intended npm dist-tag is `next`; stable `latest` remains `0.6.0`, whose CLI has no `verify` commands. The preview package bundles the broker, skill, fixture and harness; no source clone is needed. No embedded model, API service or new API key is involved: your coding agent does the design and test authoring.
 
 ## Start with the app and existing authentication
 
-The app needs Node 22+, its own installed Playwright Test, a running non-production target, and reviewed, human-seeded Testlane profiles bound to that exact origin. Start with the [existing-app quickstart](quickstart.md) and [project-local installation](project-install.md). Use the project's package manager and lockfile. For a new npm setup:
+The app needs Node 22+, its own installed Playwright Test, a running non-production target, and reviewed, human-seeded Testlane profiles bound to that exact origin. Complete the human account/profile/store setup in the [existing-app quickstart](quickstart.md) first. The [project-local installation guide](project-install.md) explains the broker configuration; its stable package pin does not include verification. Use the project's package manager and lockfile.
+
+Use the versioned artifact and manifest from the [0.7.0-beta.1 preview release](https://github.com/testlane-dev/testlane/releases/tag/v0.7.0-beta.1) when available. From the **app repository**, install the reviewed tarball by its actual absolute path:
 
 ```sh
-npm install --save-dev --save-exact @testlane/cli@0.6.0 @playwright/test@1.64.0
+npm install --save-dev --save-exact /absolute/artifacts/testlane-cli-0.7.0-beta.1.tgz @playwright/test@1.64.0
 npx --no-install playwright install chromium
+npx --no-install testlane --version
 npx --no-install testlane doctor
 ```
 
+When that exact preview version is available on npm, its equivalent package install is:
+
+```sh
+npm install --save-dev --save-exact @testlane/cli@0.7.0-beta.1 @playwright/test@1.64.0
+```
+
+Use the exact version rather than a moving dist-tag. For Windows tarballs use a quoted forward-slash path, such as `'C:/artifacts/testlane-cli-0.7.0-beta.1.tgz'`. If PowerShell blocks `npm.ps1`/`npx.ps1`, use `npm.cmd`/`npx.cmd`; the direct Node commands below need no script-policy change.
+
 Preserve an existing Playwright installation/configuration; inspect version differences rather than silently replacing it. Linux may need reviewed OS dependencies. Store access must be available in the same machine/session. The workflow does not create accounts, provision a test database or seed passwords. Do not send credentials through the feature brief.
 
-The source `verify init` command below copies the fixture/helper into a new app-owned suite. For an existing suite, copy `node_modules/@testlane/cli/examples/playwright/fixtures.mjs` into an app-owned test folder, such as `e2e/testlane/`, or reuse your reviewed copy. It exports `createTestlaneTest` and `expect`. Configure it with the absolute project-local `node_modules/@testlane/cli/dist/cli.js` path, exact origin and distinct profile arrays. The [fixture guide](../examples/playwright/README.md) covers cookie flow support and lifecycle limits. Use its `testlane.open(role)` page/context, not Playwright's unrelated default fixtures.
+The installed `verify init` command below copies its bundled fixture/helper into a new app-owned suite. For an existing suite, copy `node_modules/@testlane/cli/examples/playwright/fixtures.mjs` into an app-owned test folder, such as `e2e/testlane/`, or reuse your reviewed copy. It exports `createTestlaneTest` and `expect`. Configure it with the absolute project-local `node_modules/@testlane/cli/dist/cli.js` path, exact origin and distinct profile arrays. The [fixture guide](../examples/playwright/README.md) covers cookie flow support and lifecycle limits. Use its `testlane.open(role)` page/context, not Playwright's unrelated default fixtures.
 
 ## Install the skill in the app repository
 
-Copy the complete source folder `skills/testlane-verify/`, including `references/`, into one of these project locations. The examples refuse an existing destination; inspect and deliberately merge an existing skill instead of replacing it.
+Copy the complete installed folder `node_modules/@testlane/cli/skills/testlane-verify/`, including `references/`, into one of these project locations. The examples refuse an existing destination; inspect and deliberately merge an existing skill instead of replacing it.
 
 | Agent | Project location | Explicit invocation |
 | --- | --- | --- |
@@ -32,7 +43,7 @@ For example, from the app repository in Bash, choosing Codex:
 ```sh
 (
   set -eu
-  skill_source=/absolute/testlane-source/skills/testlane-verify
+  skill_source=node_modules/@testlane/cli/skills/testlane-verify
   skill_destination=.agents/skills/testlane-verify
   if [ -e "$skill_destination" ] || [ -L "$skill_destination" ]; then
     printf '%s\n' 'Skill destination already exists; inspect it before updating.' >&2
@@ -46,7 +57,7 @@ For example, from the app repository in Bash, choosing Codex:
 Or in PowerShell:
 
 ```powershell
-$skillSource = 'C:/absolute/testlane-source/skills/testlane-verify'
+$skillSource = 'node_modules/@testlane/cli/skills/testlane-verify'
 $skillDestination = '.agents/skills/testlane-verify'
 if (Get-Item -LiteralPath $skillDestination -Force -ErrorAction SilentlyContinue) {
     throw 'Skill destination already exists; inspect it before updating.'
@@ -61,7 +72,7 @@ For Claude Code use `.claude/skills` in place of `.agents/skills`. The skill kee
 
 Describe expected behavior, not an already-selected list of canned checks. Include the target and existing profile mapping if the agent cannot discover them from reviewed project instructions. State what disposable changes are allowed and whether local screenshots are wanted.
 
-> Use `$testlane-verify` for the feature I just changed in this repository. Writers can publish a draft note. Readers can view published notes but cannot edit or publish them. Anonymous users cannot read the notes API. Use our running local app and existing writer/reader profiles. You may create and delete notes owned by this run in the sandbox. Check browser behavior and API state, clean up even on failure, and return the plan and report. Do not retain screenshots. The Testlane source checkout is at `/absolute/testlane-source`.
+> Use `$testlane-verify` for the feature I just changed in this repository. Writers can publish a draft note. Readers can view published notes but cannot edit or publish them. Anonymous users cannot read the notes API. Use our running local app, existing writer/reader profiles and project-local Testlane preview. You may create and delete notes owned by this run in the sandbox. Check browser behavior and API state, clean up even on failure, and return the plan and report. Do not retain screenshots.
 
 Replace the sample behavior with your feature. The agent should inspect the actual app's code, tests and launch guidance to find routes and selectors, then propose case IDs with concrete oracles and cleanup obligations. A natural-language brief does not grant permission to change a production database, create accounts or alter the credential registry.
 
@@ -69,42 +80,52 @@ The agent records a reviewable plan and writes real tests. A plan marked `review
 
 ## Scaffold, design, then run
 
-Build the reviewed Testlane source checkout once, from that checkout:
+From the **app repository**, save the requested feature brief as a nonempty UTF-8 file in an ignored local location. This example assumes `output/` is already ignored; choose a reviewed private location if it is not. Use the installed CLI to initialize a new suite:
 
 ```sh
-npm ci
-npm run build
-```
-
-From the **app repository**, save the requested feature brief as a nonempty UTF-8 file in an ignored local location. This example assumes `output/` is already ignored; choose a reviewed private location if it is not. Use the source-built CLI to initialize a new suite:
-
-```sh
-node /absolute/testlane-source/dist/cli.js verify init --brief output/feature-brief.md --target http://127.0.0.1:3000 --profile notes:testing:writer --environment testing --output-dir e2e/testlane-verification --json
+npx --no-install testlane verify init --brief output/feature-brief.md --target http://127.0.0.1:3000 --profile notes:testing:writer --environment testing --output-dir e2e/testlane-verification --json
 ```
 
 `--brief`, `--target` and `--profile` are required. `--environment` defaults to `testing` and accepts `local`, `testing`, `sandbox` or `preview`. Init's `--output-dir` chooses a **new app-local suite directory**; the default is `e2e/testlane-verification`. It refuses existing directories and does not replace your suite. It performs no network/authentication, account, registry or vault changes.
 
-Init writes `plan.json` with status `draft`, a private ignored `brief.md`, the copied fixture/helper, `test.mjs`, and an **intentionally skipped** `feature.spec.mjs`. It maps the selected existing profile to the initial role alias `qa`. Your agent inspects the app, replaces that scaffold with actual assertions, and adapts role aliases to the existing profiles when the brief needs more than one role. Changing app test configuration does not create or seed those profiles.
+Init writes `plan.json` with status `draft`, a private ignored `brief.md`, the copied fixture/helper, `test.mjs`, and an **intentionally skipped** `feature.spec.mjs`. Its suite-local `.gitattributes` pins `testlane-authoring.mjs text eol=lf`; preserve that rule so Windows Git checkout does not change the bound helper bytes. It maps the selected existing profile to the initial role alias `qa`. Your agent inspects the app, replaces that scaffold with actual assertions, and adapts role aliases to the existing profiles when the brief needs more than one role. Changing app test configuration does not create or seed those profiles.
 
 The skipped scaffold is not a passing example. The harness refuses draft/incomplete coverage; changing only `status` or removing the skip does not design the feature checks. Review case IDs, actual expected behavior and cleanup together, then have the agent mark the plan `reviewed` within the task's existing scope.
 
 Run from the app repository:
 
 ```sh
-node /absolute/testlane-source/dist/cli.js verify run --plan e2e/testlane-verification/plan.json --output-dir output/testlane-verification --json
+npx --no-install testlane verify run --plan e2e/testlane-verification/plan.json --output-dir output/testlane-verification --json
 ```
 
-Run's `--output-dir` chooses a **private report destination**, not a suite location. Keep it ignored. Approved global `--profiles` and `--requester` options go before `verify` when needed. In PowerShell use a forward-slash Windows source path; no npm script-policy change is required for these Node commands.
+Run's `--output-dir` chooses a **private report destination**, not a suite location. Keep it ignored. Approved global `--profiles` and `--requester` options go before `verify` when needed.
 
-`verify run` invokes the same source harness as `node /absolute/testlane-source/examples/agent-verification/run.mjs --plan ... --json`. Neither command contains a model or translates the brief into tests by itself. The coding agent supplies that work through the skill. The published 0.6.0 CLI has neither new `verify` command.
+`verify run` invokes the package's bundled harness. It does not contain a model or translate the brief into tests by itself. The coding agent supplies that work through the skill.
 
 For a readable local result, use the reported `reportPath` under your chosen output directory:
 
 ```sh
-node /absolute/testlane-source/dist/cli.js verify report --report output/testlane-verification/run-<id>/report.json --plan e2e/testlane-verification/plan.json --json
+npx --no-install testlane verify report --report output/testlane-verification/run-<id>/report.json --plan e2e/testlane-verification/plan.json --json
 ```
 
 This creates `summary.html` beside the JSON without replacing an existing file. It checks the exact plan hash and retained screenshot hashes, then shows case expectations, outcomes, cleanup and evidence links. Keep the HTML with its report and artifact directory. The summary restores titles and expected behavior from the exact plan, so it contains private app context even though the machine report omits those freeform values. It does not rerun tests or execute app code. These local files are not signed attestations or automatically publishable evidence.
+
+For a portable direct invocation in Bash or PowerShell, replace `npx --no-install testlane` in any command above with `node ./node_modules/@testlane/cli/dist/cli.js`. For example:
+
+```sh
+node ./node_modules/@testlane/cli/dist/cli.js verify run --plan e2e/testlane-verification/plan.json --output-dir output/testlane-verification --json
+```
+
+## Optional: build from source
+
+For harness development, use a reviewed checkout containing this guide. From that checkout run:
+
+```sh
+npm ci
+npm run build
+```
+
+Then, from the app repository, substitute `node /absolute/testlane-source/dist/cli.js` for `npx --no-install testlane` in the init/run/report commands. Copy the skill from that checkout's `skills/testlane-verify/` instead of the installed folder. Use a forward-slash Windows path in PowerShell. The source CLI uses the same plan/helper/report contract; initialized `test.mjs` still resolves the app's installed `@testlane/cli` broker. Keep that app dependency pinned and refresh copied helpers verbatim from the runner version you use.
 
 ## What a useful result establishes
 
@@ -112,13 +133,15 @@ Feature verification needs an assertion about the changed business behavior, bey
 
 Use a run-owned record identifier and a narrowly scoped cleanup operation. Verify absence after deletion. Authentication files are removed by the fixture after context load, and contexts close in teardown; application records still need their own cleanup. File deletion does not revoke the application's session. If cancellation, expiry or a failed setup may have left a record, inspect it before replaying a mutation.
 
-The source harness runs only the planned specs, with one worker, no retries and recording off. Planned cases must have matching test annotations and complete helper results. Skipped, missing, duplicated, expected-failure or retried cases cannot produce a passing acceptance report. Preserve a failed run when fixing an app or test and produce a separate new run; do not relabel it after a later pass.
+The harness runs only the planned specs, with one worker, no retries and recording off. Planned cases must have matching test annotations and complete helper results. Skipped, missing, duplicated, expected-failure or retried cases cannot produce a passing acceptance report. Preserve a failed run when fixing an app or test and produce a separate new run; do not relabel it after a later pass.
 
-Read the [harness contract](../skills/testlane-verify/references/harness.md) for the exact plan, annotation, helper and source-run command. The [case-design reference](../skills/testlane-verify/references/case-design.md) explains how to map a brief to app-specific assertions. These are local trusted-code workflows: a generated test is executable project code and needs normal review; the harness is not a security sandbox or proof of a safe environment.
+Read the [harness contract](../skills/testlane-verify/references/harness.md) for the exact plan, annotation, helper and runner commands. The [case-design reference](../skills/testlane-verify/references/case-design.md) explains how to map a brief to app-specific assertions. These are local trusted-code workflows: a generated test is executable project code and needs normal review; the harness is not a security sandbox or proof of a safe environment.
 
 ## Evidence and limits
 
 Reports use static case IDs, statuses, reason codes, cleanup outcomes and file hashes rather than raw Playwright errors, stdout, response bodies, headers or session values. Read the final report and process exit status, including fixture teardown, before calling the feature verified. Report shape and completeness are checkable; assertion quality remains the agent's and reviewer's responsibility.
+
+When available, a failed case's `failureLocation` gives only the line/column of its first failed Playwright `expect` in the exact planned spec. Match its `specId` and SHA-256 to the unchanged source before investigating. A missing/null location provides no error detail; raw messages, paths and app values are not included. An observed failed expect still prevents a pass if the test catches its exception.
 
 The retained run output is `report.json` plus any approved manual screenshots under `artifacts/`; `verify report` can additionally create `summary.html`. Playwright's ordinary `testInfo.outputPath()` files and attachments are temporary, configured with `preserveOutput: "never"`. They are not a retained evidence channel. A forced termination can leave private temporary files or live sessions; stop the run and inspect them before reuse rather than assuming cleanup completed.
 

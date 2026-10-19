@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 function same(left, right) { return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right; }
+function coordinate(value) { return Number.isSafeInteger(value) && value >= 1 && value <= 1000000; }
 export default class VerificationReporter {
   constructor({ controlFile, journalFile }) {
     this.control = JSON.parse(fs.readFileSync(controlFile, 'utf8'));
@@ -11,13 +12,26 @@ export default class VerificationReporter {
     this.tests = new Map();
     this.results = [];
     this.assertions = new WeakMap();
+    this.assertionFailures = new WeakSet();
+    this.failureLocations = new WeakMap();
   }
   printsToStdio() { return true; }
   onStdOut() {}
   onStdErr() {}
   onError() { this.errors.push('GLOBAL_TEST_ERROR'); }
   onStepEnd(test, result, step) {
-    if (step.category === 'expect') this.assertions.set(result, (this.assertions.get(result) ?? 0) + 1);
+    if (step.category !== 'expect') return;
+    this.assertions.set(result, (this.assertions.get(result) ?? 0) + 1);
+    if (!step.error) return;
+    this.assertionFailures.add(result);
+    const mapping = this.tests.get(test.id);
+    const item = this.control.cases.find(value => value.id === mapping?.id);
+    const location = step.location;
+    if (!this.failureLocations.has(result) && mapping?.valid && typeof location?.file === 'string' &&
+      path.isAbsolute(location.file) && same(path.resolve(location.file), item.spec) &&
+      coordinate(location.line) && coordinate(location.column)) {
+      this.failureLocations.set(result, { line: location.line, column: location.column });
+    }
   }
   onBegin(config, suite) {
     try {
@@ -43,14 +57,16 @@ export default class VerificationReporter {
       const bodies = values('testlane-body');
       const bodyValid = bodies.length === 1 && ['completed', 'failed'].includes(bodies[0]);
       const screenshots = values('testlane-screenshot');
+      // Neither an inner assertion catch nor an outer helper catch erases failure.
+      const status = result.status === 'passed' && ((bodyValid && bodies[0] === 'failed') || this.assertionFailures.has(result)) ? 'failed' :
+        ['passed', 'failed', 'timedOut', 'skipped', 'interrupted'].includes(result.status) ? result.status : 'unknown';
       this.results.push({
         id: mapping?.id ?? null, mapped: mapping?.valid === true,
-        // An outer test catch must not erase a failure recorded by runCase.
-        status: result.status === 'passed' && bodyValid && bodies[0] === 'failed' ? 'failed' :
-          ['passed', 'failed', 'timedOut', 'skipped', 'interrupted'].includes(result.status) ? result.status : 'unknown',
+        status,
         expectedPassed: test.expectedStatus === 'passed',
         retry: Number.isInteger(result.retry) ? result.retry : -1,
         assertionsObserved: this.assertions.get(result) ?? 0,
+        failureLocation: ['failed', 'timedOut'].includes(status) ? this.failureLocations.get(result) ?? null : null,
         helper: bodyValid && helpers.length === 1 && helpers[0] === this.control.helperVersion + ':' + this.control.helperHash,
         started: starts.length === 1 && starts[0] === mapping?.id,
         cleanup: clean.length === 1 && ['completed', 'failed', 'not-required'].includes(clean[0]) ? clean[0] : 'unknown',

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, writeFile, readFile, cp, rm, symlink, readdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, cp, rm, symlink, readdir, realpath, lstat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
@@ -26,7 +26,15 @@ async function project(body, { required = true, screenshots = 'off', origin = 'h
     target: { baseUrl: origin, environment: 'testing' }, evidence: { screenshots },
     cases: [{ id: 'create-note', title: 'Private descriptive title', spec: 'app.spec.mjs', expected: ['Private intended application behavior'], cleanup: { required, description: required ? 'Remove and verify owned note' : 'No app mutation in this case' } }] };
   const planFile = path.join(root, 'plan.json'); await writeFile(planFile, JSON.stringify(plan));
-  return { root, planFile, plan, run: signal => runVerification({ planFile, signal }), close: () => rm(root, { recursive: true, force: true }) };
+  return { root, planFile, plan, run: signal => runVerification({ planFile, signal }), close: async () => {
+    const info = await lstat(root);
+    const actual = await realpath(root), temporary = await realpath(os.tmpdir());
+    if (!info.isDirectory() || info.isSymbolicLink() || path.relative(temporary, path.dirname(actual)) !== '' ||
+      !/^testlane-agent-consumer-[a-zA-Z0-9]+$/.test(path.basename(actual))) throw new Error('Owned test fixture path is invalid');
+    // A just-exited Windows child can briefly retain its working-directory handle.
+    // Retries stay bounded and do not hide a persistent process or locked directory.
+    await rm(actual, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } };
 }
 function spec(body, { declaration = 'test', annotation = 'create-note', cleanup = 'async () => {}' } = {}) {
   return [
@@ -81,6 +89,57 @@ integration('a caught helper body failure still fails the report and completes c
     assert.ok(result.report.cases[0].assertionsObserved >= 1);
     assert.equal(await readFile(path.join(app.root, 'cleaned'), 'utf8'), '1');
     assert.equal(JSON.stringify(result.report).includes('private assertion diagnostic'), false);
+  } finally { await app.close(); }
+});
+integration('an inner-caught failed expect cannot pass and reports only its planned spec coordinates', async () => {
+  const source = [
+    "import { test, expect } from '@playwright/test';",
+    "import { writeFile } from 'node:fs/promises';",
+    "import { runCase } from './testlane-authoring.mjs';",
+    "test('inner catch', { annotation: { type: 'testlane-case', description: 'create-note' } }, async ({}, info) => {",
+    "await runCase(info, 'create-note', { run: async () => {",
+    "try { expect(false, 'private first assertion value').toBe(true); } catch {}",
+    "try { expect(false, 'private later assertion value').toBe(true); } catch {}",
+    "expect(1).toBe(1);",
+    "}, cleanup: async () => { await writeFile(new URL('./cleaned', import.meta.url), '1'); } }); });",
+  ].join('\n');
+  const app = await project(source);
+  try {
+    const result = await app.run();
+    assert.equal(result.report.execution.exitCode, 0);
+    assert.equal(result.report.verdict, 'failed');
+    const item = result.report.cases[0];
+    assert.equal(item.reason, 'CASE_FAILED');
+    assert.equal(item.cleanup.status, 'completed');
+    assert.equal(item.failureLocation.line, source.split('\n').findIndex(line => line.includes('private first assertion value')) + 1);
+    assert.ok(Number.isSafeInteger(item.failureLocation.column) && item.failureLocation.column >= 1 && item.failureLocation.column <= 1000000);
+    assert.deepEqual(Object.keys(item.failureLocation).sort(), ['column', 'line']);
+    assert.ok(item.specId && result.report.specs.some(spec => spec.id === item.specId));
+    assert.equal(await readFile(path.join(app.root, 'cleaned'), 'utf8'), '1');
+    assert.equal(JSON.stringify(result.report).includes('private first assertion value'), false);
+    assert.equal(JSON.stringify(result.report).includes('private later assertion value'), false);
+    assert.equal(JSON.stringify(result.report).includes(app.root), false);
+    assert.equal(JSON.stringify(result.report).includes('app.spec.mjs'), false);
+  } finally { await app.close(); }
+});
+integration('a caught failed expect from an imported helper fails without a foreign source location', async () => {
+  const source = [
+    "import { test } from '@playwright/test';",
+    "import { runCase } from './testlane-authoring.mjs';",
+    "import { failFromHelper } from './imported-helper.mjs';",
+    "test('imported assertion', { annotation: { type: 'testlane-case', description: 'create-note' } }, async ({}, info) => {",
+    "await runCase(info, 'create-note', { run: async () => { try { failFromHelper(); } catch {} }, cleanup: async () => {} }); });",
+  ].join('\n');
+  const app = await project(source);
+  try {
+    await writeFile(path.join(app.root, 'imported-helper.mjs'), "import { expect } from '@playwright/test'; export function failFromHelper() { expect(false, 'private imported assertion').toBe(true); }\n");
+    const result = await app.run();
+    assert.equal(result.report.execution.exitCode, 0);
+    assert.equal(result.report.verdict, 'failed');
+    assert.equal(result.report.cases[0].cleanup.status, 'completed');
+    assert.equal(result.report.cases[0].failureLocation, null);
+    assert.equal(JSON.stringify(result.report).includes('imported-helper'), false);
+    assert.equal(JSON.stringify(result.report).includes('private imported assertion'), false);
   } finally { await app.close(); }
 });
 integration('missing or duplicate helper outcome annotations cannot produce a pass', async t => {
@@ -144,7 +203,7 @@ integration('same real Chromium spec fails broken behavior, passes fixed behavio
     }
   } finally { await app.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
-integration('cancellation is bounded and cannot claim a pass', async () => {
+integration('cancellation is bounded and cannot claim a pass', async t => {
   const source = [
     "import { test } from '@playwright/test';",
     "import { writeFile } from 'node:fs/promises';",
@@ -161,5 +220,7 @@ integration('cancellation is bounded and cannot claim a pass', async () => {
     const result = await pending;
     assert.equal(result.report.verdict, 'cancelled'); assert.ok(Date.now() - before < 12000);
     if (result.report.execution.forced) assert.equal(result.report.cases[0].cleanup.status, 'unknown');
+    t.diagnostic('Cancellation execution: ' + JSON.stringify({ cancelled: result.report.execution.cancelled,
+      forced: result.report.execution.forced, status: result.report.cases[0].status, cleanup: result.report.cases[0].cleanup.status }));
   } finally { await app.close(); }
 });

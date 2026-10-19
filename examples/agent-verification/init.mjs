@@ -65,6 +65,7 @@ test.skip('Design this case from brief.md', {annotation:{type:'testlane-case',de
     ['brief.md',briefText],['plan.json',JSON.stringify(plan,null,2)+'\n'],
     ['fixtures.mjs',fixture],['testlane-authoring.mjs',authoring],['test.mjs',config],['feature.spec.mjs',spec],
     ['.gitignore','brief.md\noutput/\nruns/\n.auth/\ntest-results/\nplaywright-report/\n'],
+    ['.gitattributes','testlane-authoring.mjs text eol=lf\n'],
   ]);
   await fs.mkdir(path.dirname(directory),{recursive:true});
   await fs.mkdir(directory,{mode:0o700}); // Existing suites are never overwritten.

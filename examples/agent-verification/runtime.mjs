@@ -10,6 +10,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const inside = (root, file) => { const rel = path.relative(root, file); return rel !== '' && !rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel); };
 const reasons = new Set(['GLOBAL_TEST_ERROR', 'CASE_MAPPING_INVALID', 'RUN_CONFIGURATION_INVALID', 'REPORTER_INVALID']);
+function validFailureLocation(value) {
+  return value === null || (value !== null && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).length === 2 && Object.keys(value).every(key => ['line', 'column'].includes(key)) &&
+    [value.line, value.column].every(number => Number.isSafeInteger(number) && number >= 1 && number <= 1000000));
+}
 export const LIMITS = [
   'The plan and test code are trusted app code, not a security sandbox.',
   'The runner cannot prove assertion quality, test completeness, the declared environment, or arbitrary app cleanup semantics.',
@@ -31,6 +36,8 @@ export function reconcile(plan, journal, execution) {
       !['mapped', 'expectedPassed', 'helper', 'started', 'unexpectedAttachments'].every(key => typeof row[key] === 'boolean') ||
       !Number.isInteger(row.retry) || !['completed', 'failed', 'not-required', 'unknown'].includes(row.cleanup) ||
       !Number.isInteger(row.assertionsObserved) || row.assertionsObserved < 0 ||
+      (row.failureLocation !== undefined && (!validFailureLocation(row.failureLocation) ||
+        (row.failureLocation !== null && (!row.mapped || !['failed', 'timedOut'].includes(row.status) || row.assertionsObserved < 1)))) ||
       !Array.isArray(row.screenshots))) errors.push('REPORTER_INVALID');
   if (journal?.discovered === 0) errors.push('NO_TESTS_DISCOVERED');
   if (rows.some(r => !r.mapped || !plan.cases.some(c => c.id === r.id))) errors.push('CASE_MAPPING_INVALID');
@@ -54,6 +61,8 @@ export function reconcile(plan, journal, execution) {
       else if (row.status === 'passed') { status = 'passed'; reason = 'CASE_PASSED'; }
     } else if (execution.cancelled) { status = 'cancelled'; reason = execution.forced ? 'FORCED_STOP' : 'RUN_CANCELLED'; }
     return { id: item.id, status, reason, cleanup: { required: item.cleanup.required, status: cleanup }, attempts: results.length,
+      failureLocation: status === 'failed' && results.length === 1 && results[0].mapped && validFailureLocation(results[0].failureLocation) && results[0].failureLocation !== null && results[0].assertionsObserved > 0 ?
+        { line: results[0].failureLocation.line, column: results[0].failureLocation.column } : null,
       assertionsObserved: results.reduce((sum, row) => sum + (Number.isInteger(row.assertionsObserved) && row.assertionsObserved > 0 ? row.assertionsObserved : 0), 0) };
   });
   if (execution.cancelled) errors.push(execution.forced ? 'FORCED_STOP' : 'RUN_CANCELLED');
@@ -113,7 +122,7 @@ export async function runVerification({ planFile, outputDir, signal }) {
     if (bytes.length > 256 * 1024) throw new Error('PLAN_INVALID');
     report.plan.sha256 = sha256(bytes);
     plan = validatePlan(JSON.parse(bytes.toString('utf8')));
-    report.cases = plan.cases.map(c => ({ id: c.id, status: 'blocked', reason: 'CASE_NOT_RUN', cleanup: { required: c.cleanup.required, status: 'unknown' }, attempts: 0 }));
+    report.cases = plan.cases.map(c => ({ id: c.id, status: 'blocked', reason: 'CASE_NOT_RUN', cleanup: { required: c.cleanup.required, status: 'unknown' }, attempts: 0, failureLocation: null }));
     if (plan.status !== 'reviewed') report.reasonCodes = ['PLAN_NOT_REVIEWED'];
     else if (signal?.aborted) { report.verdict = 'cancelled'; report.reasonCodes = ['RUN_CANCELLED']; report.cases.forEach(c => { c.status = 'cancelled'; c.reason = 'RUN_CANCELLED'; }); }
     else {
