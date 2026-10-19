@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Unsigned, embedded-bundle iOS Simulator build. Never boots or selects a device. */
+/** Embedded-bundle iOS Simulator build without Apple signing credentials. Never boots a device. */
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -20,6 +20,14 @@ const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const cancelled = signal => { if (signal?.aborted) throw Error('IOS_BUILD_CANCELLED'); };
 const contained = (parent, child) => { const value = path.relative(parent, child); return value !== '' && !value.startsWith('..' + path.sep) && value !== '..' && !path.isAbsolute(value); };
 const safeError = error => Error(/^IOS_[A-Z_]+$/.test(error?.message) ? error.message : 'IOS_BUILD_FAILED');
+
+export function simulatorSignature(output) {
+  if (typeof output !== 'string' || /^Authority=/m.test(output)) throw Error('IOS_BUILD_APP_SIGNATURE_INVALID');
+  if (/code object is not signed at all/.test(output) && !/^Signature=/m.test(output)) return 'none';
+  if (/^Signature=adhoc\r?$/m.test(output) && /^TeamIdentifier=not set\r?$/m.test(output) &&
+      /^CodeDirectory .*flags=0x[0-9a-f]+\([^\r\n]*\blinker-signed\b/m.test(output)) return 'linker-ad-hoc';
+  throw Error('IOS_BUILD_APP_SIGNATURE_INVALID');
+}
 
 /** Hash every entry; preserve relative internal symlinks without traversing them. */
 export async function hashIosTree(directory, { signal } = {}) {
@@ -267,12 +275,12 @@ export async function buildIosProof({ outputDir, signal, onStage } = {}) {
     if (actualArchitecture !== architecture) throw Error('IOS_BUILD_ARCHITECTURE_INVALID');
     const nativeMetadata = await execute('app-platform', prerequisites.tools.xcrun, ['vtool', '-show-build', binary], app, 30_000);
     if (!/platform\s+IOSSIMULATOR\b/.test(nativeMetadata)) throw Error('IOS_BUILD_APP_PLATFORM_INVALID');
-    await execute('app-unsigned', prerequisites.tools.codesign, ['-dv', builtApp], app, 30_000, [1]);
+    const signature = simulatorSignature(await execute('app-signature', prerequisites.tools.codesign, ['-dv', builtApp], app, 30_000, [0, 1]));
     const builtTree = await hashIosTree(builtApp, { signal }), appDirectory = path.join(output, PRODUCT + '.app');
     await execute('app-copy', prerequisites.tools.ditto, [builtApp, appDirectory], app, 30_000);
     const appTree = await hashIosTree(appDirectory, { signal });
     if (appTree.sha256 !== builtTree.sha256) throw Error('IOS_BUILD_COPY_CHANGED');
-    const manifest = { schemaVersion: 1, platform: 'ios-simulator', package: BUNDLE, proofOnly: true, configuration: 'Release', unsigned: true,
+    const manifest = { schemaVersion: 1, platform: 'ios-simulator', package: BUNDLE, proofOnly: true, configuration: 'Release', unsigned: signature === 'none', signature,
       codeSigningAllowed: false, embeddedBundle: true, architecture, appDirectory: PRODUCT + '.app', appSHA256: appTree.sha256,
       template: TEMPLATE, templateIntegrity: TEMPLATE_INTEGRITY, templateSHA256, versions, node: process.version,
       xcodeVersion: prerequisites.xcodeVersion, xcodeBuild: prerequisites.xcodeBuild, simulatorSdkVersion: prerequisites.sdkVersion, cocoaPodsVersion: prerequisites.cocoaPodsVersion,

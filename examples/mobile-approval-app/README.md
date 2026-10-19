@@ -55,7 +55,7 @@ stop is reported explicitly and never treated as a successful cancellation.
 `--prepare-only` stops after install/prebuild and retains the owned root for toolchain
 inspection; it does not claim a completed APK.
 
-## Unsigned iOS Simulator Release build
+## iOS Simulator Release build without Apple signing credentials
 
 The iOS example reuses `App.js`, `bootstrap.mjs` and the pinned dependency lockfile.
 It adds a separate `app.ios.config.cjs` and reviewed iOS config plugin. Android's
@@ -86,16 +86,22 @@ refusal and the local fixture tests are not evidence of a successful iOS build.
 The helper copies seven explicit public inputs into a short owned OS temporary
 directory. It maps the iOS config to `app.config.cjs`, verifies the pinned
 `expo-template-bare-minimum@58.0.25` archive's SHA-512 integrity, runs `npm ci`,
-prebuilds iOS without automatic installation, then runs CocoaPods and an unsigned
-`iphonesimulator` **Release** build. It supplies no team, provisioning profile or
-Apple account. It never launches a Simulator, chooses an existing device, starts
+prebuilds iOS without automatic installation, then runs CocoaPods and an
+`iphonesimulator` **Release** build with `CODE_SIGNING_ALLOWED=NO`. It supplies no
+Apple signing credentials, team or provisioning profile. The ARM64 linker may
+still add a linker ad-hoc signature without an Apple Developer identity or team.
+It never launches a Simulator, chooses an existing device, starts
 Metro or installs the result. Each subprocess has a fixed timeout and output cap;
 Ctrl+C, termination requests and an API abort signal stop the owned process group.
 An unconfirmed stop retains a fixed failure code and recovery information.
 
 The product is `TestlaneIOSProof.app`, bundle ID `dev.testlane.iosproof`. Its
-embedded `main.jsbundle`, Simulator platform, actual architecture, unsigned app
-and narrow ATS configuration are checked before success. The plugin sets
+embedded `main.jsbundle`, Simulator platform, actual architecture, executable
+signature state and narrow ATS configuration are checked before success. The
+manifest records `signature: "none"` or `signature: "linker-ad-hoc"`; `unsigned`
+is true only for `"none"`. A linker ad-hoc signature has no Apple certificate
+authority or team identifier and does not establish Developer-signed distribution.
+The plugin sets
 `NSAllowsArbitraryLoads` to false and permits cleartext HTTP only for the
 `127.0.0.1` exception domain. It does not enable a blanket local-network exemption.
 [Apple documents IP-address exception domains](https://developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsexceptiondomains)
@@ -118,7 +124,8 @@ On iOS, `Paths.document` maps the bootstrap to `Documents/testlane-bootstrap.jso
 inside this app's data container. A separately controlled, newly created Simulator
 can deliver that file through its private container. The unchanged app reads and
 deletes it before accepting the generated session; it never displays or persists
-the cookie. This unsigned synthetic build is for a Simulator proof, not App Store
+the cookie. This synthetic build needs no Apple signing credentials and is for a
+Simulator proof, not App Store
 distribution, a physical phone, a real account or a general Expo-support claim.
 Only the macOS build and actual native proof can establish that this path works.
 

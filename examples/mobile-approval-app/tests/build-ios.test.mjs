@@ -4,7 +4,15 @@ import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { buildIosProof, createIosBuildRoot, hashIosTree, removeIosBuildRoot, runIosBuildChild } from '../build-ios.mjs';
+import { buildIosProof, createIosBuildRoot, hashIosTree, removeIosBuildRoot, runIosBuildChild, simulatorSignature } from '../build-ios.mjs';
+
+test('Simulator builds distinguish an absent signature from linker ad-hoc signing and refuse Apple identities', () => {
+  const linker='CodeDirectory v=20400 flags=0x20002(adhoc,linker-signed) hashes=194\nSignature=adhoc\nTeamIdentifier=not set\n';
+  assert.equal(simulatorSignature(linker),'linker-ad-hoc');
+  assert.equal(simulatorSignature('example.app: code object is not signed at all\n'),'none');
+  for(const value of [linker.replace('not set','TEAM123'),linker+'Authority=Apple Development: Example\n',linker.replace(',linker-signed',''),'unrecognized tool error'])
+    assert.throws(()=>simulatorSignature(value),/IOS_BUILD_APP_SIGNATURE_INVALID/);
+});
 
 async function fixture(t) {
   const parent = await realpath(os.tmpdir()), root = await mkdtemp(path.join(parent, 'tl-ios-helper-test-'));

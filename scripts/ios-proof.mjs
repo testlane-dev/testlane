@@ -25,7 +25,8 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
   const before=await digestTree(consumer.packageRoot),appRoot=await realpath(appDirectory);
   const manifestFile=path.join(path.dirname(appRoot),'build-manifest.json'),manifestBytes=await readFile(manifestFile),build=JSON.parse(manifestBytes);
   assert.equal(build.schemaVersion,1);assert.equal(build.platform,'ios-simulator');assert.equal(build.package,BUNDLE);
-  assert.equal(build.proofOnly,true);assert.equal(build.configuration,'Release');assert.equal(build.unsigned,true);
+  assert.equal(build.proofOnly,true);assert.equal(build.configuration,'Release');assert.ok(['none','linker-ad-hoc'].includes(build.signature));
+  assert.equal(build.unsigned,build.signature==='none');
   assert.equal(build.codeSigningAllowed,false);assert.equal(build.embeddedBundle,true);
   assert.ok(['arm64','x86_64'].includes(build.architecture));
   assert.equal(build.builderSHA256,sha(await readFile(path.join(consumer.packageRoot,'examples/mobile-approval-app/build-ios.mjs'))),'installed builder matches the compiled build manifest');

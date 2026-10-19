@@ -41,7 +41,8 @@ certificate, provisioning profile, Expo account or human test account is needed.
 
 Use the repository's [iOS Simulator workflow](../../.github/workflows/ios-simulator-proof.yml).
 It inspects prerequisites before creating accounts or sessions, runs the policy
-tests, builds the unsigned app, then runs the installed-package proof. Ordinary
+tests, builds the Simulator app without Apple signing credentials, then runs the
+installed-package proof. Ordinary
 `npm run test:mobile` executes unit/control tests without starting a device.
 
 The equivalent commands below belong in that opted-in ephemeral hosted job, from
@@ -66,12 +67,15 @@ those exact installed bytes. Without it, the consumer helper packs the current
 checkout. Neither operation publishes to npm. The helper installs browser consumer
 dependencies too; native interactions use XCUITest, not a browser.
 
-The [app build recipe](../mobile-approval-app/README.md#unsigned-ios-simulator-release-build)
+The [app build recipe](../mobile-approval-app/README.md#ios-simulator-release-build-without-apple-signing-credentials)
 copies seven explicit public inputs into an owned temporary build root. It uses
-the pinned Expo template, npm lockfile and CocoaPods, then builds an unsigned
-`iphonesimulator` Release app with embedded JavaScript. No Metro server is needed
-at runtime. The build manifest binds source, configuration, dependency and app-tree
-hashes. Build-only commands do not launch or install on a Simulator.
+the pinned Expo template, npm lockfile and CocoaPods, then builds an
+`iphonesimulator` Release app with embedded JavaScript and no Apple signing
+credentials. The ARM64 linker may still add a linker ad-hoc signature; it carries
+no Apple Developer certificate identity or team. This is not an App Store or
+physical-device build. No Metro server is needed at runtime. The build manifest
+records the observed signature state and binds source, configuration, dependency
+and app-tree hashes. Build-only commands do not launch or install on a Simulator.
 
 ## Required case outcomes
 

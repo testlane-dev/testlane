@@ -36,7 +36,7 @@ revision and detect changes during execution.
 | First target | Required environment | Acceptance status |
 | --- | --- | --- |
 | React Native/Expo on Android | A pinned test build, Android SDK, emulator and platform driver | Unreleased synthetic emulator proof; see its recipe and limits |
-| React Native/Expo on iOS | An unsigned pinned simulator build, macOS, Xcode, iOS Simulator and XCUITest | Unreleased implementation; hosted macOS proof and cleanup must pass independently of Android |
+| React Native/Expo on iOS | A pinned Simulator Release build without Apple signing credentials, macOS, Xcode, iOS Simulator and XCUITest | Unreleased implementation; hosted macOS proof and cleanup must pass independently of Android |
 
 The first proof must cover:
 
@@ -55,7 +55,9 @@ native/WebView flows each require additional tests and evidence.
 ## iOS experiment boundary
 
 The iOS controller is restricted to an explicitly opted-in, ephemeral GitHub-hosted
-macOS job. It builds an unsigned Simulator Release app with embedded JavaScript,
+macOS job. It builds a Simulator Release app with embedded JavaScript without Apple
+signing credentials; a linker ad-hoc signature may remain, with no Developer
+identity or team. This is not an App Store or physical-device build. The controller
 creates a new nonce-named Simulator in a private device set, and uses pinned Appium
 3.8.0, XCUITest 12.19.1 and WebDriverAgent 16.16.3. It does not select an existing
 phone or Simulator, require an Apple/Expo account, or accept SDK licenses.

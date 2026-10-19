@@ -59,7 +59,7 @@ jobs:
           echo "IOS_PROOF_ROOT=$proof_root" >> "$GITHUB_ENV"
       - name: Install the pinned optional Appium and XCUITest tools
         run: npm --prefix examples/ios-verification/tools run setup -- --output-dir "$IOS_PROOF_ROOT/tools"
-      - name: Build the unsigned Release simulator app
+      - name: Build the Release simulator app without Apple signing credentials
         id: build
         run: npm run build:ios-proof -- --output-dir "$IOS_PROOF_ROOT/build"
       - name: Verify the installed package with an owned simulator and temporary native keychain

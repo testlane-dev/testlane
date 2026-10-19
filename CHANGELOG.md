@@ -13,8 +13,10 @@ what to do about it in [docs/upgrading.md](docs/upgrading.md).
   device isolation and bounded worker execution. It is separate from Playwright;
   general existing-app native integration remains planned.
 - An unreleased iOS Simulator experiment for the same synthetic approval workflow,
-  with an unsigned embedded Release app, pinned Appium/XCUITest tooling, a private
-  device set and an explicit temporary macOS keychain. Its hosted GitHub macOS
+  with an embedded Simulator Release app built without Apple signing credentials,
+  pinned Appium/XCUITest tooling, a private device set and an explicit temporary
+  macOS keychain. A linker ad-hoc signature may remain, with no Developer identity
+  or team; this is not a device or App Store build. Its hosted GitHub macOS
   proof is opt-in; implementation and unit tests do not establish completed iOS
   acceptance or add native support to the published package.
 - A public, disposable request approval example with app-owned Playwright tests for

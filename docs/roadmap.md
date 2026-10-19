@@ -54,8 +54,10 @@ does not drive native applications. See the [mobile support proposal](mobile-tes
 for the first proof, runner evaluation and release requirements. The
 [Android recipe](../examples/android-verification/README.md) describes the synthetic
 Expo build, native cases, credential path and limits separately from published support.
-The [iOS recipe](../examples/ios-verification/README.md) adds a separate unsigned
-Simulator build and opt-in ephemeral hosted macOS proof. Its actual build, native
+The [iOS recipe](../examples/ios-verification/README.md) adds a separate Simulator
+Release build without Apple signing credentials and an opt-in ephemeral hosted
+macOS proof. The linker may add an ad-hoc signature without a Developer identity
+or team; this is not a device or App Store build. Its actual build, native
 case outcomes and cleanup must be verified before recording iOS acceptance.
 
 The first mobile milestone targets React Native/Expo and should complete the same
