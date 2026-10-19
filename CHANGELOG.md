@@ -11,6 +11,8 @@ what to do about it in [docs/upgrading.md](docs/upgrading.md).
 - Playwright starts from the canonical app project directory. Deep private output
   directories no longer cause Windows child-process startup failure; app-relative
   fixture reads use the app root.
+- Disable unused Playwright Git metadata collection in the generated configuration;
+  CI no longer launches Git from the deep private configuration directory.
 - The existing-app quickstart now locates globally installed examples under the
   scoped `@testlane/cli` package directory.
 - Case-design guidance calls out full stable-state comparisons after denied mutations

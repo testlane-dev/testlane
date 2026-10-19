@@ -72,7 +72,12 @@ integration('long report paths launch from the app project and preserve app-rela
   const originalSpawn = childProcess.spawn;
   const bootstrap = path.resolve(here, '../bootstrap.mjs');
   const capturedBootstrap = { stdout: '', stderr: '', errorCode: null };
+  const previousCI = Object.fromEntries(['CI', 'GITHUB_ACTIONS', 'GITHUB_EVENT_PATH'].map(name => [name, process.env[name]]));
   try {
+    // Playwright enables Git discovery in GitHub Actions. Exercise that CI branch
+    // locally too, without reading any ambient event file.
+    process.env.CI = 'true'; process.env.GITHUB_ACTIONS = 'true';
+    process.env.GITHUB_EVENT_PATH = path.join(app.root, 'no-ambient-event.json');
     // This generated fixture has no authentication or credentials. Observe the real
     // bootstrap only for its owned project; never stub behavior or retain other children.
     childProcess.spawn = function (executable, args, options) {
@@ -103,6 +108,9 @@ integration('long report paths launch from the app project and preserve app-rela
     assert.equal((await readdir(app.root)).includes('owned-app-record.json'), false);
   } finally {
     childProcess.spawn = originalSpawn; syncBuiltinESMExports();
+    for (const [name, value] of Object.entries(previousCI)) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
     await app.close();
   }
 });

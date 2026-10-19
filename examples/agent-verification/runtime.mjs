@@ -156,7 +156,7 @@ export async function runVerification({ planFile, outputDir, signal }) {
       await writeFile(controlFile, JSON.stringify(control), { flag: 'wx', mode: 0o600 });
       const config = 'export default { testDir: ' + JSON.stringify(project) + ', testMatch: [' +
         [...specFiles.values()].map(v => 'new RegExp(' + JSON.stringify(expression(v.file)) + ', ' + JSON.stringify(process.platform === 'win32' ? 'i' : '') + ')').join(',') +
-        '], workers: 1, retries: 0, repeatEach: 1, timeout: 30000, globalTimeout: 175000, forbidOnly: true, fullyParallel: false, ' +
+        '], captureGitInfo: { commit: false, diff: false }, workers: 1, retries: 0, repeatEach: 1, timeout: 30000, globalTimeout: 175000, forbidOnly: true, fullyParallel: false, ' +
         'outputDir: ' + JSON.stringify(path.join(directory, '.private-test-results')) + ', preserveOutput: "never", ' +
         'reporter: [[' + JSON.stringify(path.join(HERE, 'reporter.mjs')) + ', ' + JSON.stringify({ controlFile, journalFile }) + ']], ' +
         'use: { baseURL: ' + JSON.stringify(plan.target.baseUrl) + ', trace: "off", video: "off", screenshot: "off", acceptDownloads: false, serviceWorkers: "block" } };\n';
