@@ -77,7 +77,7 @@ export function reconcile(plan, journal, execution) {
 function expression(file) {
   return '^' + file.split(/[\\/]/).map(part => part.replace(/[.*+?^$()|[\]{}\\]/g, '\\$&')).join('[\\\\/]') + '$';
 }
-async function runChild(cli, config, env, signal) {
+async function runChild(cli, config, project, env, signal) {
   return new Promise(resolve => {
     let child, timer, forceTimer, settled = false, cancelled = signal?.aborted === true, forced = false;
     const finish = exitCode => {
@@ -93,8 +93,10 @@ async function runChild(cli, config, env, signal) {
       if (!forceTimer) forceTimer = setTimeout(() => { forced = true; child?.kill('SIGKILL'); }, 5000);
     };
     try {
+      // Absolute config paths keep private output separate. Run from the app so relative
+      // fixtures work and a deeply nested report directory cannot prevent Windows launch.
       child = spawn(process.execPath, [path.join(HERE, 'bootstrap.mjs'), cli, config], {
-        env, cwd: path.dirname(config), windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+        env, cwd: project, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       });
       child.stdout.on('data', () => {}); child.stderr.on('data', () => {});
       child.once('error', () => finish(null)); child.once('exit', code => finish(code));
@@ -160,7 +162,7 @@ export async function runVerification({ planFile, outputDir, signal }) {
         'use: { baseURL: ' + JSON.stringify(plan.target.baseUrl) + ', trace: "off", video: "off", screenshot: "off", acceptDownloads: false, serviceWorkers: "block" } };\n';
       await writeFile(configFile, config, { flag: 'wx', mode: 0o600 });
       const env = { ...process.env, TESTLANE_VERIFICATION_CONTROL: controlFile, DEBUG: '', PWDEBUG: '', NODE_DEBUG: '', FORCE_COLOR: '0', PLAYWRIGHT_NO_COPY_PROMPT: '1' };
-      const execution = await runChild(cli, configFile, env, signal);
+      const execution = await runChild(cli, configFile, project, env, signal);
       let journal;
       try { const data = await readFile(journalFile); if (data.length <= 1024 * 1024) journal = JSON.parse(data.toString('utf8')); } catch {}
       Object.assign(report, reconcile(plan, journal, execution));

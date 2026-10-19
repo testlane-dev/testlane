@@ -168,7 +168,7 @@ too. The script checks identity with the issued session, a visible protected-pag
 and anonymous API refusal. It prints fixed results without bodies, cookies or browser dumps.
 
 For an npm-only installation, find these two example files under
-`$(npm root -g)/testlane/examples/existing-app/`, or follow their repository links above.
+`$(npm root -g)/@testlane/cli/examples/existing-app/`, or follow their repository links above.
 Copy them into your app so their `playwright` import resolves to your app's dependency.
 
 ## 7. Run with a fresh session and clean up

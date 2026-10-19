@@ -9,9 +9,9 @@ defend against see [threat-model.md](threat-model.md).
 
 | Command | Who | Output |
 | --- | --- | --- |
-| `verify init --brief <file> --target <origin> --profile <name> [--environment testing] [--output-dir <new-suite-dir>] [--json]` | agent within the requested app scope | **0.7.0-beta.1 preview, absent from stable 0.6.0**: draft workspace for the agent to turn into real app-specific tests; no authentication or account changes |
-| `verify run --plan <file> [--output-dir <private-report-dir>] [--json]` | agent within the authorized app/test scope | **0.7.0-beta.1 preview, absent from stable 0.6.0**: executes trusted app-owned Playwright code and reports mapped case/cleanup outcomes; see [agent verification](agent-verification.md) |
-| `verify report --report <file> --plan <file> [--json]` | agent | **0.7.0-beta.1 preview, absent from stable 0.6.0**: create-only local `summary.html` beside the JSON report; verifies the exact plan binding and screenshot hashes; private evidence stays local |
+| `verify init --brief <file> --target <origin> --profile <name> [--environment testing] [--output-dir <new-suite-dir>] [--json]` | agent within the requested app scope | **0.7.0-beta.2 preview, absent from stable 0.6.0**: draft workspace for the agent to turn into real app-specific tests; no authentication or account changes |
+| `verify run --plan <file> [--output-dir <private-report-dir>] [--json]` | agent within the authorized app/test scope | **0.7.0-beta.2 preview, absent from stable 0.6.0**: executes trusted app-owned Playwright code and reports mapped case/cleanup outcomes; see [agent verification](agent-verification.md) |
+| `verify report --report <file> --plan <file> [--json]` | agent | **0.7.0-beta.2 preview, absent from stable 0.6.0**: create-only local `summary.html` beside the JSON report; verifies the exact plan binding and screenshot hashes; private evidence stays local |
 | `workflow smoke --manifest <file> [--output-dir <dir>] [--json]`, `workflow feature --manifest <file> --receipt <file> [--output-dir <dir>] [--json]` | agent with app-operation approval | fixed shipped workflow runner; app-local Playwright, sanitized evidence/report and strict pass verdict; see [project installation](project-install.md#run-the-shipped-workflows) |
 | `doctor [--json] [--check <profile>]` | agent | setup diagnostics; passive by default. `--check` explicitly signs in, verifies identity and discards the session. See [diagnostics](doctor.md) for JSON and exit semantics |
 | `profiles` | agent | table (or `--json`) of profiles; no secrets. An email from the account overrides file is shown as `<email> (override)` (`--json`: `"overridden": true`) |
@@ -34,7 +34,7 @@ rules deny mutations; `store list` is not allowlisted and requires human approva
 
 ### Preview verification
 
-Install the reviewed `0.7.0-beta.1` package tarball, or that exact npm version when available, then use `npx --no-install testlane verify ...` from the app repository. The intended npm preview tag is `next`; stable `latest` stays at 0.6.0, which has no `verify` subcommands. The package bundles the broker, skill, fixture and harness; a source build is optional. The coding agent designs the tests. `init` creates only a draft/skipped scaffold, `run` executes the authored cases, and `report` renders an existing run without executing app code.
+Install the reviewed `0.7.0-beta.2` package tarball, or that exact npm version when available, then use `npx --no-install testlane verify ...` from the app repository. The intended npm preview tag is `next`; stable `latest` stays at 0.6.0, which has no `verify` subcommands. The package bundles the broker, skill, fixture and harness; a source build is optional. The coding agent designs the tests. `init` creates only a draft/skipped scaffold, `run` executes the authored cases, and `report` renders an existing run without executing app code.
 
 `run --json` includes `reportPath`, relative to the chosen output root. Each passing case needs an observed Playwright `expect` step (`assertionsObserved`); an otherwise completed case with none is blocked as `NO_ASSERTIONS_OBSERVED`. Node-assert-only specs are unsupported in v1. Identity/cleanup assertions can contribute to the count, which does not prove business-oracle quality or coverage.
 

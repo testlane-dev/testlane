@@ -1,6 +1,6 @@
 # Verification harness contract
 
-Use the opt-in `@testlane/cli@0.7.0-beta.1` preview from a reviewed tarball, or that exact npm version when available. The package contains the broker, skill, fixture and harness; no source clone is required. Its intended dist-tag is `next`; stable 0.6.0 has no `verify` commands. The harness is a local runner for app-owned Playwright specs, not an LLM service, browser agent or test generator.
+Use the opt-in `@testlane/cli@0.7.0-beta.2` preview from a reviewed tarball, or that exact npm version when available. The package contains the broker, skill, fixture and harness; no source clone is required. Its intended dist-tag is `next`; stable 0.6.0 has no `verify` commands. The harness is a local runner for app-owned Playwright specs, not an LLM service, browser agent or test generator.
 
 ## Start from a new scaffold, or preserve an existing suite
 

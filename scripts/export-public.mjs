@@ -121,6 +121,8 @@ export const URL_ALLOWLIST = [
   // The public repository, under the testlane-dev organisation.
   "github.com/testlane-dev/testlane",
   "github.com/testlane-dev/testlane.git",
+  // Public upstream HTML authentication example used in installed-package acceptance.
+  "github.com/expressjs/express",
   "example.com",
   "example.net",
   "example.org",

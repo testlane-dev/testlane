@@ -1,0 +1,260 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "package": {
+    "name": "@testlane/cli",
+    "version": "0.7.0-beta.1",
+    "sha256": "77ca384a3716c50d40906a27d340c5742aaee466e31c7662b2e77bb3a7c44aba",
+    "bytes": 428652,
+    "files": 218,
+    "integrity": "sha512-5GS/R0k3XbEpjX+uAxRorAYwJt4n766OqkJ+bcOkdcNsJy9pxTJxWZVFV0Q0ebobEiCbhSn0e0KkHBqb4BwphQ==",
+    "source": {
+      "repository": "testlane-dev/testlane",
+      "commit": "b6adca111148cedad5e8512edae65f8f4a09b5c6",
+      "tag": "v0.7.0-beta.1",
+      "candidateRun": 39209261352
+    }
+  },
+  "platform": "win32",
+  "store": "fresh scratch DPAPI",
+  "started": "2026-10-19T13:12:40.325Z",
+  "finished": "2026-10-19T13:14:41.906Z",
+  "checks": {
+    "exactPublishedTarball": true,
+    "freshInstalledFilesMatchTarball": true,
+    "interruptedNeverPassed": true,
+    "recoveryJournalSurvivedTemporaryOutput": true,
+    "incompleteCleanupReportedHonestly": true,
+    "recordedInterruptedProcessesStopped": true,
+    "journalOwnedRecordRecoveredAnd404": true,
+    "freshSeparateReportPassedWithSamePlanSpec": true,
+    "deniedPermissionDidNotMutateOwnedRecord": true,
+    "appSessionExpiredBeforeArtifactTtlCannotPass": true,
+    "interruptedReceiptUnaltered": true,
+    "generatedSecretVariantsAbsent": true,
+    "publishedTarballUnchanged": true
+  },
+  "runs": {
+    "interrupted": {
+      "exitCode": 130,
+      "verdict": "cancelled",
+      "execution": {
+        "exitCode": 130,
+        "cancelled": true,
+        "forced": false
+      },
+      "case": {
+        "id": "owned-mutation",
+        "status": "cancelled",
+        "reason": "RUN_CANCELLED",
+        "cleanup": {
+          "required": true,
+          "status": "failed"
+        },
+        "attempts": 1,
+        "failureLocation": null,
+        "assertionsObserved": 4,
+        "specId": "ca7890c198d0b97b4164b11adc9103df90c8854eea2b5711349647102ab62f3b"
+      },
+      "recordsRemaining": 1,
+      "elapsedMs": 13702,
+      "reportSha256": "f589756e8cd5d83078ef7d0ba77219d5ba4cbc262eb2653bd28590a0ba03ce2e"
+    },
+    "recovery": {
+      "exitCode": 0,
+      "verdict": "passed",
+      "cases": [
+        {
+          "id": "recover-owned-record",
+          "status": "passed",
+          "reason": "CASE_PASSED",
+          "cleanup": {
+            "required": true,
+            "status": "completed"
+          },
+          "attempts": 1,
+          "failureLocation": null,
+          "assertionsObserved": 5,
+          "specId": "f8523a64afcb045fc1509fdbec4f8e0bf80057c2bd45f5a0ce675a0192ede617"
+        }
+      ],
+      "recordsRemaining": 0
+    },
+    "fresh": {
+      "exitCode": 0,
+      "verdict": "passed",
+      "cases": [
+        {
+          "id": "owned-mutation",
+          "status": "passed",
+          "reason": "CASE_PASSED",
+          "cleanup": {
+            "required": true,
+            "status": "completed"
+          },
+          "attempts": 1,
+          "failureLocation": null,
+          "assertionsObserved": 10,
+          "specId": "ca7890c198d0b97b4164b11adc9103df90c8854eea2b5711349647102ab62f3b"
+        }
+      ],
+      "recordsRemaining": 0
+    },
+    "expiry": {
+      "exitCode": 1,
+      "verdict": "failed",
+      "cases": [
+        {
+          "id": "app-session-expiry",
+          "status": "failed",
+          "reason": "CASE_FAILED",
+          "cleanup": {
+            "required": false,
+            "status": "not-required"
+          },
+          "attempts": 1,
+          "failureLocation": {
+            "line": 1,
+            "column": 585
+          },
+          "assertionsObserved": 2,
+          "specId": "f78da34a9a820bb9cfe8ccc3d093f4c7807a3523920445b0137729e3cb4a0192"
+        }
+      ],
+      "recordsRemaining": 0
+    }
+  },
+  "cleanup": {
+    "scratchStoreRemoved": true,
+    "noRetainedSessionFiles": true,
+    "appStopped": true,
+    "recordsBeforeClose": 0,
+    "finalOwnedPathLiveProcessCount": 0,
+    "finalOwnedPathProcessCheckAt": "2026-10-19T13:16:27.4274291Z"
+  },
+  "limits": [
+    "Four focused installed-runner acceptance scenarios against a generated local app; no coding-agent client was run.",
+    "App-session expiry was enforced by the generated app before broker artifact TTL; this does not prove broker TTL revocation.",
+    "The interrupted run intentionally encountered unavailable app cleanup and retained one journaled owned record until separate recovery.",
+    "Cleanup callback completion alone is not independent proof; this acceptance additionally checked record counts and404.",
+    "The final process check was scoped to this acceptance workspace; it was not a whole-machine process audit.",
+    "The generated app and local acceptance driver are trusted test code. This receipt is not an independent security audit or a claim of test completeness."
+  ],
+  "failure": null,
+  "finalizedAt": "2026-10-19T13:17:26.974Z",
+  "runtime": {
+    "node": "v22.14.0",
+    "playwright": "1.64.0"
+  },
+  "method": {
+    "entrypoint": "node run.private.mjs",
+    "install": "npm install --offline --ignore-scripts --no-audit --no-fund",
+    "installedDependencies": {
+      "@testlane/cli": "exact reviewed 0.7.0-beta.1 tarball",
+      "@playwright/test": "1.64.0"
+    },
+    "runnerCommands": [
+      "node node_modules/@testlane/cli/examples/agent-verification/run.mjs --plan e2e/plan.json --output-dir output/interrupted --json",
+      "node node_modules/@testlane/cli/examples/agent-verification/run.mjs --plan e2e/recover-plan.json --output-dir output/recovery --json",
+      "node node_modules/@testlane/cli/examples/agent-verification/run.mjs --plan e2e/plan.json --output-dir output/fresh --json",
+      "node node_modules/@testlane/cli/examples/agent-verification/run.mjs --plan e2e/expiry-plan.json --output-dir output/expiry --json"
+    ],
+    "cancellation": "Standard runner IPC cancel sent after a create-only owned-record journal existed; no manual forced process termination.",
+    "journal": "Create-only record metadata outside Playwright temporary output; preserved after interrupted run and used only for ownership-checked recovery.",
+    "secretScan": "During the live run, generated plaintext, URI-encoded, base64, base64url and JSON-escaped secret variants were checked against captured child streams, non-dependency consumer files and scratch audit text."
+  },
+  "evidence": {
+    "originalAcceptanceSha256": "6b7162cbbb4c6f42d3334d67ce42685433bfd3d43c530289085b6e2a64c6f0df",
+    "driverSha256": "ca451d9ec8a21d0cc13457c5e18b52b11ab29531b08492d9693f22ab8d86ae78",
+    "reports": {
+      "interrupted": {
+        "sha256": "f589756e8cd5d83078ef7d0ba77219d5ba4cbc262eb2653bd28590a0ba03ce2e",
+        "harness": {
+          "version": "1",
+          "sha256": "3b83aa1ed5ccd7d84d0d4c1cbee21584d1bf05acf9d53a5904a5aeaed5730ba4"
+        },
+        "helper": {
+          "version": "1",
+          "sha256": "df38a0474b32155091d9bba8efcad37605eb62901c0df1cb8eafa112a99d8f51"
+        },
+        "plan": {
+          "sha256": "a9bf91712feeccb925fc26d5c022e7d9bc61070000c0c18f3aa3fc485f9b3344"
+        },
+        "specs": [
+          {
+            "id": "ca7890c198d0b97b4164b11adc9103df90c8854eea2b5711349647102ab62f3b",
+            "sha256": "e331684175bfcd6289a69a028638440724b2586694c893f50ab18cf3cd5fed1f"
+          }
+        ]
+      },
+      "recovery": {
+        "sha256": "14ce62364a84418409cd9144eca489cfb40ccad8b8824441ed45b13da4f8c5ca",
+        "harness": {
+          "version": "1",
+          "sha256": "3b83aa1ed5ccd7d84d0d4c1cbee21584d1bf05acf9d53a5904a5aeaed5730ba4"
+        },
+        "helper": {
+          "version": "1",
+          "sha256": "df38a0474b32155091d9bba8efcad37605eb62901c0df1cb8eafa112a99d8f51"
+        },
+        "plan": {
+          "sha256": "c94e63ff78a941aec8af9b1be47dcd3d5c29b2c0ed1306566f06f429ff72b97f"
+        },
+        "specs": [
+          {
+            "id": "f8523a64afcb045fc1509fdbec4f8e0bf80057c2bd45f5a0ce675a0192ede617",
+            "sha256": "8d734c2d8ddbc9e4ee3bbf8862af11ccefd0dca0ba99fffa161592c9efdb50a3"
+          }
+        ]
+      },
+      "fresh": {
+        "sha256": "5b8b442a6384a81a9ee837cbe1066bbbd043b7fddac418ed4f432796dad2490f",
+        "harness": {
+          "version": "1",
+          "sha256": "3b83aa1ed5ccd7d84d0d4c1cbee21584d1bf05acf9d53a5904a5aeaed5730ba4"
+        },
+        "helper": {
+          "version": "1",
+          "sha256": "df38a0474b32155091d9bba8efcad37605eb62901c0df1cb8eafa112a99d8f51"
+        },
+        "plan": {
+          "sha256": "a9bf91712feeccb925fc26d5c022e7d9bc61070000c0c18f3aa3fc485f9b3344"
+        },
+        "specs": [
+          {
+            "id": "ca7890c198d0b97b4164b11adc9103df90c8854eea2b5711349647102ab62f3b",
+            "sha256": "e331684175bfcd6289a69a028638440724b2586694c893f50ab18cf3cd5fed1f"
+          }
+        ]
+      },
+      "expiry": {
+        "sha256": "4ee7c2416aaedee0a8c86e8274a271d815ad817c7d0bbe7009603ff4a0852f96",
+        "harness": {
+          "version": "1",
+          "sha256": "3b83aa1ed5ccd7d84d0d4c1cbee21584d1bf05acf9d53a5904a5aeaed5730ba4"
+        },
+        "helper": {
+          "version": "1",
+          "sha256": "df38a0474b32155091d9bba8efcad37605eb62901c0df1cb8eafa112a99d8f51"
+        },
+        "plan": {
+          "sha256": "80e8e644fd814bd04c5090ded5539bac3987f1be5a0336c1e8c40337c9453fbb"
+        },
+        "specs": [
+          {
+            "id": "f78da34a9a820bb9cfe8ccc3d093f4c7807a3523920445b0137729e3cb4a0192",
+            "sha256": "463d1d89d1c7cda12ef9f5bf9f8d017da697a21947fad2d33df2de2cba063e6e"
+          }
+        ]
+      }
+    },
+    "journals": {
+      "interrupted": {
+        "sha256": "501a43af4d850defc144cbd1351f7583c26210731eea1fc88ae6bdfd5386ee03"
+      },
+      "fresh": {
+        "sha256": "6720b4fea04a4d33639cca224ad82196da041bedc237bc3e456bca6f5332eae4"
+      }
+    }
+  }
+}

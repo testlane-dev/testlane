@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "recordKind": "reviewed-derivative-client-summary",
+  "verdict": "incomplete",
+  "client": {
+    "name": "Claude Code",
+    "version": "2.1.268"
+  },
+  "artifact": {
+    "name": "@testlane/cli",
+    "version": "0.7.0-beta.1",
+    "sha256": "77ca384a3716c50d40906a27d340c5742aaee466e31c7662b2e77bb3a7c44aba"
+  },
+  "originalReceipts": [
+    {
+      "originalFilename": "live-claude.public.json",
+      "sha256": "54aab76e40cfc5d451c60bbd7bcc14d35acdf530cc4b8d5d8c603baafa098318"
+    },
+    {
+      "originalFilename": "assertion-review.public.json",
+      "sha256": "cc58efc0c5501440b5a9898e7d09eaabe579bba9a578ff22714abfabbd0b2089"
+    }
+  ],
+  "functionalExecution": {
+    "installedActions": [
+      {
+        "action": "init",
+        "exitCode": 0
+      },
+      {
+        "action": "run",
+        "exitCode": 0
+      },
+      {
+        "action": "report",
+        "exitCode": 0
+      }
+    ],
+    "harnessVerdict": "passed",
+    "cases": 6,
+    "assertionsObserved": 105,
+    "positiveRunRecordsRemaining": 0
+  },
+  "controllerConformance": {
+    "zeroDenialGateSatisfied": false,
+    "deniedRequests": 1,
+    "denialCategory": "READONLY_DISCOVERY_STDERR_REDIRECTION_DENIED",
+    "clientContinuedAfterDenial": true
+  },
+  "assertionReview": {
+    "correct4200Oracle": true,
+    "identityAndRoleChecks": true,
+    "explicitResourceIdAndOwnerEqualityAfterDeniedMutation": false,
+    "possibleOwnedIdGapIfCreationHelperThrows": true,
+    "sameTestDefectReplayPerformed": false
+  },
+  "privacy": {
+    "originalSecretVariantScanClear": true,
+    "rawTranscriptIncluded": false,
+    "personalPathsOrEmailsIncluded": false
+  },
+  "limits": [
+    "Functional cases passed, but the fixed controller conformance gate did not; overall acceptance remains incomplete.",
+    "Selected denial/duplicate-state comparisons did not establish equality of every stable public field.",
+    "The positive run cleaned up, but the creation-helper early-assertion cleanup gap was not exercised.",
+    "Final scratch-store disposal/app shutdown and full OS/browser metadata are not established by these two source summaries.",
+    "One generated local app and recorded client configuration; no general client certification or independent security audit."
+  ]
+}

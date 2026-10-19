@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "recordKind": "reviewed-derivative-client-summary",
+  "verdict": "incomplete",
+  "client": {
+    "name": "Claude Code",
+    "version": "2.1.268"
+  },
+  "artifact": {
+    "name": "@testlane/cli",
+    "version": "0.7.0-beta.1",
+    "sha256": "77ca384a3716c50d40906a27d340c5742aaee466e31c7662b2e77bb3a7c44aba"
+  },
+  "originalReceipts": [
+    {
+      "originalFilename": "acceptance.public.json",
+      "sha256": "3f65fa777572b16959f1877df9ffaded651a21bb80125a81b617821e27642e94"
+    }
+  ],
+  "functionalExecution": {
+    "installedActions": [
+      {
+        "action": "init",
+        "exitCode": 0
+      }
+    ],
+    "authoredCaseFiles": 0,
+    "harnessReportRuns": 0,
+    "sameTestDefectReplayPerformed": false
+  },
+  "controllerConformance": {
+    "fixedBeforeClientStarted": true,
+    "literalStderrDiscardAllowed": true,
+    "pipesAndOtherRedirectionsDenied": true,
+    "deniedRequests": 1,
+    "clientStoppedAfterDenial": true,
+    "reason": "READONLY_DISCOVERY_PIPE_BLOCKED"
+  },
+  "cleanup": {
+    "recordsRemaining": 0,
+    "appStopped": true,
+    "scratchStoreRemoved": true,
+    "temporaryFilesRemoved": true
+  },
+  "privacy": {
+    "originalPasswordAndSessionVariantScanClear": true,
+    "rawTranscriptIncluded": false,
+    "personalPathsOrEmailsIncluded": false
+  },
+  "limits": [
+    "Client completed installed init, but authored no cases and executed no verification run or HTML report.",
+    "One discovery pipe was denied under the upfront evaluation policy and the client stopped; acceptance remains incomplete.",
+    "No later retry, relaxed gate or complete Claude workflow acceptance is claimed.",
+    "One generated local app under recorded evaluation settings; not a product failure diagnosis, blanket client certification or independent security audit."
+  ]
+}

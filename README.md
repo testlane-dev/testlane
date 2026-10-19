@@ -23,7 +23,7 @@ first, use the [bundled demo](#try-the-demo).
 
 For feature briefs, agent-written tests and browser/API evidence, follow the
 [verification preview quickstart](docs/agent-verification.md). It uses the opt-in
-0.7.0-beta.1 package; the stable 0.6.0 installation below covers authentication.
+0.7.0-beta.2 package; the stable 0.6.0 installation below covers authentication.
 
 Requires Node 22 or newer. Pre-1.0; no independent security audit yet
 ([security policy](SECURITY.md)).
@@ -157,7 +157,7 @@ For agent-designed checks beyond the two fixed templates, the
 `testlane-verify` skill, a draft workspace initializer and a Playwright execution harness.
 Describe the behavior to your coding agent; it inspects your app and writes the tests.
 The harness maps planned cases to executed results and cleanup, with optional private
-screenshots. Install a reviewed **`0.7.0-beta.1` tarball**, or that exact npm version when
+screenshots. Install a reviewed **`0.7.0-beta.2` tarball**, or that exact npm version when
 available; the intended preview tag is `next`. Stable `latest` stays at 0.6.0 and has no
 `verify` commands. The preview includes the skill and harness without a source clone.
 `verify report` can render a private local HTML summary of the case

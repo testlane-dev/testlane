@@ -1,6 +1,6 @@
 {
   "name": "@testlane/cli",
-  "version": "0.7.0-beta.1",
+  "version": "0.7.0-beta.2",
   "description": "A local credential broker for coding agents: keep stored passwords out of normal agent interactions and issue sessions for approved sandbox and test apps.",
   "keywords": [
     "agents",

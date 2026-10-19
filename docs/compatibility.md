@@ -8,7 +8,27 @@ agent-client verification. A package/browser test does not certify a client vers
 For current artifact evidence, use the matching [GitHub release](https://github.com/testlane-dev/testlane/releases)
 and its exact manifest and proof files. The 0.5.0 observations below and the separate
 0.5.1 candidate proofs are historical evidence; they do not establish verification of
-`@testlane/cli` 0.6.0.
+`@testlane/cli` 0.6.0 or the 0.7 verification preview.
+
+## Verification preview: installed-package acceptance
+
+On 2026-10-19, the following local trials used the exact GitHub prerelease tarball for
+`@testlane/cli@0.7.0-beta.1`, SHA-256
+`77ca384a3716c50d40906a27d340c5742aaee466e31c7662b2e77bb3a7c44aba`.
+Both used Windows, fresh scratch DPAPI stores, and installed package files matched to
+the tarball. They are separate from the historical observations below and from live
+coding-agent client acceptance. See the [reviewed summaries](verification/acceptance-2026-10-19/README.md).
+
+| Trial | Result | Scope |
+| --- | --- | --- |
+| Existing HTML authentication app | Copied quickstart check and installed `verify init` → authored tests → `verify run` → `verify report` passed. Ten observed assertions covered identity, protected content, anonymous denial and logout; cleanup completed. | Immutable [Express auth example](https://github.com/expressjs/express/tree/0dee2c52c7c873498f8ed7d8ee4ddd0a04d3ada8/examples/auth), with explicit generated credential/session configuration, selector adjustments and a read-only JSON identity adapter. The app has no role model; this establishes no role-boundary coverage. |
+| Interruption and owned-record recovery | Cancellation stayed non-passing and reported failed cleanup with one journaled owned record. Separate recovery deleted that exact record and verified 404. A fresh run using the original plan/spec passed. Denied operations were refused and selected status/total/subject checks stayed unchanged; early app-session expiry failed. | Four focused installed-runner scenarios against a generated local app. This checks a separate recovery journal and honest cleanup status, not guaranteed cleanup after any crash or broker TTL revocation. The denial checks did not compare every resource field. |
+
+The owned apps were stopped and scratch stores/session files were removed. The Express
+session store and recovery app's owned-record count were zero at shutdown. Application
+logout/deletion was checked separately from local file removal. These observations cover
+the configured scenarios; they do not certify arbitrary assertions, production apps or
+every coding-agent client.
 
 ## Authentication and browser mechanisms
 
@@ -63,7 +83,7 @@ are checkout-only; consumer fixtures and docs ship in npm.
 
 | Client / mechanism | Tested client version | Status | Reproduction |
 | --- | --- | --- | --- |
-| Claude Code: local stdio MCP, four-tool sandbox sequence | 2.1.268; Windows build 19045, Node 22.14.0 | Verified locally on 2026-10-18 for the configuration below | [Recorded transport check](#recorded-claude-code-transport-check) |
+| Claude Code: local stdio MCP, four-tool sandbox sequence | 2.1.268; Windows build 19045, Node 22.14.0 | Historical Testlane 0.5.0 check recorded on 2026-10-18 | [Recorded transport check](#recorded-claude-code-transport-check) |
 | Claude Code: shell/browser workflow and permission probes | No complete procedure run recorded | Unverified | [Setup](INTEGRATION-CLAUDE-CODE.md), then [acceptance procedure](verification/agent-acceptance.md) |
 | Codex: local stdio MCP plus shell/Playwright use | No live version recorded for this release candidate | Unverified | [Setup](INTEGRATION-CODEX.md), then the same acceptance procedure with Codex observations recorded separately |
 | Other MCP clients and managed browser panes | None recorded | Unverified | Check the client's tool permissions, process environment and artifact-loading mechanism |
@@ -73,6 +93,23 @@ registry/home paths, browser mechanism, date and results when performing accepta
 Keep credentials out of that record. Claude deny-rule observations and Codex approval
 observations are different evidence and must be recorded separately. Passing CLI/MCP
 protocol tests alone does not establish either live client's permission behavior.
+
+### Recorded verification-client trials: 0.7.0-beta.1
+
+These 2026-10-19 trials used the beta.1 tarball identified above, generated local
+accounts and a fixed local controller for installed CLI commands. Functional test
+outcomes and conformance to each trial's client policy are separate observations.
+
+| Client | Observed workflow | Overall trial result |
+| --- | --- | --- |
+| Claude Code 2.1.268 | Independently authored six cases and invoked init/run/report. All six passed with 105 observed assertions and zero records after the positive run. | **Incomplete:** one discovery command was denied by the trial hook. Review also found incomplete ID/owner comparisons and a creation-helper cleanup gap that the positive run did not exercise. See the [functional summary](verification/acceptance-2026-10-19/claude-functional-incomplete.json). |
+| Claude Code 2.1.268, fresh strict trial | Read the skill/app/brief and invoked init; no cases or test report ran. | **Incomplete:** a discovery pipe was denied under the upfront policy and the client stopped. See the [separate summary](verification/acceptance-2026-10-19/claude-discovery-incomplete.json). |
+| Desktop-bundled Codex CLI 0.163.0-alpha.10.2 | Authored five cases with full-state comparisons and early owned-ID journals; invoked init/run/report. The run blocked before case execution, with zero assertions and no app mutations. | **Incomplete:** the beta.1 runner could not start its child in the deep Windows report directory. That launch boundary was reproduced separately and fixed in beta.2; the [original blocked record](verification/acceptance-2026-10-19/codex-beta1-blocked.json) remains unchanged. Use the matching release's evidence for any corrected-artifact rerun. |
+
+These scoped trials do not complete the broader permission-probe procedure above or
+certify every client/model/browser combination. The client-authored tests remain
+reviewable app code. Later successful runs do not change an earlier blocked or
+incomplete verdict.
 
 ## Recorded Claude Code transport check
 
