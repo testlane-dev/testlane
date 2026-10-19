@@ -93,6 +93,14 @@ retain case IDs, counts, fixed diagnostics and cleanup status. They omit actual 
 expected values, exception text, UI hierarchies, screenshots, video and logcat.
 Hashes bind inputs; they do not authenticate arbitrary reports or assess test quality.
 
+The [initial Android evidence](../../docs/mobile-evidence/android-emulator-2026-10-19.public.json)
+and the [shared iOS-change regression](../../docs/verification/native-2026-10-19/android-ios-regression.public.json)
+record separate source revisions and installed package trees. The latter rebuilt the
+APK after the iOS accessibility change and exercised the shared phase cancellation,
+90-second case budgets and controller. It observed five passes, exactly two expected
+fault failures, then five corrected passes, with cleanup and credential scans passing.
+Neither record establishes iOS acceptance or tests the published npm archive.
+
 ## Session and process limits
 
 This **debuggable proof-only APK** consumes a private file under its own Android app

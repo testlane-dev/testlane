@@ -13,6 +13,7 @@ const caps = () => ({ platformName: 'iOS', 'appium:automationName': 'XCUITest', 
 async function fixture() {
   const calls = [], secret = randomBytes(32).toString('base64url');
   let context = 'NATIVE_APP', keyboard = true, shown = true, failClick = false, oversized = false, malformed = false, missing = 0, clearGate;
+  let dismissPending = false, persistKeyboard = false, dismissPolls = 0, keyboardReadHook;
   const server = createServer(async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null;
@@ -22,15 +23,19 @@ async function fixture() {
     else if (request.url.endsWith('/context')) value = context;
     else if (request.url.endsWith('/element')) {
       if (missing-- > 0) { status = 404; value = { error: 'no such element', message: secret }; }
-      else value = { 'element-6066-11e4-a52e-4f735466cecf': 'owned-element' };
+      else value = { 'element-6066-11e4-a52e-4f735466cecf': body?.value === 'dismiss-keyboard' ? 'owned-keyboard-dismiss' : 'owned-element' };
     } else if (request.url.endsWith('/displayed')) value = shown;
     else if (request.url.endsWith('/window/rect')) value = { x: 0, y: 0, width: 400, height: 800 };
     else if (request.url.endsWith('/rect')) value = { x: 10, y: 1000, width: 200, height: 40 };
     else if (request.url.endsWith('/actions')) shown = true;
     else if (request.url.endsWith('/attribute/value')) value = secret;
     else if (request.url.endsWith('/text')) value = 'accessibility-identifier';
-    else if (request.url.endsWith('/is_keyboard_shown')) value = keyboard;
+    else if (request.url.endsWith('/is_keyboard_shown')) {
+      if (dismissPending && !persistKeyboard && ++dismissPolls >= 2) keyboard = false;
+      value = keyboard; keyboardReadHook?.(dismissPending);
+    }
     else if (request.url.endsWith('/hide_keyboard')) keyboard = false;
+    else if (request.url.endsWith('/element/owned-keyboard-dismiss/click')) dismissPending = true;
     else if (request.url.endsWith('/clear') && clearGate) {
       response.once('close', clearGate.closed.resolve); clearGate.entered.resolve(); return;
     }
@@ -43,6 +48,7 @@ async function fixture() {
   return { url: 'http://127.0.0.1:' + server.address().port, calls, secret,
     setContext(value) { context = value; }, offscreen() { shown = false; }, failClick() { failClick = true; }, oversized() { oversized = true; }, missing(value) { missing = value; },
     malformed() { malformed = true; },
+    keepKeyboardShown() { persistKeyboard = true; }, onKeyboardRead(callback) { keyboardReadHook = callback; },
     hangClear() { clearGate = { entered: Promise.withResolvers(), closed: Promise.withResolvers() }; return { entered: clearGate.entered.promise, closed: clearGate.closed.promise }; },
     async close() { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } };
 }
@@ -62,6 +68,60 @@ test('iOS driver uses exact owned Simulator caps, value observations and bounded
     assert.equal(appium.calls.filter(call => call.path.endsWith('/hide_keyboard')).length, 1);
     assert.equal(appium.calls.filter(call => call.method === 'DELETE').length, 1); assert.ok(checks >= appium.calls.length);
     assert.equal(appium.calls.some(call => /screenshot|source|logcat|execute|simctl|shell/.test(call.path)), false);
+  } finally { await appium.close(); }
+});
+
+test('configured app-owned keyboard dismissal clicks exactly once then observes hidden state without the WDA hide command', async () => {
+  const appium = await fixture();
+  try {
+    const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => true, keyboardDismissId: 'dismiss-keyboard' });
+    await driver.hideKeyboard(); await driver.hideKeyboard();
+    assert.equal(appium.calls.filter(call => call.path.endsWith('/element/owned-keyboard-dismiss/click')).length, 1);
+    assert.deepEqual(appium.calls.filter(call => call.path.endsWith('/element')).map(call => call.body.value), ['dismiss-keyboard']);
+    assert.ok(appium.calls.filter(call => call.path.endsWith('/is_keyboard_shown')).length >= 3, 'observe delayed dismissal instead of assuming the click worked');
+    assert.equal(appium.calls.some(call => call.path.endsWith('/hide_keyboard')), false);
+    await driver.close();
+  } finally { await appium.close(); }
+});
+
+test('a keyboard that remains visible fails within its fixed observation budget without replaying the dismissal action', async () => {
+  const appium = await fixture();
+  try {
+    const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => true, keyboardDismissId: 'dismiss-keyboard' });
+    appium.keepKeyboardShown(); const started = Date.now();
+    await assert.rejects(driver.hideKeyboard(), { code: 'NATIVE_DRIVER_TIMEOUT' });
+    assert.ok(Date.now() - started < 6500);
+    assert.equal(appium.calls.filter(call => call.path.endsWith('/element/owned-keyboard-dismiss/click')).length, 1);
+    assert.equal(appium.calls.some(call => call.path.endsWith('/hide_keyboard')), false);
+    await driver.close();
+  } finally { await appium.close(); }
+});
+
+test('keyboard dismissal honors cancellation before any action and during its read-only confirmation', async () => {
+  const appium = await fixture(), run = new AbortController(), body = new AbortController(), alreadyStopped = new AbortController();
+  try {
+    const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => true,
+      signal: run.signal, keyboardDismissId: 'dismiss-keyboard' });
+    alreadyStopped.abort(); const before = appium.calls.length;
+    await assert.rejects(driver.withSignal(alreadyStopped.signal).hideKeyboard(), { code: 'NATIVE_DRIVER_CANCELLED' });
+    assert.equal(appium.calls.length, before);
+    appium.onKeyboardRead(pending => { if (pending) body.abort(); });
+    await assert.rejects(driver.withSignal(body.signal).hideKeyboard(), { code: 'NATIVE_DRIVER_CANCELLED' });
+    assert.equal(run.signal.aborted, false);
+    assert.equal(appium.calls.filter(call => call.path.endsWith('/element/owned-keyboard-dismiss/click')).length, 1);
+    assert.equal(appium.calls.some(call => call.path.endsWith('/hide_keyboard')), false);
+    await driver.close();
+  } finally { await appium.close(); }
+});
+
+test('invalid app-owned keyboard control identifiers are refused before HTTP', async () => {
+  const appium = await fixture();
+  try {
+    for (const keyboardDismissId of ['', 'x'.repeat(161), 'bad\nidentifier', null, {}, 1]) {
+      await assert.rejects(createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => true, keyboardDismissId }),
+        { code: 'NATIVE_DRIVER_CONFIGURATION_INVALID' });
+    }
+    assert.equal(appium.calls.length, 0);
   } finally { await appium.close(); }
 });
 

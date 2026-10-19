@@ -9,8 +9,8 @@ an [iOS Simulator experiment](../examples/ios-verification/README.md), and their
 [synthetic React Native/Expo app](../examples/mobile-approval-app/README.md).
 They use Appium platform drivers, a separate native report contract and an
 app-specific test session bootstrap. Each target needs its own installed-package
-positive/fault/corrected proof. The iOS implementation and policy tests do not
-establish a successful macOS build or native run. This work is separate from the
+positive/fault/corrected proof. The hosted Mac has compiled the iOS Simulator app;
+the full native run and cleanup still need to pass. This work is separate from the
 published web CLI and the broader roadmap below.
 
 The intended workflow stays the same: describe a feature to an existing coding agent,
@@ -37,6 +37,13 @@ revision and detect changes during execution.
 | --- | --- | --- |
 | React Native/Expo on Android | A pinned test build, Android SDK, emulator and platform driver | Unreleased synthetic emulator proof; see its recipe and limits |
 | React Native/Expo on iOS | A pinned Simulator Release build without Apple signing credentials, macOS, Xcode, iOS Simulator and XCUITest | Unreleased implementation; hosted macOS proof and cleanup must pass independently of Android |
+
+The [Android regression evidence](verification/native-2026-10-19/android-ios-regression.public.json)
+binds the shared cancellation/controller changes and rebuilt app to an installed
+source package. Its five passes → two expected injected failures → five passes
+included independent cleanup and credential scans. These are prewritten cases for
+one synthetic app; the record does not establish general mobile or agent-authoring
+support.
 
 The first proof must cover:
 

@@ -25,7 +25,7 @@ function ownedPaths(caps) {
   return path.posix.basename(devices) === 'devices' && derived === path.posix.join(root, 'derived-data') &&
     /^tld-ios-[A-Za-z0-9]+$/.test(path.posix.basename(root));
 }
-export async function createNativeDriver({ url, capabilities: supplied, signal, assertOwned } = {}) {
+export async function createNativeDriver({ url, capabilities: supplied, signal, assertOwned, keyboardDismissId } = {}) {
   let origin, capabilities;
   try {
     origin = loopbackOrigin(url);
@@ -37,7 +37,8 @@ export async function createNativeDriver({ url, capabilities: supplied, signal, 
       supplied['appium:wdaBindingIP'] !== '127.0.0.1' || supplied['appium:wdaBaseUrl'] !== 'http://127.0.0.1' ||
       !['appium:skipLogCapture', 'appium:disableAutomaticScreenshots', 'appium:noReset'].every(key => supplied[key] === true) ||
       !['appium:showIOSLog', 'appium:showXcodeLog', 'appium:printPageSourceOnFindFailure', 'appium:shutdownOtherSimulators', 'appium:resetLocationService'].every(key => supplied[key] === false) ||
-      Object.keys(supplied).some(key => !requiredCaps.includes(key) && !optionalCaps.includes(key)) || typeof assertOwned !== 'function') throw new Error();
+      Object.keys(supplied).some(key => !requiredCaps.includes(key) && !optionalCaps.includes(key)) || typeof assertOwned !== 'function' ||
+      (keyboardDismissId !== undefined && !identifier(keyboardDismissId))) throw new Error();
     for (const key of ['appium:deviceName', 'appium:platformVersion']) if (supplied[key] !== undefined && !identifier(supplied[key])) throw new Error();
     for (const key of ['appium:newCommandTimeout', 'appium:waitForIdleTimeout', 'appium:wdaLaunchTimeout', 'appium:wdaConnectionTimeout']) {
       if (supplied[key] !== undefined && (!Number.isFinite(supplied[key]) || supplied[key] < 0 || supplied[key] > 240_000)) throw new Error();
@@ -150,9 +151,22 @@ export async function createNativeDriver({ url, capabilities: supplied, signal, 
     },
     async hideKeyboard(activeSignal = signal) {
       if (closed) throw fail('NATIVE_DRIVER_SESSION_INVALID'); await nativeContext(activeSignal);
-      const shown = (await request('GET', route('/appium/device/is_keyboard_shown'), undefined, activeSignal)).value;
-      if (shown !== true && shown !== false) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
-      if (shown) await request('POST', route('/appium/device/hide_keyboard'), {}, activeSignal);
+      const isShown = async (timeoutMs = 5000) => {
+        const shown = (await request('GET', route('/appium/device/is_keyboard_shown'), undefined, activeSignal, timeoutMs)).value;
+        if (shown !== true && shown !== false) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
+        return shown;
+      };
+      if (!await isShown()) return;
+      // An iPhone number pad has no system Done key. Use only the explicitly
+      // configured app-owned control; issue that action once, then observe.
+      if (keyboardDismissId !== undefined) await actions.click(keyboardDismissId, activeSignal);
+      else await request('POST', route('/appium/device/hide_keyboard'), {}, activeSignal);
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        if (!await isShown(Math.max(1, deadline - Date.now()))) return;
+        await waitDriverSignal(Math.min(100, Math.max(0, deadline - Date.now())), activeSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
+      }
+      throw fail('NATIVE_DRIVER_TIMEOUT');
     },
     async close() { if (!closed) { await request('DELETE', route(''), undefined, null); closed = true; } },
   };

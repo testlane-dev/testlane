@@ -62,6 +62,9 @@ It adds a separate `app.ios.config.cjs` and reviewed iOS config plugin. Android'
 configuration stays separate. On iOS, the shared value controls expose their actual
 text through `accessibilityValue`, while stable test IDs identify the controls.
 Android keeps its original exact accessibility descriptions and native text.
+An iOS-only input accessory provides an accessible Done control that dismisses
+both numeric and ordinary keyboards. The proof uses that app-owned control and
+checks dismissal before continuing with the form.
 
 Build on macOS with supported Node, **Xcode 26.4+**, an iOS Simulator SDK 26.4+,
 and an already installed CocoaPods executable. The selected Xcode must have its

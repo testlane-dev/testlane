@@ -68,7 +68,7 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
     const result=await runProofPhases({consumer,app,device,plan,cookies,identities,output,before,runWorker:runNativeWorker,sanitize:sanitizeNativeReport,signal,
       workerTimeoutMs:NATIVE_PROOF_BUDGETS.workerMs,onStage:at,onCaptured:value=>{captured+=value;},onWorkerRisk:()=>{workerUnconfirmed=true;},
       assertBuildUnchanged:async()=>{assert.equal((await hashIosTree(appRoot)).sha256,appTree.sha256);assert.equal(sha(await readFile(manifestFile)),sha(manifestBytes));},
-      driverOptions:{url:device.serverUrl,capabilities:{platformName:'iOS','appium:automationName':'XCUITest','appium:udid':device.udid,'appium:bundleId':BUNDLE,
+      driverOptions:{url:device.serverUrl,keyboardDismissId:'dismiss-keyboard',capabilities:{platformName:'iOS','appium:automationName':'XCUITest','appium:udid':device.udid,'appium:bundleId':BUNDLE,
         'appium:simulatorDevicesSetPath':device.deviceSetPath,'appium:derivedDataPath':device.derivedDataPath,'appium:wdaLocalPort':device.wdaPort,
         'appium:wdaRemotePort':device.wdaPort,'appium:wdaBindingIP':'127.0.0.1','appium:wdaBaseUrl':'http://127.0.0.1','appium:mjpegServerPort':device.mjpegPort,
         'appium:skipLogCapture':true,'appium:showIOSLog':false,'appium:showXcodeLog':false,'appium:printPageSourceOnFindFailure':false,

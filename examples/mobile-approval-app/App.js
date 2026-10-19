@@ -1,11 +1,12 @@
 import React, { useRef, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { InputAccessoryView, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import { consumeBootstrap } from './bootstrap.mjs';
 
 function Value({ id, children }) { return <Text accessible testID={id} accessibilityLabel={id} accessibilityValue={Platform.OS === 'ios' ? { text: String(children ?? '-') } : undefined} style={styles.value}>{String(children ?? '-')}</Text>; }
 function Action({ id, title, onPress, disabled }) { return <Pressable testID={id} accessibilityLabel={id} accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.button, disabled && styles.disabled]}><Text style={styles.buttonText}>{title}</Text></Pressable>; }
-function Input({ id, value, onChangeText, label, numeric }) { return <View style={styles.inputBox}><Text style={styles.label}>{label}</Text><TextInput testID={id} accessibilityLabel={id} value={value} onChangeText={onChangeText} keyboardType={numeric ? 'number-pad' : 'default'} autoCapitalize="none" autoCorrect={false} style={styles.input}/></View>; }
+const KEYBOARD_ACCESSORY_ID = 'proof-keyboard-accessory';
+function Input({ id, value, onChangeText, label, numeric }) { return <View style={styles.inputBox}><Text style={styles.label}>{label}</Text><TextInput testID={id} accessibilityLabel={id} value={value} onChangeText={onChangeText} keyboardType={numeric ? 'number-pad' : 'default'} inputAccessoryViewID={Platform.OS === 'ios' ? KEYBOARD_ACCESSORY_ID : undefined} autoCapitalize="none" autoCorrect={false} style={styles.input}/></View>; }
 function Field({ name, value }) { return <View style={styles.field}><Text style={styles.label}>{name}</Text><Value id={'request-' + name}>{value}</Value></View>; }
 
 export default function App() {
@@ -57,8 +58,8 @@ export default function App() {
       setOperation('HTTP_' + result.status);
     });
   }
-  return <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-    <Text style={styles.heading}>Approval sandbox</Text><Text style={styles.subtitle}>Synthetic Android proof · local generated accounts only</Text>
+  return <><ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+    <Text style={styles.heading}>Approval sandbox</Text><Text style={styles.subtitle}>Synthetic {Platform.OS === 'ios' ? 'iOS Simulator' : 'Android'} proof · local generated accounts only</Text>
     <View style={styles.row}><Action id="load-session" title="Load sandbox session" onPress={loadSession} disabled={busy}/><Action id="sign-out" title="Sign out" onPress={signOut} disabled={busy}/></View>
     <View style={styles.row}><Value id="identity-email">{identity?.email}</Value><Value id="identity-role">{identity?.role}</Value></View>
     <View style={styles.row}><Value id="session-status">{sessionStatus}</Value><Value id="api-status">{apiStatus}</Value><Value id="operation-status">{operation}</Value></View>
@@ -79,10 +80,14 @@ export default function App() {
     <Action id="anonymous-check" title="Check anonymous access" disabled={busy || !connection?.origin} onPress={() => perform(async () => {
       const result = await api('/api/requests', { anonymous: true }); setOperation('ANONYMOUS_HTTP_' + result.status);
     })}/>
-  </ScrollView>;
+  </ScrollView>
+    {Platform.OS === 'ios' && <InputAccessoryView nativeID={KEYBOARD_ACCESSORY_ID}>
+      <View style={styles.accessory}><Action id="dismiss-keyboard" title="Done" onPress={Keyboard.dismiss}/></View>
+    </InputAccessoryView>}
+  </>;
 }
 const styles = StyleSheet.create({ screen: { flex: 1, backgroundColor: '#eef3fa' }, content: { padding: 16, paddingTop: 40, paddingBottom: 40, gap: 8 },
   heading: { fontSize: 23, fontWeight: '700', color: '#142b4a' }, subtitle: { fontSize: 11, color: '#465b75' }, row: { flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
   button: { backgroundColor: '#235ba8', borderRadius: 6, minHeight: 42, justifyContent: 'center', paddingHorizontal: 12 }, buttonText: { color: 'white', fontSize: 12, fontWeight: '600' }, disabled: { opacity: 0.45 },
   label: { fontSize: 10, color: '#44536a' }, value: { fontSize: 11, color: '#142b4a', paddingVertical: 2 }, inputBox: { flexGrow: 1, minWidth: 80 },
-  input: { borderWidth: 1, borderColor: '#a9b9d0', backgroundColor: 'white', minHeight: 40, paddingHorizontal: 8, borderRadius: 5, fontSize: 12 }, fields: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, field: { width: '47%', borderBottomWidth: 1, borderBottomColor: '#d2dcea', paddingVertical: 3 } });
+  input: { borderWidth: 1, borderColor: '#a9b9d0', backgroundColor: 'white', minHeight: 40, paddingHorizontal: 8, borderRadius: 5, fontSize: 12 }, accessory: { flexDirection: 'row', justifyContent: 'flex-end', padding: 8, backgroundColor: '#eef3fa' }, fields: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, field: { width: '47%', borderBottomWidth: 1, borderBottomColor: '#d2dcea', paddingVertical: 3 } });

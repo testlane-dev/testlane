@@ -118,6 +118,11 @@ files, symlinks and paths outside that container are refused. The app deletes th
 file before parsing or accepting its contents and keeps the cookie in memory.
 After identity is ready, the controller independently checks file absence.
 
+The test app provides an iOS input accessory with an explicit keyboard dismissal
+control. The driver activates that configured control once and observes that the
+keyboard disappears; it does not assume an iPhone number pad has a system Done key
+or ignore a failed dismissal. This is part of the synthetic app's UI contract.
+
 Passwords and cookies are not typed into native controls, placed in launch arguments
 or environment variables, or sent to WebDriverAgent. Live sessions remain available
 to trusted app/test code and the same OS user; this is not a credential sandbox.
