@@ -40,8 +40,10 @@ We are focusing on teams that use coding agents to build applications with roles
 approvals and persistent business data. The aim is a complete workflow: tests the
 team owns, exact browser and API assertions, and verified removal of test records.
 The next milestone adds a reproducible approval example, useful failure diagnostics
-and an installed-package acceptance gate. Native Android and iOS testing is a planned
-track; the current release runs web tests with Playwright.
+and an installed-package acceptance gate. The unreleased checkout also has an
+[experimental Android emulator proof](examples/android-verification/README.md) for a
+synthetic React Native/Expo app. General native support and iOS remain planned; the
+current published release runs web tests with Playwright.
 
 See the [prioritized roadmap](docs/roadmap.md) and
 [native mobile proposal](docs/mobile-testing.md) for scope and release criteria.

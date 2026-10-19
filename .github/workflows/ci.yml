@@ -82,6 +82,9 @@ jobs:
       - name: Release artifact integrity contracts
         run: node --test scripts/release-artifact.test.mjs
 
+      - name: Native Android contracts, ownership and worker bounds
+        run: npm run test:android
+
       - run: npx vitest run --reporter=default
         env:
           # Never let a runner touch a real ~/.testlane (runner context is step-level only).

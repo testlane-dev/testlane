@@ -47,10 +47,13 @@ agent-authoring trials remain a separate acceptance requirement.
 
 ## Native mobile track
 
-Native Android and iOS are planned. Mobile web viewports and native app execution
+An experimental Android emulator proof is in development; general Android and iOS
+support remain planned. Mobile web viewports and native app execution
 are different capabilities; the current verification runner uses Playwright and
 does not drive native applications. See the [mobile support proposal](mobile-testing.md)
-for the first proof, runner evaluation and release requirements.
+for the first proof, runner evaluation and release requirements. The
+[Android recipe](../examples/android-verification/README.md) describes the synthetic
+Expo build, native cases, credential path and limits separately from published support.
 
 The first mobile milestone targets React Native/Expo and should complete the same
 approval workflow in an Android emulator. iOS simulator coverage follows on a Mac.

@@ -8,6 +8,10 @@ what to do about it in [docs/upgrading.md](docs/upgrading.md).
 
 ### Added
 
+- An experimental React Native/Expo Android emulator proof with pinned Appium and
+  UiAutomator2 tooling, an embedded test-only APK, native/API business checks, owned
+  device isolation and bounded worker execution. It is separate from Playwright;
+  iOS and general existing-app native integration remain planned.
 - A public, disposable request approval example with app-owned Playwright tests for
   exact saved totals, editor/reviewer authorization, duplicate approval, anonymous
   denial and verified cleanup. Its unchanged suite detects an injected one-cent defect.

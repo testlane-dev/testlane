@@ -1,8 +1,14 @@
-# Native mobile testing proposal
+# Native mobile testing
 
 Native Android and iOS testing is planned work. Testlane 0.7.0-beta.2 verifies web
 applications with Playwright; it has no native app runner, device manager or native
 session bootstrap. Changing a browser viewport does not verify a native app.
+
+The unreleased checkout now includes an [Android emulator experiment](../examples/android-verification/README.md)
+and its [synthetic React Native/Expo app](../examples/mobile-approval-app/README.md).
+It uses Appium/UiAutomator2, a separate native report contract and a test-only session
+bootstrap. Run its installed-package positive/fault/corrected proof before relying
+on it. This is separate from the published web CLI and the broader roadmap below.
 
 The intended workflow stays the same: describe a feature to an existing coding agent,
 review app-owned tests, run them against a dedicated test environment, and inspect
@@ -26,7 +32,7 @@ revision and detect changes during execution.
 
 | First target | Required environment | Acceptance status |
 | --- | --- | --- |
-| React Native/Expo on Android | A pinned test build, Android SDK, emulator and platform driver | Planned; no native device proof published |
+| React Native/Expo on Android | A pinned test build, Android SDK, emulator and platform driver | Unreleased synthetic emulator proof; see its recipe and limits |
 | React Native/Expo on iOS | A pinned simulator build, macOS, Xcode, iOS Simulator and platform driver | Planned; must be validated independently of Android |
 
 The first proof must cover:
@@ -96,5 +102,5 @@ simulator and the intended credential path. Test cancellation, a failed assertio
 setup failure, duplicate or skipped cases, recovery and secret-leak checks as well as
 the successful workflow.
 
-Until that gate passes, native support remains a proposal. Current supported behavior
+Until that gate passes for a target, general native support remains planned. Current supported behavior
 and scoped acceptance results stay in [compatibility.md](compatibility.md).
