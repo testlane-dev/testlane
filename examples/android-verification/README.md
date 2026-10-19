@@ -100,6 +100,9 @@ APK after the iOS accessibility change and exercised the shared phase cancellati
 90-second case budgets and controller. It observed five passes, exactly two expected
 fault failures, then five corrected passes, with cleanup and credential scans passing.
 Neither record establishes iOS acceptance or tests the published npm archive.
+The subsequent [keyboard regression](../../docs/verification/native-2026-10-19/android-keyboard-regression.public.json)
+repeated the same required outcomes and cleanup checks after adding the iOS-only
+Done accessory to the shared app source.
 
 ## Session and process limits
 

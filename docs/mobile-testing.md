@@ -38,8 +38,8 @@ revision and detect changes during execution.
 | React Native/Expo on Android | A pinned test build, Android SDK, emulator and platform driver | Unreleased synthetic emulator proof; see its recipe and limits |
 | React Native/Expo on iOS | A pinned Simulator Release build without Apple signing credentials, macOS, Xcode, iOS Simulator and XCUITest | Unreleased implementation; hosted macOS proof and cleanup must pass independently of Android |
 
-The [Android regression evidence](verification/native-2026-10-19/android-ios-regression.public.json)
-binds the shared cancellation/controller changes and rebuilt app to an installed
+The [latest Android regression evidence](verification/native-2026-10-19/android-keyboard-regression.public.json)
+binds the shared cancellation/controller changes and rebuilt keyboard-accessory app to an installed
 source package. Its five passes → two expected injected failures → five passes
 included independent cleanup and credential scans. These are prewritten cases for
 one synthetic app; the record does not establish general mobile or agent-authoring

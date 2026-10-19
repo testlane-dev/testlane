@@ -107,8 +107,9 @@ async function stop(state) {
 }
 
 /** Requires installed Xcode/runtime and explicit pinned tooling; downloads nothing. */
-export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = () => {}, runtimeId, deviceType } = {}) {
+export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = () => {}, runtimeId, deviceType, diagnostics = false } = {}) {
   if (process.platform !== 'darwin') throw fail('IOS_MACOS_REQUIRED');
+  if (typeof diagnostics !== 'boolean') throw fail('IOS_DEVICE_INPUT_INVALID');
   if (![toolsRoot, outputDir].every(safePath)) throw fail('IOS_DEVICE_INPUT_INVALID');
   if (signal?.aborted) throw fail('IOS_CANCELLED');
   let tools;
@@ -344,7 +345,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     const manifest = new Manifest(appiumHome); await manifest.read(); manifest.addExtensionFromPackage(driverPackage, path.join(driverRoot, 'package.json'), 'local'); await manifest.write();
     live();
     appium = launch(process.execPath, [path.join(appiumRoot, 'index.js'), '--address', '127.0.0.1', '--port', String(appiumPort), '--base-path', '/',
-      '--log-level', 'error', '--log-no-colors', '--use-drivers', 'xcuitest'], { cwd: root, env, capture });
+      '--log-level', diagnostics ? 'debug' : 'error', '--log-no-colors', '--use-drivers', 'xcuitest'], { cwd: root, env, capture });
     if (!await appium.started) throw fail('IOS_APPIUM_START_FAILED');
     appium.child.stdin.end(); marker.appiumPid = appium.pid; await writeMarker();
     const serverUrl = 'http://127.0.0.1:' + appiumPort + '/', deadline = Date.now() + 45000;

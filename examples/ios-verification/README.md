@@ -40,10 +40,11 @@ certificate, provisioning profile, Expo account or human test account is needed.
 ## Run the hosted proof
 
 Use the repository's [iOS Simulator workflow](../../.github/workflows/ios-simulator-proof.yml).
-It inspects prerequisites before creating accounts or sessions, runs the policy
-tests, verifies and removes a new owned Simulator, builds the Simulator app without
-Apple signing credentials, then runs the installed-package proof on another new
-Simulator. Ordinary
+It inspects prerequisites, runs the policy tests and builds the Simulator app without
+Apple signing credentials. A credential-free diagnostic then creates a new owned
+Simulator, installs the app, opens one WebDriverAgent session, verifies `NATIVE_APP`
+and removes that session and Simulator. Only after that passes does the
+installed-package proof create credentials and use another new Simulator. Ordinary
 `npm run test:mobile` executes unit/control tests without starting a device.
 
 The equivalent commands below belong in that opted-in ephemeral hosted job, from
@@ -59,8 +60,8 @@ node scripts/ios-preflight.mjs output/ios-preflight.json
 proof_root="$(cd "$RUNNER_TEMP" && pwd -P)/testlane-ios-$$"
 mkdir "$proof_root"
 npm --prefix examples/ios-verification/tools run setup -- --output-dir "$proof_root/tools"
-node scripts/ios-device-preflight.mjs --tools-root "$proof_root/tools" --output-dir "$GITHUB_WORKSPACE/output/ios-device-preflight"
 npm run build:ios-proof -- --output-dir "$proof_root/build"
+TESTLANE_IOS_PROOF_CI=1 node scripts/ios-wda-preflight.mjs --app "$proof_root/build/TestlaneIOSProof.app" --tools-root "$proof_root/tools" --output-dir "$GITHUB_WORKSPACE/output/ios-wda-preflight"
 TESTLANE_IOS_PROOF_CI=1 npm run proof:ios -- --app "$proof_root/build/TestlaneIOSProof.app" --tools-root "$proof_root/tools" --output-dir "$GITHUB_WORKSPACE/output/ios-proof"
 ```
 
@@ -163,10 +164,17 @@ logs. Temporary driver text stays bounded in memory and is checked for generated
 credential variants. Uncertain teardown fails the proof and retains private recovery
 metadata; failure output must be reviewed before sharing.
 
-The workflow uploads selected sanitized evidence after success. Failures retain only
+The workflow uploads selected sanitized evidence after success. Credential-backed
+proof failures retain only
 fixed stages/error codes and native reports that pass schema validation again.
-Compilation and device-startup logs may be retained only before a backend, broker
-or session exists. The workflow does not upload
+Compilation and credential-free WDA diagnostics may be retained only before an
+application backend, broker, credential or application session exists. The WDA
+diagnostic checks the compiled app against its manifest and seven public source
+inputs; it opens a native automation session without signing in or exercising the
+business workflow. On failure, its bounded `preauth-wda.log` can include Appium and
+Xcode startup details. Only `status.json` and that log are uploaded; uncertain
+cleanup recovery paths stay private. This readiness check does not establish that
+the authenticated cases pass. The workflow does not upload
 post-authentication driver logs, keychain homes or failure directories. Hashes bind reviewed inputs;
 they do not authenticate arbitrary reports or establish assertion quality.
 
