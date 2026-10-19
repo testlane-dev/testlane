@@ -19,7 +19,7 @@ const runId = "b4b5ecaf-9108-44f3-bc61-c07ba480207f";
 const filename = "screenshot-1b84ce6c-efc0-43c0-b936-88d5d059ce07.png";
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZkbwAAAAASUVORK5CYII=", "base64");
 const roots: string[] = [];
-type Row = { id: string; status: string; reason: string; cleanup: { required: boolean; status: string }; attempts: number; assertionsObserved?: number; specId?: string };
+type Row = { id: string; status: string; reason: string; cleanup: { required: boolean; status: string }; attempts: number; assertionsObserved?: number; specId?: string; failureLocation?: { line: number; column: number } | null };
 type Artifact = { kind: string; path: string; caseId: string; size: number; sha256: string; private: boolean; review: string };
 
 async function fixture({ screenshot = false, malicious = false } = {}) {
@@ -96,6 +96,52 @@ describe("private static verification report", () => {
     await fs.appendFile(item.planFile, " ");
     await expect(renderVerificationReport(item)).rejects.toThrow("PLAN_HASH_MISMATCH");
     await expect(fs.stat(path.join(item.directory, "summary.html"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("shows only fixed numeric spec coordinates for a bound failed case", async () => {
+    const item = await fixture();
+    item.report.verdict = "failed";
+    item.report.execution.exitCode = 1;
+    Object.assign(item.report.cases[0]!, { status: "failed", reason: "CASE_FAILED", failureLocation: { line: 42, column: 7 } });
+    await item.saveReport();
+    await renderVerificationReport(item);
+    const html = await fs.readFile(path.join(item.directory, "summary.html"), "utf8");
+    expect(html).toContain("Spec line 42, column 7");
+    expect(html).not.toContain("notes.spec.mjs");
+  });
+
+  it("accepts an explicit null failure location and old reports without the field", async () => {
+    const item = await fixture();
+    item.report.cases[0]!.failureLocation = null;
+    await item.saveReport();
+    await renderVerificationReport(item);
+    expect(await fs.readFile(path.join(item.directory, "summary.html"), "utf8")).not.toContain("Spec line");
+  });
+
+  it.each([
+    { line: 0, column: 1 }, { line: 1, column: 1000001 }, { line: 1.5, column: 1 },
+    { line: -1, column: 1 }, { line: "<script>alert(1)</script>", column: 1 },
+    { line: 1, column: 1, file: "private-source.mjs" }, { line: 1, column: 1, message: "<img src=x onerror=alert(1)>" },
+    { line: 1 }, [], "<script>alert(1)</script>",
+  ])("rejects invalid or freeform failure-location data: %j", async failureLocation => {
+    const item = await fixture();
+    item.report.verdict = "failed";
+    item.report.execution.exitCode = 1;
+    Object.assign(item.report.cases[0]!, { status: "failed", reason: "CASE_FAILED", failureLocation });
+    await item.saveReport();
+    await expect(renderVerificationReport(item)).rejects.toThrow("REPORT_INVALID");
+    await expect(fs.stat(path.join(item.directory, "summary.html"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["passed", "missing-spec", "no-observed-assertion"])("rejects failure coordinates without applicable failed-case evidence: %s", async state => {
+    const item = await fixture();
+    const row = item.report.cases[0]!;
+    row.failureLocation = { line: 1, column: 1 };
+    if (state !== "passed") { item.report.verdict = "failed"; row.status = "failed"; row.reason = "CASE_FAILED"; item.report.execution.exitCode = 1; }
+    if (state === "missing-spec") delete row.specId;
+    if (state === "no-observed-assertion") row.assertionsObserved = 0;
+    await item.saveReport();
+    await expect(renderVerificationReport(item)).rejects.toThrow("REPORT_INVALID");
   });
 
   it("escapes malicious planned titles, expectations and cleanup descriptions", async () => {

@@ -1,27 +1,29 @@
-# Source verification harness contract
+# Verification harness contract
 
-Use a reviewed `0.7.0-dev.0` source-preview checkout containing `examples/agent-verification/`. The harness is a local runner for app-owned Playwright specs, not an LLM service, browser agent or test generator. The published `@testlane/cli@0.6.0` broker remains usable for fixture authentication, but does not contain this skill or harness.
+Use the opt-in `@testlane/cli@0.7.0-beta.1` preview from a reviewed tarball, or that exact npm version when available. The package contains the broker, skill, fixture and harness; no source clone is required. Its intended dist-tag is `next`; stable 0.6.0 has no `verify` commands. The harness is a local runner for app-owned Playwright specs, not an LLM service, browser agent or test generator.
 
-## Start from a new source scaffold, or preserve an existing suite
+## Start from a new scaffold, or preserve an existing suite
 
-If the source checkout has been built, initialize from the app directory with:
+After [package and skill setup](https://github.com/testlane-dev/testlane/blob/main/docs/agent-verification.md), initialize from the app directory with:
 
 ```sh
-node /absolute/testlane-source/dist/cli.js verify init --brief output/feature-brief.md --target http://127.0.0.1:3000 --profile notes:testing:writer --environment testing --output-dir e2e/testlane-verification --json
+npx --no-install testlane verify init --brief output/feature-brief.md --target http://127.0.0.1:3000 --profile notes:testing:writer --environment testing --output-dir e2e/testlane-verification --json
 ```
 
 Use a local ignored UTF-8 brief file and actual approved values. Init refuses an existing suite directory; it writes `plan.json`, ignored `brief.md`, fixture/helper copies, `test.mjs` with an initial `qa` role alias, and a deliberately skipped spec. It does no authentication or account/registry/vault changes. Replace the scaffold with app-specific cases and assertions, adapt only the app test configuration to existing role mappings, and mark the plan `reviewed` after coverage/scope review. The scaffold alone must not pass. If a reviewed suite already exists, adapt it rather than running init over it.
 
 ## App-owned files
 
-Keep the app's Playwright dependency and normal credential setup. Copy the existing `examples/playwright/fixtures.mjs` from the installed package or reviewed source. Copy source `examples/agent-verification/authoring.mjs` **verbatim** alongside it as `testlane-authoring.mjs`. The helper is self-contained and uses Node built-ins. The report binds its version and source hash; do not alter it to turn failed cleanup or assertions into success.
+Keep the app's Playwright dependency and human-seeded profile/store setup. Init copies the bundled fixture and helper for you. For manual setup, copy `node_modules/@testlane/cli/examples/playwright/fixtures.mjs` and copy `node_modules/@testlane/cli/examples/agent-verification/authoring.mjs` **verbatim** alongside it as `testlane-authoring.mjs`. The helper is self-contained and uses Node built-ins. The report binds its version and source hash; use the helper from the runner version you execute and do not alter it to turn failed cleanup or assertions into success.
+
+Preserve init's suite-local `.gitattributes` rule `testlane-authoring.mjs text eol=lf`. For a manually copied suite, add the same rule to that suite's `.gitattributes`, retaining existing rules, so Windows Git checkout preserves the helper hash.
 
 A useful layout is:
 
 ```text
 e2e/testlane/
   fixtures.mjs             # reviewed existing fixture
-  testlane-authoring.mjs    # verbatim source helper
+  testlane-authoring.mjs    # verbatim package helper
   test.mjs                 # app-owned fixture configuration/exports
   feature.spec.mjs         # agent-written assertions for this brief
   verification.plan.json   # reviewed case inventory
@@ -93,25 +95,27 @@ Do not use skips, expected-failure declarations, retries or duplicate/missing ID
 
 `captureScreenshot(testInfo, page, label)` is available from the same helper only when the plan sets `evidence.screenshots` to `manual` and the user's evidence scope permits it. Use a static label of at most 48 lowercase letters/digits/hyphens, starting with a letter or digit; do not put account/record contents into it. Filenames are random, not derived from the label. Capture only inside an active `runCase`, with at most five screenshots per case. Default is `off`. Screenshots are private, unreviewed binary output, can contain app data or credentials and are not redacted by the harness. No trace/video recording is added by this option.
 
-## Run from source
+## Run the installed preview
 
-For the initialized layout, use the source-built CLI from the app directory:
+For the initialized layout, use the project-local CLI from the app directory:
 
 ```sh
-node /absolute/testlane-source/dist/cli.js verify run --plan e2e/testlane-verification/plan.json --output-dir output/testlane-verification --json
+npx --no-install testlane verify run --plan e2e/testlane-verification/plan.json --output-dir output/testlane-verification --json
 ```
 
-Approved global `--profiles`/`--requester` options precede `verify` if needed. Init's `--output-dir` creates a suite; run's option chooses private report output. Both source CLI commands require a source build and are absent from published 0.6.0.
+Approved global `--profiles`/`--requester` options precede `verify` if needed. Init's `--output-dir` creates a suite; run's option chooses private report output. The direct Node alternative for any CLI command is `node ./node_modules/@testlane/cli/dist/cli.js verify ...`, including in PowerShell without changing script policy.
 
 The direct harness is equivalent. For the manual layout above, from the app working directory:
 
 ```sh
-node /absolute/testlane-source/examples/agent-verification/run.mjs --plan e2e/testlane/verification.plan.json --output-dir output/testlane-verification --json
+node ./node_modules/@testlane/cli/examples/agent-verification/run.mjs --plan e2e/testlane/verification.plan.json --output-dir output/testlane-verification --json
 ```
 
-The same Node argv works in PowerShell with a forward-slash Windows source path. Use the existing installed broker; this command does not fetch a CLI, start an embedded model, edit profiles or seed passwords. Start the approved app using its normal project instructions before the run.
+The same Node argv works in PowerShell. The command uses the installed broker and does not fetch a CLI, start an embedded model, edit profiles or seed passwords. Start the approved app using its normal project instructions before the run. For development from a reviewed source checkout, follow the [optional build recipe](https://github.com/testlane-dev/testlane/blob/main/docs/agent-verification.md#optional-build-from-source); the source runner uses this same contract.
 
 Reports use a unique `run-<id>/` output directory. The printed `reportPath` is relative to the selected output root, for example `run-<id>/report.json`. They record static case IDs/status/reason codes, attempts, `assertionsObserved`, cleanup outcomes, plan/spec hashes, helper/harness versions and a relative artifact inventory. Freeform titles/expectations, target URLs, raw test errors and stdout are excluded from the machine report. Keep the plan and authored tests for interpreting those IDs. The artifacts and app-controlled code remain trusted local material; report sanitization is not a security boundary for a hostile test.
+
+When present, `failureLocation: {"line": N, "column": M}` identifies the first valid failed Playwright `expect` location in that case's exact planned spec; both numbers are integers from 1 to 1,000,000. Unavailable or ambiguous locations are `null`, and older reports may omit the field. It contains no path, message, title or value. Use the report's bound `specId` and unchanged spec hash to find the source; helper/imported-file locations are not retained. Observed failed expects prevent a pass even when test code catches their exception.
 
 ## Retained evidence and recovery
 
@@ -119,10 +123,10 @@ Reports use a unique `run-<id>/` output directory. The printed `reportPath` is r
 
 If a partial mutation might need manual cleanup, immediately create a minimal journal in a separate ignored app-owned directory with the case/run marker and owned record identifier. Do not use Playwright's temporary output or the harness artifact directory. Keep credentials/raw responses out, keep the journal private, and list it in the handoff. The harness does not ingest or retain arbitrary observation/recovery files.
 
-An optional source-built command renders a readable local summary:
+An optional installed command renders a readable local summary:
 
 ```sh
-node /absolute/testlane-source/dist/cli.js verify report --report output/testlane-verification/run-<id>/report.json --plan e2e/testlane-verification/plan.json --json
+npx --no-install testlane verify report --report output/testlane-verification/run-<id>/report.json --plan e2e/testlane-verification/plan.json --json
 ```
 
 Use the exact unchanged plan. Rendering checks plan/report consistency and retained screenshot hashes, creates `summary.html` beside the JSON without overwriting it, and does not rerun tests/app code. It restores freeform app descriptions from the plan, so keep the summary private with its report/artifacts. Hashes bind these local inputs; they are not signed provenance or proof that the report was never edited.

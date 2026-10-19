@@ -29,6 +29,10 @@ function keys(value, allowed) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => allowed.includes(key));
 }
 function integer(value, max = 1000000) { return Number.isSafeInteger(value) && value >= 0 && value <= max; }
+function validFailureLocation(value) {
+  return value === null || (keys(value, ['line', 'column']) && Object.keys(value).length === 2 &&
+    [value.line, value.column].every(number => integer(number) && number >= 1));
+}
 function escape(value) { return String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]); }
 async function input(file, max) {
   const info = await lstat(file);
@@ -64,11 +68,13 @@ function validateReport(report, plan) {
   const ids = new Set();
   for (const item of report.cases) {
     const planned = plan.cases.find(value => value.id === item?.id);
-    if (!planned || ids.has(item.id) || !keys(item, ['id', 'status', 'reason', 'cleanup', 'attempts', 'assertionsObserved', 'specId']) ||
+    if (!planned || ids.has(item.id) || !keys(item, ['id', 'status', 'reason', 'cleanup', 'attempts', 'assertionsObserved', 'specId', 'failureLocation']) ||
       !Object.hasOwn(CASE_REASONS, item.status) || !CASE_REASONS[item.status].includes(item.reason) ||
       !keys(item.cleanup, ['required', 'status']) || item.cleanup.required !== planned.cleanup.required || !CLEANUP.includes(item.cleanup.status) ||
       !integer(item.attempts, 300) || (item.assertionsObserved !== undefined && !integer(item.assertionsObserved)) ||
       (item.assertionsObserved === undefined && item.attempts !== 0) ||
+      (item.failureLocation !== undefined && (!validFailureLocation(item.failureLocation) ||
+        (item.failureLocation !== null && (item.status !== 'failed' || !item.specId || item.assertionsObserved < 1)))) ||
       (item.specId !== undefined && (item.specId !== hash(planned.spec) || !specs.has(item.specId)))) fail('REPORT_INVALID');
     ids.add(item.id);
     if ((item.status === 'passed' && (item.attempts !== 1 || item.assertionsObserved < 1 || !item.specId ||
@@ -116,7 +122,9 @@ function html(report, plan) {
       '<li><a download href="' + escape(artifact.path) + '">' + escape(path.posix.basename(artifact.path)) + '</a> · ' + artifact.size + ' bytes · private, unreviewed<br><code>' + artifact.sha256 + '</code></li>').join('');
     return '<section class="case"><div class="case-head"><h2>' + escape(planned.title) + '</h2><strong class="status ' + item.status + '">' + item.status + '</strong></div>' +
       '<p class="meta">Case <code>' + item.id + '</code> · ' + (item.assertionsObserved ?? 0) + ' observed assertions · ' + item.attempts + ' attempt(s)</p>' +
-      '<p>Reason: <code>' + item.reason + '</code></p><h3>Expected behavior</h3><ul>' + planned.expected.map(value => '<li>' + escape(value) + '</li>').join('') +
+      '<p>Reason: <code>' + item.reason + '</code></p>' +
+      (item.failureLocation ? '<p>Spec line ' + item.failureLocation.line + ', column ' + item.failureLocation.column + '</p>' : '') +
+      '<h3>Expected behavior</h3><ul>' + planned.expected.map(value => '<li>' + escape(value) + '</li>').join('') +
       '</ul><h3>Cleanup: ' + item.cleanup.status + (planned.cleanup.required ? ' (required)' : ' (optional)') + '</h3><p>' + escape(planned.cleanup.description) + '</p>' +
       (links ? '<h3>Evidence</h3><p>Private app data. Contents are unreviewed; no binary redaction is claimed.</p><ul>' + links + '</ul>' : '<p class="meta">No screenshots retained for this case.</p>') + '</section>';
   }).join('');

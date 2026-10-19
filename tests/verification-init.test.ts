@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {pathToFileURL} from "node:url";
+import {execFileSync} from "node:child_process";
 import {afterEach, beforeEach, describe, expect, it} from "vitest";
 
 const initializer = pathToFileURL(path.resolve("examples/agent-verification/init.mjs")).href;
@@ -34,6 +35,17 @@ describe("verification authoring scaffold", () => {
     expect(await fs.readdir(dir)).toEqual(names);
     const after=await Promise.all(names.map(name=>fs.readFile(path.join(dir,name))));
     expect(after).toEqual(before);
+  });
+  it("preserves the bound helper bytes through a Git checkout with automatic CRLF conversion", async () => {
+    await initializeVerification(input());
+    const helper=path.join(root,"e2e/checks/testlane-authoring.mjs");
+    const before=await fs.readFile(helper);
+    const git=(...args:string[])=>execFileSync("git",["-c","core.autocrlf=true","-c","core.safecrlf=false","-c","core.hooksPath=disabled-hooks",...args],{cwd:root,windowsHide:true,stdio:"pipe"});
+    git("init");
+    git("add","--","e2e/checks/.gitattributes","e2e/checks/testlane-authoring.mjs");
+    await fs.unlink(helper);
+    git("checkout-index","--force","--","e2e/checks/testlane-authoring.mjs");
+    expect(await fs.readFile(helper)).toEqual(before);
   });
   it.each(["https://production.example.test", "http://sandbox.example.test", "https://example.test/path", "https://user:pass@example.test", "http://localhost:4017/?key=value"])("refuses an unsuitable target before writing: %s", async target => {
     await expect(initializeVerification({...input(),target})).rejects.toThrow();

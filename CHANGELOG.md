@@ -4,7 +4,7 @@ All notable changes to Testlane are listed here, newest first. The format follow
 Changelog. Testlane is pre-1.0, so a minor version can change behaviour; each such change names
 what to do about it in [docs/upgrading.md](docs/upgrading.md).
 
-## [Unreleased] — 0.7.0-dev.0 source preview
+## [0.7.0-beta.1] - 2026-10-19
 
 ### Added
 
@@ -18,11 +18,15 @@ what to do about it in [docs/upgrading.md](docs/upgrading.md).
   the quality or coverage of the business checks.
 - `verify report` creates a private local HTML summary bound to the exact plan and
   retained screenshot hashes, without rerunning tests or overwriting an existing summary.
+- Failed assertions can report a line and column in the hashed planned spec, without
+  retaining error messages or values. Caught failed assertions still fail acceptance.
+- Generated suites preserve the bound helper's LF bytes through Windows Git checkouts.
 - Explicitly enabled local screenshots carry private/unreviewed artifact metadata;
   traces, video and automatic screenshots stay disabled.
 
-These are unpublished `0.7.0-dev.0` source-preview additions. The published 0.6.0
-package remains unchanged.
+The preview package bundles the skill, fixture and harness with the broker. Use a reviewed
+`0.7.0-beta.1` tarball, or that exact npm version when available; its intended dist-tag is
+`next`. Stable `latest` remains 0.6.0. See the [installed preview quickstart](docs/agent-verification.md).
 
 ## [0.6.0] - 2026-10-19
 

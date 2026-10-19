@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { validatePlan } from '../contracts.mjs';
 import { reconcile, runVerification } from '../runtime.mjs';
 import { runCase, captureScreenshot } from '../authoring.mjs';
+import VerificationReporter from '../reporter.mjs';
 
 const fixture = () => ({ schemaVersion: 1, status: 'reviewed', title: 'Check a disposable note', target: { baseUrl: 'http://127.0.0.1:3000', environment: 'testing' },
   cases: [{ id: 'create-note', title: 'Create a note', spec: 'note.spec.mjs', expected: ['One note is visible'], cleanup: { required: true, description: 'Delete and verify absence' } }] });
@@ -58,6 +59,61 @@ test('optional cleanup requires the explicit not-required result', () => {
   const p = fixture(); p.cases[0].cleanup.required = false;
   const r = row(); r.cleanup = 'not-required';
   assert.equal(reconcile(p, journal([r]), execution).verdict, 'passed');
+});
+
+test('only a valid numeric failure location is emitted for an unambiguous failed case', () => {
+  const failed = { ...row(), status: 'failed', failureLocation: { line: 12, column: 7 } };
+  const report = reconcile(fixture(), journal([failed]), execution);
+  assert.equal(report.verdict, 'failed');
+  assert.deepEqual(report.cases[0].failureLocation, { line: 12, column: 7 });
+  assert.equal(reconcile(fixture(), journal([row()]), execution).cases[0].failureLocation, null, 'old rows remain compatible');
+  assert.equal(reconcile(fixture(), journal([failed, failed]), execution).cases[0].failureLocation, null, 'duplicate cases cannot select an ambiguous location');
+  assert.equal(reconcile(fixture(), journal([failed]), { exitCode: null, cancelled: true, forced: true }).cases[0].failureLocation, null);
+});
+for (const location of [
+  'private observed value', [], { line: 0, column: 1 }, { line: 1.5, column: 1 },
+  { line: 1, column: 1000001 }, { line: 1, column: -1 }, { line: '12', column: 1 },
+  { line: 1, column: 1, file: 'private-source.mjs' }, { line: 1 },
+]) test('invalid failure location is blocked without retaining its value: ' + JSON.stringify(location), () => {
+  const result = reconcile(fixture(), journal([{ ...row(), status: 'failed', failureLocation: location }]), execution);
+  assert.ok(result.reasonCodes.includes('REPORTER_INVALID'));
+  assert.equal(result.cases[0].failureLocation, null);
+  assert.equal(JSON.stringify(result).includes('private'), false);
+});
+
+test('reporter retains only the first valid failed-expect coordinates in the exact planned spec', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'testlane-reporter-location-'));
+  try {
+    const specFile = path.join(root, 'note.spec.mjs');
+    const controlFile = path.join(root, 'control.json');
+    const journalFile = path.join(root, 'journal.json');
+    const helperHash = 'a'.repeat(64);
+    await writeFile(controlFile, JSON.stringify({ helperVersion: '1', helperHash, cases: [{ id: 'create-note', spec: specFile }] }));
+    const reporter = new VerificationReporter({ controlFile, journalFile });
+    const annotations = [
+      { type: 'testlane-case', description: 'create-note' },
+      { type: 'testlane-helper', description: '1:' + helperHash },
+      { type: 'testlane-started', description: 'create-note' },
+      { type: 'testlane-body', description: 'completed' },
+      { type: 'testlane-cleanup', description: 'completed' },
+    ];
+    const testCase = { id: 'test-1', location: { file: specFile }, annotations, expectedStatus: 'passed' };
+    const result = { status: 'passed', annotations, retry: 0, attachments: [] };
+    reporter.onBegin({ workers: 1, projects: [{ retries: 0 }] }, { allTests: () => [testCase] });
+    for (const location of [
+      { file: path.join(root, 'imported-helper.mjs'), line: 1, column: 1 },
+      { file: specFile, line: 0, column: 1 }, { file: specFile, line: 1, column: 1000001 },
+      { file: specFile, line: 12, column: 7 }, { file: specFile, line: 24, column: 8 },
+    ]) reporter.onStepEnd(testCase, result, { category: 'expect', error: { message: 'private error value' }, location });
+    reporter.onTestEnd(testCase, result);
+    reporter.onEnd({ status: 'passed' });
+    const recorded = JSON.parse(await readFile(journalFile, 'utf8'));
+    assert.equal(recorded.results[0].status, 'failed', 'caught expect stays failed despite completed helper body');
+    assert.deepEqual(recorded.results[0].failureLocation, { line: 12, column: 7 });
+    assert.equal(JSON.stringify(recorded).includes(root), false);
+    assert.equal(JSON.stringify(recorded).includes('private error value'), false);
+    assert.equal(JSON.stringify(recorded).includes('imported-helper'), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 async function authoringContext(required, screenshots, run) {
