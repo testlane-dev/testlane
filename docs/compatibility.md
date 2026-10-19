@@ -1,16 +1,46 @@
 # Compatibility and verification status
 
-Use the [existing-app quickstart](quickstart.md) for initial setup, then the
-[Playwright Test fixture](../examples/playwright/README.md) for a reusable suite.
+Use the [verification quickstart](agent-verification.md) for the current preview,
+including its authentication prerequisites. The [existing-app quickstart](quickstart.md)
+and [Playwright Test fixture](../examples/playwright/README.md) also cover standalone
+authenticated checks.
 The tables distinguish supported contracts, reproducible package tests and live
 agent-client verification. A package/browser test does not certify a client version.
 
-For current artifact evidence, use the matching [GitHub release](https://github.com/testlane-dev/testlane/releases)
-and its exact manifest and proof files. The 0.5.0 observations below and the separate
-0.5.1 candidate proofs are historical evidence; they do not establish verification of
-`@testlane/cli` 0.6.0 or the 0.7 verification preview.
+For artifact evidence, use the matching release's exact manifest and proof files.
+Historical observations below retain their original package versions and scope.
 
-## Verification preview: installed-package acceptance
+## Current release: 0.7.0-beta.2
+
+The opt-in [0.7.0-beta.2 release](https://github.com/testlane-dev/testlane/releases/tag/v0.7.0-beta.2)
+is available as `@testlane/cli@0.7.0-beta.2` on npm's `next` channel; `latest` remains
+`0.6.0`. On 2026-10-19, the public npm archive matched the reviewed GitHub tarball:
+440,062 bytes, 225 package files, SHA-256
+`fdce092977655166891375e094be1620b7b6e7e4381f6c153701b8c91aca46b0`.
+Use the [versioned manifest](https://github.com/testlane-dev/testlane/releases/download/v0.7.0-beta.2/release-manifest.json)
+for the full inventory and SHA-512 integrity.
+
+| Evidence | Result and scope |
+| --- | --- |
+| [Released-source CI](https://github.com/testlane-dev/testlane/actions/runs/39265706792) | Passed for public source `3cf04f952562486d414367e1517a1805cc56b2ad`: core tests, browser-backed workflow tests and clean-room package checks on Windows, Linux and macOS; an additional Linux core job used Node 24. Windows DPAPI and isolated Linux Secret Service real-broker jobs passed. These are package/platform checks, not live-client certification. |
+| [Candidate workflow](https://github.com/testlane-dev/testlane/actions/runs/39265755156) and [installed Linux proof](https://github.com/testlane-dev/testlane/releases/download/v0.7.0-beta.2/consumer-proof.txt) | macOS validation, including the temporary-keychain adapter tests, passed. The exact Linux tarball passed nine installed-package checks covering diagnostics, MCP session-file delivery into Chromium, explicit/disconnect cleanup, both workflow commands, unchanged package files and output/audit leak checks. That launch proof does not itself exercise the agent-authored `verify` workflow. |
+| [Reviewed Codex workflow](https://github.com/testlane-dev/testlane/releases/download/v0.7.0-beta.2/codex-reviewed-acceptance.public.json) and [execution summary](https://github.com/testlane-dev/testlane/releases/download/v0.7.0-beta.2/codex-local-acceptance.public.json) | Desktop-bundled Codex CLI `0.163.0-alpha.10.2` ran the preserved five-case suite on Windows with a scratch DPAPI store: five passed with 185 observed `expect` steps. Controller replays of the unchanged suite produced two failures and three passes for an injected one-cent total defect, then five passes after correction. All 15 case cleanups completed; no app records remained after any run. |
+
+The [source/artifact binding](https://github.com/testlane-dev/testlane/releases/download/v0.7.0-beta.2/source-run-binding.public.json)
+connects those local Codex results to the hosted release: the local and merged source
+trees are identical, and the complete tarball and all 225 installed files match.
+The local receipts retain their original pre-publication wording; no new model run
+was performed for the identical hosted copy. The client reran cases it had authored
+during the earlier blocked beta.1 trial; it did not author new cases in this trial.
+The fault and corrected replays were controller-driven, not additional client runs.
+
+This establishes one configured CLI/browser workflow against a generated app, with
+business-total checks, role denials and cleanup. It does not complete the broader
+live MCP/permission-probe procedure, certify other clients/models/apps, or establish
+assertion quality from the count alone. See the [evidence index](verification/acceptance-2026-10-19/README.md)
+for exact records and the unchanged historical trial verdicts.
+
+## Historical preview acceptance: 0.7.0-beta.1
 
 On 2026-10-19, the following local trials used the exact GitHub prerelease tarball for
 `@testlane/cli@0.7.0-beta.1`, SHA-256
@@ -49,7 +79,7 @@ Profiles and app code are trusted configuration. Production-tag/declared-host re
 cannot discover an undeclared production environment. Review endpoints and browser pages
 for side effects, and keep credentials limited to dedicated test accounts.
 
-## Reproducible package and platform evidence
+## Historical package and platform evidence: 0.5.0
 
 Recorded on 2026-10-18 for the 0.5.0 release candidate. The fixture is tested with
 `@playwright/test` 1.64.0 and Chromium; Firefox/WebKit and other Playwright versions are
@@ -83,9 +113,10 @@ are checkout-only; consumer fixtures and docs ship in npm.
 
 | Client / mechanism | Tested client version | Status | Reproduction |
 | --- | --- | --- | --- |
+| Codex: installed CLI/browser verification workflow | Desktop-bundled CLI 0.163.0-alpha.10.2; Windows DPAPI; Testlane 0.7.0-beta.2 | Passed preserved-suite execution and separately controlled defect/corrected replays; no new test authorship or broader MCP/permission acceptance claimed | [Current release evidence](#current-release-070-beta2) and [verification quickstart](agent-verification.md) |
 | Claude Code: local stdio MCP, four-tool sandbox sequence | 2.1.268; Windows build 19045, Node 22.14.0 | Historical Testlane 0.5.0 check recorded on 2026-10-18 | [Recorded transport check](#recorded-claude-code-transport-check) |
 | Claude Code: shell/browser workflow and permission probes | No complete procedure run recorded | Unverified | [Setup](INTEGRATION-CLAUDE-CODE.md), then [acceptance procedure](verification/agent-acceptance.md) |
-| Codex: local stdio MCP plus shell/Playwright use | No live version recorded for this release candidate | Unverified | [Setup](INTEGRATION-CODEX.md), then the same acceptance procedure with Codex observations recorded separately |
+| Codex: broader local stdio MCP and permission-probe procedure | No complete procedure run recorded for 0.7.0-beta.2 | Unverified; the scoped CLI/browser workflow above is separate evidence | [Setup](INTEGRATION-CODEX.md), then the same acceptance procedure with Codex observations recorded separately |
 | Other MCP clients and managed browser panes | None recorded | Unverified | Check the client's tool permissions, process environment and artifact-loading mechanism |
 
 Record the exact client version, OS/build, Node/Testlane/browser versions, configuration,

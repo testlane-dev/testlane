@@ -6,14 +6,22 @@ local entry point. It requires Node 22 or newer and does not create accounts or 
 Run these commands as the human from the app repository:
 
 ```sh
-npm install --save-dev --save-exact @testlane/cli@0.6.0
+npm install --save-dev --save-exact @testlane/cli@0.7.0-beta.2
 npx --no-install testlane --version
 npx --no-install testlane doctor
 ```
 
-To try a reviewed release candidate, replace `@testlane/cli@0.6.0` with its absolute tarball path.
+This is the published verification preview on npm's `next` channel. It includes the
+authentication broker and `verify` commands. The [verification quickstart](agent-verification.md)
+adds app-local Playwright, the agent skill and a feature-specific suite.
+
+To use a reviewed release tarball, replace `@testlane/cli@0.7.0-beta.2` with its absolute path.
 Commit `package.json` and the lockfile. Use `npm ci` on another machine. Do not use `npx -y`
 or an unpinned downloaded executable in an agent's MCP configuration.
+
+The stable authentication-only option is `@testlane/cli@0.6.0`, still on `latest`.
+Choose that pin deliberately at installation if verification is not needed; it has no
+`verify` commands. Keep one selected version throughout profile setup and agent use.
 
 The CLI reference spells commands as `testlane ...`. With this installation, use
 `npx --no-install testlane ...`, an approved npm script, or
@@ -48,7 +56,8 @@ Shell command approvals remain separate from MCP permissions.
 
 ## Run the shipped workflows
 
-Install the tested browser tooling in the **app project**:
+Use browser tooling from the **app project**. Preserve an existing Playwright dependency
+and review differences from the tested 1.64.0 version. For a new installation:
 
 ```sh
 npm install --save-dev --save-exact @playwright/test@1.64.0
