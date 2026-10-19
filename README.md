@@ -17,13 +17,16 @@ and handoff URLs are live credentials; MCP session results enter the conversatio
 Testlane refuses production-tagged profiles and declared production hosts with no
 override. It relies on human-reviewed configuration to identify those environments.
 
-**Start with [your existing app](docs/quickstart.md)** for a complete profile, agent setup,
-browser/API check, troubleshooting and repeatable cleanup. To try a disposable example
-first, use the [bundled demo](#try-the-demo).
+**The current verification preview is `0.7.0-beta.2`, published on npm's `next` channel.**
+Start with the [verification quickstart](docs/agent-verification.md) for feature briefs,
+agent-written tests and browser/API evidence. It includes the account and authentication
+prerequisites, skill setup and first run. Your existing coding agent writes the tests;
+Testlane supplies authentication, execution and reports.
 
-For feature briefs, agent-written tests and browser/API evidence, follow the
-[verification preview quickstart](docs/agent-verification.md). It uses the opt-in
-0.7.0-beta.2 package; the stable 0.6.0 installation below covers authentication.
+For authentication alone, start with [your existing app](docs/quickstart.md) for a
+complete profile, browser/API check and repeatable cleanup. Both guides use the same
+project-local preview installation. To try a disposable app first, use the
+[bundled demo](#try-the-demo).
 
 Requires Node 22 or newer. Pre-1.0; no independent security audit yet
 ([security policy](SECURITY.md)).
@@ -31,8 +34,8 @@ Requires Node 22 or newer. Pre-1.0; no independent security audit yet
 ## The 60-second mental model
 
 1. **Human setup:** review a secret-free `testlane.profiles.json` for the app and
-   run `testlane store set <profile>` in your terminal. Type the password at the hidden
-   prompt, never in a command argument, environment variable or chat.
+   run `npx --no-install testlane store set <profile>` in your terminal. Type the password
+   at the hidden prompt, never in a command argument, environment variable or chat.
 2. **Broker sign-in:** the broker checks environment/host policy and lifetime, loads
    the origin-bound password, signs in, and appends an audit row before issuing a session.
 3. **Agent use:** the agent consumes the session in its HTTP client or browser context.
@@ -45,20 +48,26 @@ server-side session lifetime. See the [trust model](docs/threat-model.md).
 
 ## Install
 
+From your app's repository, pin the preview in its existing package manager and lockfile:
+
 ```sh
-npm install -g @testlane/cli@0.6.0
-testlane --version
-testlane --help
+npm install --save-dev --save-exact @testlane/cli@0.7.0-beta.2
+npx --no-install testlane --version
+npx --no-install testlane --help
 ```
 
-The npm package is `@testlane/cli`; the installed command remains `testlane`.
+The npm package is `@testlane/cli`; the command remains `testlane`. These commands use
+the app's pinned installation. In PowerShell use `npm.cmd` and `npx.cmd` if execution
+policy blocks their `.ps1` shims. For MCP, use the explicit local Node entry point in
+the [project installation guide](docs/project-install.md).
 
-To try a reviewed tarball, install its absolute path in place of the package name.
-For a source checkout, use `npm ci`, `npm run build`, then `npm link`. Consuming repos commit the profile and agent
-configuration; installation does not provision an account or seed credentials.
+To install a reviewed tarball, use its absolute path in place of the package name.
+Consuming repos commit the dependency lockfile, profile and agent configuration;
+installation does not provision an account or seed credentials.
 
-For a lockfile-pinned broker and MCP entry point, use the [project installation](docs/project-install.md).
-It also runs the shipped workflows using your app's Playwright dependency.
+The stable authentication-only release remains **0.6.0** on npm's `latest` channel.
+Choose `@testlane/cli@0.6.0` explicitly if you need that release; it has no `verify`
+commands. Do not switch to it partway through the verification quickstart.
 
 Secrets are protected by Windows DPAPI, macOS Keychain, or Linux Secret Service.
 Linux needs `secret-tool` and an unlocked keyring. Headless/WSL/devcontainer setup,
@@ -86,8 +95,8 @@ See [session recipes](docs/sessions.md) for curl, Playwright, handoff and sessio
 | --- | --- |
 | Claude Code | [Integration guide](docs/INTEGRATION-CLAUDE-CODE.md), merge the [permission rules](examples/claude-code/settings.json) and [MCP entry](examples/claude-code/mcp.json) |
 | Codex | [Integration guide](docs/INTEGRATION-CODEX.md), [config example](examples/codex/config.toml) and [AGENTS.md instructions](examples/codex/AGENTS.md.snippet.md) |
-| Other MCP clients | Start `testlane mcp` over stdio; tools: `list_profiles`, `check`, `session_file`, `release_session_file`, `session`, `handoff`, `status` |
-| Local HTTP clients | Start `testlane serve` on `127.0.0.1` with its per-boot bearer token; see [CLI and surfaces](docs/cli.md#agent-surfaces) |
+| Other MCP clients | Start the [pinned local entry point](docs/project-install.md#point-mcp-at-the-pinned-installation) with `mcp` over stdio; tools: `list_profiles`, `check`, `session_file`, `release_session_file`, `session`, `handoff`, `status` |
+| Local HTTP clients | Start `npx --no-install testlane serve` on `127.0.0.1` with its per-boot bearer token; see [CLI and surfaces](docs/cli.md#agent-surfaces) |
 
 For clients sharing the broker's filesystem, prefer MCP `session_file`: pass the returned
 path directly to the client and call `release_session_file` after loading, with cleanup in
@@ -100,17 +109,19 @@ MCP `session` returns live values inline; CLI `--out` is another local-file opti
 ```sh
 git clone https://github.com/testlane-dev/testlane
 cd testlane
-npm install
+npm ci
+npm run build
 npm run demo
 ```
 
 This starts a local Next.js/NextAuth app on `http://localhost:3000` with generated
-throwaway credentials. Paste its setup line into a second terminal, then try:
+throwaway credentials. From the repo root in a second terminal, paste its printed
+setup line, then use the built CLI without a global installation:
 
 ```sh
-testlane check demo:admin
-testlane handoff demo:handoff:qa
-testlane session demo:production
+node dist/cli.js check demo:admin
+node dist/cli.js handoff demo:handoff:qa
+node dist/cli.js session demo:production
 ```
 
 The check reports identity. Open the handoff URL once within 60 seconds. The production
@@ -157,9 +168,9 @@ For agent-designed checks beyond the two fixed templates, the
 `testlane-verify` skill, a draft workspace initializer and a Playwright execution harness.
 Describe the behavior to your coding agent; it inspects your app and writes the tests.
 The harness maps planned cases to executed results and cleanup, with optional private
-screenshots. Install a reviewed **`0.7.0-beta.2` tarball**, or that exact npm version when
-available; the intended preview tag is `next`. Stable `latest` stays at 0.6.0 and has no
-`verify` commands. The preview includes the skill and harness without a source clone.
+screenshots. Install **`@testlane/cli@0.7.0-beta.2`** from npm, as shown above; the preview
+is also available as a reviewed release tarball. Stable `latest` stays at 0.6.0 and has
+no `verify` commands. The preview includes the skill and harness without a source clone.
 `verify report` can render a private local HTML summary of the case
 expectations, results and screenshots; the agent remains responsible for assertion quality.
 

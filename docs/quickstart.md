@@ -32,23 +32,26 @@ do not place those credentials in a profile or improvise an agent bypass.
 
 ## 2. Install and prepare the app repository
 
-Install Node 22 or newer. For a lockfile-pinned app dependency, follow [project installation](project-install.md)
-and use its local command forms throughout this guide. A global installation also works:
+Install Node 22 or newer. Run these commands from your **app's repository root**, using
+its existing package manager and lockfile. This guide uses the published verification
+preview so the same installed CLI can continue into the [feature verification guide](agent-verification.md):
 
 ```sh
-npm install -g @testlane/cli@0.6.0
-testlane --version
+npm install --save-dev --save-exact @testlane/cli@0.7.0-beta.2
+npx --no-install testlane --version
 ```
 
-To try a reviewed release tarball instead:
-`npm install -g /absolute/path/to/testlane-cli-0.6.0.tgz`. A source checkout can produce it
-with `npm ci`, `npm run build`, then `npm pack`. Keep that checkout separate from your app.
+If this version is already pinned in the app, keep that installation. For a reviewed
+tarball, replace the package pin with its absolute path. The stable authentication-only
+release `0.6.0` is a separate option described in [project installation](project-install.md);
+it does not supply `verify` commands. Commit the app's dependency and lockfile changes.
 
-On Windows PowerShell, use `npm.cmd`, `npx.cmd` and `testlane.cmd` for the npm-installed
-commands if execution policy blocks their `.ps1` shims; no policy change is needed.
-The PowerShell run below uses `testlane.cmd` explicitly.
+All broker commands below use `npx --no-install testlane` to select this app-local CLI.
+The direct equivalent is `node ./node_modules/@testlane/cli/dist/cli.js`. On Windows
+PowerShell use `npm.cmd` and `npx.cmd` if execution policy blocks their `.ps1` shims;
+no policy change is needed. The PowerShell run below uses `npx.cmd` explicitly.
 
-Run the remaining commands from your **app's repository root**, with the app running.
+Keep the non-production app running at the reviewed origin for the remaining steps.
 On macOS/Linux, unlock the keychain first. Headless Linux, WSL and devcontainers need
 the setup in [platforms.md](platforms.md#linux-headless-wsl-devcontainer).
 
@@ -98,7 +101,7 @@ loaded registry; Testlane cannot discover whether an undeclared deployment is pr
 These are public configuration fields, never passwords or session values. Commit the
 profile for review. The agent must not edit it or supply another registry.
 
-After saving the registry, run `testlane doctor` for passive setup checks. Follow any
+After saving the registry, run `npx --no-install testlane doctor` for passive setup checks. Follow any
 reported remedy before seeding the password. This command does not read credentials or
 contact the app; [diagnostics](doctor.md) explains optional sign-in verification.
 
@@ -107,9 +110,9 @@ contact the app; [diagnostics](doctor.md) explains optional sign-in verification
 As the human, in your own terminal:
 
 ```sh
-testlane profiles
-testlane store set shop:testing:qa
-testlane check shop:testing:qa
+npx --no-install testlane profiles
+npx --no-install testlane store set shop:testing:qa
+npx --no-install testlane check shop:testing:qa
 ```
 
 Type the password only at the hidden `store set` prompt. Do not put it in argv, an
@@ -125,7 +128,7 @@ in. The next steps issue a separate session and verify identity with that exact 
 Merge the setup for [Claude Code](INTEGRATION-CLAUDE-CODE.md) or
 [Codex](INTEGRATION-CODEX.md) into your existing configuration. Keep registry selection
 and any non-default home under human control. Confirm the agent's `list_profiles` or
-`testlane profiles` sees `shop:testing:qa` before continuing.
+`npx --no-install testlane profiles` sees `shop:testing:qa` before continuing.
 
 The CLI needs keychain access and permission to append the audit log. MCP's access does
 not imply the agent's shell has the same permissions. For a blocked shell, use the
@@ -134,17 +137,19 @@ disable the sandbox or grant blanket access to the vault.
 
 ## 6. Add the browser check
 
-In your app, install Playwright using its existing package manager and lockfile. With npm:
+Use the app's package manager and lockfile. If Playwright is already installed, preserve
+it and review differences from the tested 1.64.0 version using the [compatibility matrix](compatibility.md).
+This example imports `playwright` directly; package managers with strict dependency
+isolation need that direct dependency even when `@playwright/test` is already installed.
+For a new installation with npm:
 
 ```sh
-npm install --save-dev playwright
-npx playwright install chromium
+npm install --save-dev --save-exact playwright@1.64.0
+npx --no-install playwright install chromium
 ```
 
-On Linux, use `npx playwright install --with-deps chromium` if system dependencies are
-missing. If your app already has Playwright, use its installed version. This example
-imports `playwright` directly; package managers with strict dependency isolation need
-that direct dependency, even when `@playwright/test` is already installed.
+On Linux, use `npx --no-install playwright install --with-deps chromium` if system
+dependencies are missing; review those OS changes as the human.
 
 Copy [verify.mjs](../examples/existing-app/verify.mjs) and
 [verify.json](../examples/existing-app/verify.json) into the app's `tools/testlane/`
@@ -167,8 +172,8 @@ two field comparisons in `verify.mjs`; configure the broker's `emailField` and `
 too. The script checks identity with the issued session, a visible protected-page heading,
 and anonymous API refusal. It prints fixed results without bodies, cookies or browser dumps.
 
-For an npm-only installation, find these two example files under
-`$(npm root -g)/@testlane/cli/examples/existing-app/`, or follow their repository links above.
+For the app-local installation, find these two example files under
+`node_modules/@testlane/cli/examples/existing-app/`, or follow their repository links above.
 Copy them into your app so their `playwright` import resolves to your app's dependency.
 
 ## 7. Run with a fresh session and clean up
@@ -182,7 +187,7 @@ Bash, from the app repository:
   session_dir=$(mktemp -d .testlane/sessions/run-XXXXXX)
   state="$session_dir/storage.json"
   trap 'rm -f -- "$state"; rmdir -- "$session_dir"' EXIT
-  testlane session shop:testing:qa --format storage-state --out "$state"
+  npx --no-install testlane session shop:testing:qa --format storage-state --out "$state"
   node tools/testlane/verify.mjs tools/testlane/verify.json "$state"
 )
 ```
@@ -195,7 +200,7 @@ $sessionDir = Join-Path (Resolve-Path .testlane/sessions) ("run-" + [guid]::NewG
 New-Item -ItemType Directory -Path $sessionDir | Out-Null
 $state = Join-Path $sessionDir 'storage.json'
 try {
-  testlane.cmd session shop:testing:qa --format storage-state --out $state
+  npx.cmd --no-install testlane session shop:testing:qa --format storage-state --out $state
   if ($LASTEXITCODE -ne 0) { throw 'Testlane session issuance failed' }
   node tools/testlane/verify.mjs tools/testlane/verify.json $state
   if ($LASTEXITCODE -ne 0) { throw 'Existing-app verification failed' }
@@ -218,7 +223,7 @@ authorization, persistence, environment isolation or release readiness.
 
 After the human setup, give your agent this prompt:
 
-> Use the approved `shop:testing:qa` Testlane profile to run our existing-app check in
+> Use the app's pinned Testlane CLI and approved `shop:testing:qa` profile to run our existing-app check in
 > `tools/testlane/`. Use a fresh session file under `.testlane/sessions/`, run
 > `verify.mjs` with `verify.json`, and remove the session file afterwards. Report the
 > exit code and which checks passed or failed. Do not print session values, change the
@@ -238,7 +243,7 @@ For a single API request or a URL-only browser, see [session recipes](sessions.m
 | Exit 1 | Check audit write access, syntax and existing output files. Use a fresh path. |
 | Exit 2 | Check the non-production profile, approved host, strategy and TTL. Do not bypass the refusal. |
 | Exit 3 | Confirm the app is reachable, account exists and cookie/identity options match. A wrong password needs human re-seeding. |
-| Exit 4 | Human runs `testlane store set shop:testing:qa`. A locked Linux keyring can also look like a missing entry; see [platforms.md](platforms.md). |
+| Exit 4 | Human runs `npx --no-install testlane store set shop:testing:qa`. A locked Linux keyring can also look like a missing entry; see [platforms.md](platforms.md). |
 | Exit 5 or 6 | Stop. Human checks the command or changed origin/environment before re-seeding. |
 | `FAIL browser setup` | Install Chromium in the app, check shell permissions and state-file access on this machine. |
 | `FAIL authenticated identity` | Check route, expected account/role, response shape and expiry. Do not print the response body. |

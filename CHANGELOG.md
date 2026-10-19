@@ -4,6 +4,20 @@ All notable changes to Testlane are listed here, newest first. The format follow
 Changelog. Testlane is pre-1.0, so a minor version can change behaviour; each such change names
 what to do about it in [docs/upgrading.md](docs/upgrading.md).
 
+## Unreleased
+
+### Documentation
+
+- Make the published 0.7.0-beta.2 npm package the continuous project-local onboarding
+  path and keep stable 0.6.0 authentication-only instructions separate.
+- Summarize the current beta.2 package and scoped Codex evidence without changing
+  historical incomplete trial results or claiming general client certification.
+- State authentication and platform prerequisites, generated Playwright configuration,
+  and the beta runner’s fixed timeout, worker and retry limits.
+
+These are current-documentation corrections for the existing beta.2 release. Published
+npm bytes, immutable release assets and runtime behavior are unchanged.
+
 ## [0.7.0-beta.2] - 2026-10-19
 
 ### Fixed

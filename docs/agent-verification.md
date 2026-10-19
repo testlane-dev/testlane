@@ -2,30 +2,33 @@
 
 Give your coding agent the feature description and the app repository. The `testlane-verify` skill helps it inspect the app, design concrete acceptance cases, write app-specific Playwright tests and run them with Testlane sessions. The report links each planned case to execution and cleanup evidence.
 
-This guide targets the opt-in **`@testlane/cli@0.7.0-beta.2` verification preview**. Install a reviewed beta tarball below, or the exact npm version when available. Its intended npm dist-tag is `next`; stable `latest` remains `0.6.0`, whose CLI has no `verify` commands. The preview package bundles the broker, skill, fixture and harness; no source clone is needed. No embedded model, API service or new API key is involved: your coding agent does the design and test authoring.
+This guide targets the published **`@testlane/cli@0.7.0-beta.2` verification preview** on npm's `next` channel. Pin that exact version below; stable `latest` remains `0.6.0`, whose CLI has no `verify` commands. The preview package bundles the broker, skill, fixture and harness; no source clone is needed. No embedded model, API service or new API key is involved: your coding agent does the design and test authoring.
 
-## Start with the app and existing authentication
+## Install the preview in your app
 
-The app needs Node 22+, its own installed Playwright Test, a running non-production target, and reviewed, human-seeded Testlane profiles bound to that exact origin. Complete the human account/profile/store setup in the [existing-app quickstart](quickstart.md) first. The [project-local installation guide](project-install.md) explains the broker configuration; its stable package pin does not include verification. Use the project's package manager and lockfile.
+Before starting, check that the app fits:
 
-Use the versioned artifact and manifest from the [0.7.0-beta.2 preview release](https://github.com/testlane-dev/testlane/releases/tag/v0.7.0-beta.2) when available. From the **app repository**, install the reviewed tarball by its actual absolute path:
+- Node 22 or newer, and Playwright Test installed in the app. The tested combination is `@playwright/test@1.64.0` with Chromium.
+- A running non-production app at the exact reviewed origin, with existing dedicated sandbox/test accounts and permission for the planned checks and disposable mutations.
+- A supported cookie login: `form-post`, next-auth v4 credentials, or app-side `app-handoff` with `options.mePath` opt-in. The fixture does not add generic SSO/MFA, browser-storage authentication or token-header support.
+- The broker and browser share a filesystem, and the broker can access its unlocked store in the same machine/session. A remote browser cannot load the returned local session file.
+
+From the **app repository**, install using its package manager and lockfile. For a new Playwright setup:
 
 ```sh
-npm install --save-dev --save-exact /absolute/artifacts/testlane-cli-0.7.0-beta.2.tgz @playwright/test@1.64.0
+npm install --save-dev --save-exact @testlane/cli@0.7.0-beta.2 @playwright/test@1.64.0
 npx --no-install playwright install chromium
 npx --no-install testlane --version
 npx --no-install testlane doctor
 ```
 
-When that exact preview version is available on npm, its equivalent package install is:
+If Playwright is already installed, install only `@testlane/cli@0.7.0-beta.2` and preserve the existing dependency/configuration; review differences from the tested version instead of replacing it silently. Linux may need reviewed OS dependencies. Use the exact Testlane version rather than a moving dist-tag and commit the dependency/lockfile changes. The [release](https://github.com/testlane-dev/testlane/releases/tag/v0.7.0-beta.2) also provides a reviewed tarball and manifest; an absolute tarball path can replace the npm package pin. For Windows use a quoted forward-slash path such as `'C:/artifacts/testlane-cli-0.7.0-beta.2.tgz'`. If PowerShell blocks `npm.ps1`/`npx.ps1`, use `npm.cmd`/`npx.cmd`; the direct Node commands below need no script-policy change.
 
-```sh
-npm install --save-dev --save-exact @testlane/cli@0.7.0-beta.2 @playwright/test@1.64.0
-```
+## Configure accounts and authentication
 
-Use the exact version rather than a moving dist-tag. For Windows tarballs use a quoted forward-slash path, such as `'C:/artifacts/testlane-cli-0.7.0-beta.2.tgz'`. If PowerShell blocks `npm.ps1`/`npx.ps1`, use `npm.cmd`/`npx.cmd`; the direct Node commands below need no script-policy change.
+Complete steps 1–5 of the [existing-app quickstart](quickstart.md) to review the app contract, create the secret-free profile, human-seed its password and connect the agent. That guide uses the same project-local `0.7.0-beta.2` CLI; keep this pin throughout. The [project installation guide](project-install.md) gives the pinned MCP entry point. Profile origins include the port, and accounts must already exist in the app. The human uses the hidden `store set` prompt; the workflow does not create accounts, provision a test database or seed passwords. Do not send credentials through the feature brief.
 
-Preserve an existing Playwright installation/configuration; inspect version differences rather than silently replacing it. Linux may need reviewed OS dependencies. Store access must be available in the same machine/session. The workflow does not create accounts, provision a test database or seed passwords. Do not send credentials through the feature brief.
+The init example below uses the quickstart's `shop:testing:qa` profile. Replace it with your actual reviewed profile. If a feature needs writer/reviewer or other roles, have the human prepare distinct existing accounts/profiles first; changing a test's role alias does not create them.
 
 The installed `verify init` command below copies its bundled fixture/helper into a new app-owned suite. For an existing suite, copy `node_modules/@testlane/cli/examples/playwright/fixtures.mjs` into an app-owned test folder, such as `e2e/testlane/`, or reuse your reviewed copy. It exports `createTestlaneTest` and `expect`. Configure it with the absolute project-local `node_modules/@testlane/cli/dist/cli.js` path, exact origin and distinct profile arrays. The [fixture guide](../examples/playwright/README.md) covers cookie flow support and lifecycle limits. Use its `testlane.open(role)` page/context, not Playwright's unrelated default fixtures.
 
@@ -83,7 +86,7 @@ The agent records a reviewable plan and writes real tests. A plan marked `review
 From the **app repository**, save the requested feature brief as a nonempty UTF-8 file in an ignored local location. This example assumes `output/` is already ignored; choose a reviewed private location if it is not. Use the installed CLI to initialize a new suite:
 
 ```sh
-npx --no-install testlane verify init --brief output/feature-brief.md --target http://127.0.0.1:3000 --profile notes:testing:writer --environment testing --output-dir e2e/testlane-verification --json
+npx --no-install testlane verify init --brief output/feature-brief.md --target http://localhost:3000 --profile shop:testing:qa --environment testing --output-dir e2e/testlane-verification --json
 ```
 
 `--brief`, `--target` and `--profile` are required. `--environment` defaults to `testing` and accepts `local`, `testing`, `sandbox` or `preview`. Init's `--output-dir` chooses a **new app-local suite directory**; the default is `e2e/testlane-verification`. It refuses existing directories and does not replace your suite. It performs no network/authentication, account, registry or vault changes.
@@ -136,6 +139,12 @@ Use a run-owned record identifier and a narrowly scoped cleanup operation. Verif
 The harness runs only the planned specs, with one worker, no retries and recording off. Planned cases must have matching test annotations and complete helper results. Skipped, missing, duplicated, expected-failure or retried cases cannot produce a passing acceptance report. Preserve a failed run when fixing an app or test and produce a separate new run; do not relabel it after a later pass.
 
 Read the [harness contract](../skills/testlane-verify/references/harness.md) for the exact plan, annotation, helper and runner commands. The [case-design reference](../skills/testlane-verify/references/case-design.md) explains how to map a brief to app-specific assertions. These are local trusted-code workflows: a generated test is executable project code and needs normal review; the harness is not a security sandbox or proof of a safe environment.
+
+## Runner limits
+
+`verify run` generates its own Playwright configuration; it does not load your app's `playwright.config.*`. Your existing configuration stays unchanged. The generated configuration selects the planned specs, one worker, no retries, a default timeout of **30 seconds per test** and **175 seconds for the whole suite**. A separate **180-second outer timer** requests cancellation if the child has not finished. Testlane exposes no timeout flag in this version.
+
+Use short, focused feature suites that fit these bounds. The app must already be running; app-config `webServer`, projects, global setup, custom reporters and other config settings are not inherited. Move only the setup a case actually needs into its reviewed app-owned fixture/test. Split broader requirements into separate plans/runs, and inspect owned data after a timeout or interruption before replaying mutations. Cancellation attempts cleanup, but a forced stop can leave app records, sessions or processes behind.
 
 ## Evidence and limits
 

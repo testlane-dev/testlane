@@ -1,13 +1,15 @@
 # Verification harness contract
 
-Use the opt-in `@testlane/cli@0.7.0-beta.2` preview from a reviewed tarball, or that exact npm version when available. The package contains the broker, skill, fixture and harness; no source clone is required. Its intended dist-tag is `next`; stable 0.6.0 has no `verify` commands. The harness is a local runner for app-owned Playwright specs, not an LLM service, browser agent or test generator.
+Use the published `@testlane/cli@0.7.0-beta.2` preview, pinned as an app dependency from npm or installed from a reviewed tarball. The package contains the broker, skill, fixture and harness; no source clone is required. Its dist-tag is `next`; stable 0.6.0 has no `verify` commands. The harness is a local runner for app-owned Playwright specs, not an LLM service, browser agent or test generator.
+
+Prerequisites are Node 22+, app-local Playwright Test (tested with 1.64.0/Chromium), a running non-production app, existing human-reviewed/seeded sandbox accounts and profiles, store access in the same machine/session, and a shared broker/browser filesystem. The fixture supports cookies from `form-post`, next-auth v4 credentials and opted-in `app-handoff` with `options.mePath`. It does not add generic SSO/MFA, browser-storage auth, token-header support or remote session-file transfer. Preserve the app's dependencies/configuration and use its normal client permissions.
 
 ## Start from a new scaffold, or preserve an existing suite
 
 After [package and skill setup](https://github.com/testlane-dev/testlane/blob/main/docs/agent-verification.md), initialize from the app directory with:
 
 ```sh
-npx --no-install testlane verify init --brief output/feature-brief.md --target http://127.0.0.1:3000 --profile notes:testing:writer --environment testing --output-dir e2e/testlane-verification --json
+npx --no-install testlane verify init --brief output/feature-brief.md --target http://localhost:3000 --profile shop:testing:qa --environment testing --output-dir e2e/testlane-verification --json
 ```
 
 Use a local ignored UTF-8 brief file and actual approved values. Init refuses an existing suite directory; it writes `plan.json`, ignored `brief.md`, fixture/helper copies, `test.mjs` with an initial `qa` role alias, and a deliberately skipped spec. It does no authentication or account/registry/vault changes. Replace the scaffold with app-specific cases and assertions, adapt only the app test configuration to existing role mappings, and mark the plan `reviewed` after coverage/scope review. The scaffold alone must not pass. If a reviewed suite already exists, adapt it rather than running init over it.
@@ -116,6 +118,12 @@ The same Node argv works in PowerShell. The command uses the installed broker an
 Reports use a unique `run-<id>/` output directory. The printed `reportPath` is relative to the selected output root, for example `run-<id>/report.json`. They record static case IDs/status/reason codes, attempts, `assertionsObserved`, cleanup outcomes, plan/spec hashes, helper/harness versions and a relative artifact inventory. Freeform titles/expectations, target URLs, raw test errors and stdout are excluded from the machine report. Keep the plan and authored tests for interpreting those IDs. The artifacts and app-controlled code remain trusted local material; report sanitization is not a security boundary for a hostile test.
 
 When present, `failureLocation: {"line": N, "column": M}` identifies the first valid failed Playwright `expect` location in that case's exact planned spec; both numbers are integers from 1 to 1,000,000. Unavailable or ambiguous locations are `null`, and older reports may omit the field. It contains no path, message, title or value. Use the report's bound `specId` and unchanged spec hash to find the source; helper/imported-file locations are not retained. Observed failed expects prevent a pass even when test code catches their exception.
+
+## Runner limits
+
+The runner generates a private Playwright configuration and does not load the app's `playwright.config.*`. It selects only the planned specs, fixes one worker and zero retries, and sets a default **30-second per-test timeout** and **175-second whole-suite timeout**. A separate **180-second outer timer** requests cancellation if the child has not finished. This version exposes no timeout flag.
+
+Design short feature suites within these bounds and split larger requirements into separate plans/runs. Start the app first using its normal instructions: app-config `webServer`, projects, global setup, reporters and other settings are not inherited. Keep the existing config unchanged and place required case setup in reviewed app-owned fixtures/tests. Inspect owned data after a timeout/cancellation before replaying a mutation; cleanup is attempted, not guaranteed after a forced stop.
 
 ## Retained evidence and recovery
 
