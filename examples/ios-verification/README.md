@@ -132,6 +132,11 @@ derived data are private to the run. Teardown stops owned server/build processes
 shuts down and deletes only that Simulator, and checks device/listener absence
 before removing its owned temporary directories.
 
+Native device tools receive only selected toolchain/environment settings and the
+run's private home, temporary and Appium directories. Unrelated inherited
+credentials and Node injection settings are not forwarded. This limits accidental
+diagnostic exposure; it does not isolate trusted tools from the same OS user.
+
 ## Evidence and current limits
 
 Each compound role-loading and native UI case has a 90-second body budget,
@@ -141,6 +146,9 @@ cases run once without retries. Cold Appium/WebDriverAgent session creation has
 its own 240-second ceiling within that outer limit. Fixed numeric `timings.json`
 metrics retain per-phase elapsed time and ownership-check RPC counts/time even on
 phase failure, without identifiers, view text, raw errors or driver payloads.
+Simulator boot has a 180-second bound. Its first read-only ownership inventory query
+has a separate 90-second allowance for cold CoreSimulator startup; subsequent
+inventory queries retain their ordinary 30-second bound.
 
 Successful output contains the reviewed plan, three fixed-shape JSON reports and a
 receipt with source, app-tree, build-manifest, plan, case and installed-package

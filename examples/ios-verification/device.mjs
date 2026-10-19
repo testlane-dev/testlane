@@ -7,6 +7,7 @@ import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createIosDeviceEnvironment } from './environment.mjs';
 
 const UUID = /^[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}$/;
 const BUNDLE = 'dev.testlane.iosproof', MARKER = 'testlane-owned-simulator.json';
@@ -130,9 +131,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   const marker = { schemaVersion: 1, nonce: randomBytes(12).toString('hex'), ownerPid: process.pid, name: '', udid: null, deviceSetPath, runtimeId: null, deviceType: null, appiumPid: null };
   marker.name = 'testlane_ios_' + marker.nonce;
   const commands = new Set(); let appium, closing, closed = false, ready = false, createAttempted = false, createSettled = false, captured = '', captureBytes = 0, captureFailed = false, target, xcodeVersion;
-  const env = { ...process.env, HOME: home, CFFIXED_USER_HOME: home, APPIUM_HOME: appiumHome, APPIUM_SKIP_EXTENSIONS_INSTALL: '1',
-    TMPDIR: path.join(root, 'tmp') + '/', XDG_CACHE_HOME: path.join(root, 'cache'), LC_ALL: 'C', DEBUG: '', NODE_DEBUG: '', VERBOSE_LOGGING: '0' };
-  for (const key of Object.keys(env)) if (key.startsWith('SIMCTL_CHILD_') || ['NODE_OPTIONS', 'USE_PORT', 'USE_IP', 'MJPEG_SERVER_PORT'].includes(key)) delete env[key];
+  let env;
   const capture = text => { const bytes = Buffer.byteLength(text); if (captureBytes + bytes > LIMIT) { captureFailed = true; return; } captured += text; captureBytes += bytes; };
   const writeMarker = () => writeFile(path.join(root, MARKER), JSON.stringify(marker) + '\n', { mode: 0o600 });
   const live = (allowClosing = false) => { if (closed || (closing && !allowClosing) || signal?.aborted) throw fail('IOS_CANCELLED'); if (captureFailed) throw fail('IOS_CAPTURE_LIMIT'); if (ready && (!appium?.spawned || appium.closed)) throw fail('IOS_APPIUM_STOPPED'); };
@@ -172,13 +171,13 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     if (await realpath(deviceSetPath) !== deviceSetPath || (await lstat(deviceSetPath)).isSymbolicLink()) throw fail('IOS_OWNERSHIP_REFUSED');
     return current;
   }
-  async function listOwned(ignoreSignal = false) {
-    const result = await simctl(['list', 'devices', '--json'], { ignoreSignal });
+  async function listOwned(ignoreSignal = false, timeoutMs = 30000) {
+    const result = await simctl(['list', 'devices', '--json'], { ignoreSignal, timeoutMs });
     if (result.code !== 0) throw fail('IOS_SIMULATOR_LIST_FAILED');
     try { const parsed = JSON.parse(result.stdout); if (!parsed.devices || typeof parsed.devices !== 'object') throw fail(); return parsed.devices; } catch { throw fail('IOS_SIMULATOR_LIST_FAILED'); }
   }
-  async function assertOwned() {
-    live(); const current = await assertRoot(); const devices = await listOwned();
+  async function assertOwned(queryTimeoutMs = 30000) {
+    live(); const current = await assertRoot(); const devices = await listOwned(false, queryTimeoutMs);
     verifyOwnedSimulator({ expected: marker, marker: current, devices });
     const ownDevice = path.join(deviceSetPath, marker.udid);
     if (await realpath(ownDevice) !== ownDevice || (await lstat(ownDevice)).isSymbolicLink()) throw fail('IOS_OWNERSHIP_REFUSED');
@@ -314,7 +313,9 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   const abortLifecycle = () => { void close().catch(() => {}); };
   try {
     await writeMarker();
-    await Promise.all([deviceSetPath, derivedDataPath, home, appiumHome, env.TMPDIR, env.XDG_CACHE_HOME].map(dir => mkdir(dir, { recursive: true, mode: 0o700 })));
+    await Promise.all([deviceSetPath, derivedDataPath, home, appiumHome, path.join(root, 'tmp'), path.join(root, 'cache')].map(dir => mkdir(dir, { recursive: true, mode: 0o700 })));
+    env = createIosDeviceEnvironment({ HOME: home, CFFIXED_USER_HOME: home, APPIUM_HOME: appiumHome,
+      TMPDIR: path.join(root, 'tmp') + '/', XDG_CACHE_HOME: path.join(root, 'cache') });
     const version = await run('/usr/bin/xcodebuild', ['-version']);
     xcodeVersion = /^Xcode (\d+(?:\.\d+){0,2})\s*$/m.exec(version.stdout)?.[1];
     if (version.code !== 0 || !xcodeVersion) throw fail('IOS_XCODE_PREREQUISITE_FAILED');
@@ -335,7 +336,10 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     signal?.addEventListener('abort', abortLifecycle, { once: true });
     const bootStatus = await simctl(['bootstatus', marker.udid, '-b'], { timeoutMs: 180000 });
     if (bootStatus.code !== 0) throw fail('IOS_SIMULATOR_BOOT_TIMEOUT');
-    await assertOwned(); onStage('owned-simulator-booted');
+    // Hosted cold boot can finish before CoreSimulator answers its first device
+    // inventory query promptly. Allow that single read-only startup query more
+    // time; steady-state ownership checks and all mutation budgets stay fixed.
+    await assertOwned(90000); onStage('owned-simulator-booted');
     const { Manifest } = await import(pathToFileURL(path.join(appiumRoot, 'build', 'lib', 'extension', 'manifest.js')).href);
     const manifest = new Manifest(appiumHome); await manifest.read(); manifest.addExtensionFromPackage(driverPackage, path.join(driverRoot, 'package.json'), 'local'); await manifest.write();
     live();
@@ -353,7 +357,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     await assertOwned(); onStage('private-appium-ready');
     return Object.freeze({ udid: marker.udid, serverUrl, deviceSetPath, derivedDataPath, wdaPort, mjpegPort,
       versions: Object.freeze({ appium: '3.8.0', xcuitest: '12.19.1', webdriveragent: '16.16.3', xcode: xcodeVersion, ios: target.platformVersion, runtimeId: target.runtimeId, deviceType: target.deviceType }),
-      assertOwned, capturedText: () => captured,
+      assertOwned: () => assertOwned(), capturedText: () => captured,
       async installApp(appPath) {
         if (!safePath(appPath) || !appPath.endsWith('.app') || !(await lstat(appPath)).isDirectory() || (await lstat(appPath)).isSymbolicLink()) throw fail('IOS_APP_INPUT_INVALID');
         await assertOwned(); live(); const result = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'install', [await realpath(appPath)]), { timeoutMs: 120000 });

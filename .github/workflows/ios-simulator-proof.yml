@@ -2,7 +2,7 @@ name: iOS simulator proof
 
 on:
   push:
-    branches: [codex/ios-simulator-proof]
+    branches: [main]
     paths:
       - .github/workflows/ios-simulator-proof.yml
       - scripts/ios-*.mjs
