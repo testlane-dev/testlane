@@ -19,7 +19,7 @@ export function macOSCoverage(path) {
       /^src\/(?:vault|paths|lock)\.ts$/.test(file) || file === 'tests/vault.test.ts') {
     return ['check', 'cleanRoom', 'keychain'];
   }
-  if (/^examples\/(?:workflows|existing-app|playwright|agent-verification)\//.test(file) || /^src\/workflows\//.test(file) ||
+  if (/^examples\/(?:workflows|existing-app|playwright|agent-verification|verification-demo)\//.test(file) || /^src\/workflows\//.test(file) ||
       /^schema\/(?:workflow|feature-workflow)/.test(file) || /^tests\/workflow-/.test(file)) {
     return ['workflow', 'cleanRoom'];
   }

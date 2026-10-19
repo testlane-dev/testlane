@@ -56,10 +56,25 @@ export default class VerificationReporter {
       const starts = values('testlane-started');
       const bodies = values('testlane-body');
       const bodyValid = bodies.length === 1 && ['completed', 'failed'].includes(bodies[0]);
+      const helperValid = bodyValid && helpers.length === 1 && helpers[0] === this.control.helperVersion + ':' + this.control.helperHash;
+      const started = starts.length === 1 && starts[0] === mapping?.id;
+      const cleanup = clean.length === 1 && ['completed', 'failed', 'not-required'].includes(clean[0]) ? clean[0] : 'unknown';
       const screenshots = values('testlane-screenshot');
       // Neither an inner assertion catch nor an outer helper catch erases failure.
       const status = result.status === 'passed' && ((bodyValid && bodies[0] === 'failed') || this.assertionFailures.has(result)) ? 'failed' :
         ['passed', 'failed', 'timedOut', 'skipped', 'interrupted'].includes(result.status) ? result.status : 'unknown';
+      // Classify lifecycle evidence only. Exception names/messages, stacks, browser
+      // output and network values never enter the journal, even as diagnostics.
+      let diagnosticCode = null;
+      if (cleanup === 'failed') diagnosticCode = 'CLEANUP_FAILED';
+      else if (status === 'timedOut') diagnosticCode = 'CASE_TIMED_OUT';
+      else if (status === 'failed') {
+        if (!helperValid || !started) diagnosticCode = 'CASE_SETUP_OR_CONTRACT_FAILED';
+        else if (this.assertionFailures.has(result)) diagnosticCode = 'ASSERTION_FAILED';
+        else if (bodies[0] === 'failed') diagnosticCode = 'CASE_BODY_FAILED';
+        else if (bodies[0] === 'completed' && ['completed', 'not-required'].includes(cleanup)) diagnosticCode = 'CASE_AFTER_BODY_FAILED';
+        else diagnosticCode = 'CASE_SETUP_OR_CONTRACT_FAILED';
+      }
       this.results.push({
         id: mapping?.id ?? null, mapped: mapping?.valid === true,
         status,
@@ -67,9 +82,7 @@ export default class VerificationReporter {
         retry: Number.isInteger(result.retry) ? result.retry : -1,
         assertionsObserved: this.assertions.get(result) ?? 0,
         failureLocation: ['failed', 'timedOut'].includes(status) ? this.failureLocations.get(result) ?? null : null,
-        helper: bodyValid && helpers.length === 1 && helpers[0] === this.control.helperVersion + ':' + this.control.helperHash,
-        started: starts.length === 1 && starts[0] === mapping?.id,
-        cleanup: clean.length === 1 && ['completed', 'failed', 'not-required'].includes(clean[0]) ? clean[0] : 'unknown',
+        helper: helperValid, started, cleanup, diagnosticCode,
         screenshots: screenshots.filter(x => typeof x === 'string' && /^[a-z0-9][a-z0-9-]{0,63}:screenshot-[a-f0-9-]{36}\.png$/.test(x)),
         unexpectedAttachments: result.attachments.length > 0,
       });

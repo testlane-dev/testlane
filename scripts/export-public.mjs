@@ -123,6 +123,15 @@ export const URL_ALLOWLIST = [
   "github.com/testlane-dev/testlane.git",
   // Public upstream HTML authentication example used in installed-package acceptance.
   "github.com/expressjs/express",
+  // Reviewed public upstream references in the product roadmap and mobile proposal.
+  "docs.autosana.ai/local-testing",
+  "docs.autosana.ai/mcp-setup",
+  "docs.autosana.ai/code-managed-flows",
+  "appium.io/docs/en/latest/intro",
+  "appium.io/docs/en/latest/ecosystem",
+  "docs.maestro.dev/",
+  "docs.maestro.dev/reference/commands-available/asserttrue.md",
+  "docs.expo.dev/develop/development-builds/introduction",
   "example.com",
   "example.net",
   "example.org",

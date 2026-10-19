@@ -5,7 +5,7 @@ import { realpathSync } from 'node:fs';
 import { lstat, readFile, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HARNESS_VERSION, validatePlan } from './contracts.mjs';
+import { HARNESS_VERSION, validatePlan, diagnostic, validDiagnostic, caseDiagnosticCode, runDiagnostics } from './contracts.mjs';
 import { LIMITS } from './runtime.mjs';
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -21,7 +21,7 @@ const CASE_REASONS = {
 const RUN_REASONS = ['GLOBAL_TEST_ERROR', 'CASE_MAPPING_INVALID', 'RUN_CONFIGURATION_INVALID', 'REPORTER_INVALID',
   'NO_TESTS_DISCOVERED', 'FORCED_STOP', 'RUN_CANCELLED', 'TEST_RUN_FAILED', 'PLAN_NOT_REVIEWED',
   'PLAN_CHANGED_DURING_RUN', 'SPEC_CHANGED_DURING_RUN', 'UNAPPROVED_ARTIFACT', 'ARTIFACT_MISSING',
-  'PLAN_INVALID', 'PROJECT_INVALID', 'SPEC_INVALID', 'PLAYWRIGHT_UNAVAILABLE', 'RUNNER_BLOCKED'];
+  'PLAN_INVALID', 'PROJECT_INVALID', 'SPEC_INVALID', 'PLAYWRIGHT_UNAVAILABLE', 'RUNNER_BLOCKED', 'RUNNER_START_FAILED', 'RUN_TIMED_OUT'];
 const CLEANUP = ['completed', 'failed', 'not-required', 'unknown'];
 function digest(value) { return typeof value === 'string' && SHA.test(value); }
 function fail(code) { throw new Error(code); }
@@ -43,7 +43,7 @@ async function input(file, max) {
 }
 function validateReport(report, plan) {
   if (!keys(report, ['schemaVersion', 'runId', 'harness', 'helper', 'plan', 'specs', 'reportPath', 'verdict',
-    'reasonCodes', 'cases', 'artifacts', 'limits', 'execution']) || report.schemaVersion !== 1 ||
+    'reasonCodes', 'diagnostics', 'cases', 'artifacts', 'limits', 'execution']) || report.schemaVersion !== 1 ||
     typeof report.runId !== 'string' || !UUID.test(report.runId) ||
     !keys(report.harness, ['version', 'sha256']) || report.harness.version !== HARNESS_VERSION ||
     (report.harness.sha256 !== undefined && !digest(report.harness.sha256)) ||
@@ -54,6 +54,11 @@ function validateReport(report, plan) {
     !Array.isArray(report.cases) || report.cases.length !== plan.cases.length ||
     !Array.isArray(report.specs) || !Array.isArray(report.artifacts) || report.artifacts.length > plan.cases.length * 5 ||
     !Array.isArray(report.limits) || JSON.stringify(report.limits) !== JSON.stringify(LIMITS)) fail('REPORT_INVALID');
+  if (report.diagnostics !== undefined) {
+    const expected = runDiagnostics(report.reasonCodes);
+    if (!Array.isArray(report.diagnostics) || report.diagnostics.length !== expected.length ||
+      report.diagnostics.some((value, index) => !validDiagnostic(value) || value.code !== expected[index].code)) fail('REPORT_INVALID');
+  }
   if (report.helper !== undefined && (!keys(report.helper, ['version', 'sha256']) || report.helper.version !== '1' || !digest(report.helper.sha256))) fail('REPORT_INVALID');
   if (report.execution !== undefined && (!keys(report.execution, ['exitCode', 'cancelled', 'forced']) ||
     !(report.execution.exitCode === null || integer(report.execution.exitCode, 255)) ||
@@ -68,7 +73,7 @@ function validateReport(report, plan) {
   const ids = new Set();
   for (const item of report.cases) {
     const planned = plan.cases.find(value => value.id === item?.id);
-    if (!planned || ids.has(item.id) || !keys(item, ['id', 'status', 'reason', 'cleanup', 'attempts', 'assertionsObserved', 'specId', 'failureLocation']) ||
+    if (!planned || ids.has(item.id) || !keys(item, ['id', 'status', 'reason', 'cleanup', 'attempts', 'assertionsObserved', 'specId', 'failureLocation', 'diagnostic']) ||
       !Object.hasOwn(CASE_REASONS, item.status) || !CASE_REASONS[item.status].includes(item.reason) ||
       !keys(item.cleanup, ['required', 'status']) || item.cleanup.required !== planned.cleanup.required || !CLEANUP.includes(item.cleanup.status) ||
       !integer(item.attempts, 300) || (item.assertionsObserved !== undefined && !integer(item.assertionsObserved)) ||
@@ -76,6 +81,9 @@ function validateReport(report, plan) {
       (item.failureLocation !== undefined && (!validFailureLocation(item.failureLocation) ||
         (item.failureLocation !== null && (item.status !== 'failed' || !item.specId || item.assertionsObserved < 1)))) ||
       (item.specId !== undefined && (item.specId !== hash(planned.spec) || !specs.has(item.specId)))) fail('REPORT_INVALID');
+    if (item.diagnostic !== undefined && (!validDiagnostic(item.diagnostic) || item.status === 'passed' ||
+      caseDiagnosticCode(item.reason, item.diagnostic.code) !== item.diagnostic.code ||
+      (item.diagnostic.code === 'ASSERTION_FAILED' && !(item.assertionsObserved >= 1)))) fail('REPORT_INVALID');
     ids.add(item.id);
     if ((item.status === 'passed' && (item.attempts !== 1 || item.assertionsObserved < 1 || !item.specId ||
       (item.cleanup.status !== 'completed' && (planned.cleanup.required || item.cleanup.status !== 'not-required')))) ||
@@ -116,6 +124,8 @@ async function validateArtifacts(report, plan, directory) {
   }
 }
 function html(report, plan) {
+  const guidance = value => '<div class="diagnostic"><h3>What to check</h3><p><code>' + escape(value.code) + '</code>: ' +
+    escape(value.summary) + '</p><p><strong>Next:</strong> ' + escape(value.remedy) + '</p></div>';
   const details = report.cases.map(item => {
     const planned = plan.cases.find(value => value.id === item.id);
     const links = report.artifacts.filter(artifact => artifact.caseId === item.id).map(artifact =>
@@ -124,6 +134,7 @@ function html(report, plan) {
       '<p class="meta">Case <code>' + item.id + '</code> · ' + (item.assertionsObserved ?? 0) + ' observed assertions · ' + item.attempts + ' attempt(s)</p>' +
       '<p>Reason: <code>' + item.reason + '</code></p>' +
       (item.failureLocation ? '<p>Spec line ' + item.failureLocation.line + ', column ' + item.failureLocation.column + '</p>' : '') +
+      (item.status !== 'passed' ? guidance(item.diagnostic ?? diagnostic(caseDiagnosticCode(item.reason))) : '') +
       '<h3>Expected behavior</h3><ul>' + planned.expected.map(value => '<li>' + escape(value) + '</li>').join('') +
       '</ul><h3>Cleanup: ' + item.cleanup.status + (planned.cleanup.required ? ' (required)' : ' (optional)') + '</h3><p>' + escape(planned.cleanup.description) + '</p>' +
       (links ? '<h3>Evidence</h3><p>Private app data. Contents are unreviewed; no binary redaction is claimed.</p><ul>' + links + '</ul>' : '<p class="meta">No screenshots retained for this case.</p>') + '</section>';
@@ -136,7 +147,8 @@ function html(report, plan) {
     '</style></head><body><main><header><div class="eyebrow">Testlane · private local report</div><h1>' + escape(plan.title) + '</h1><strong class="status ' + report.verdict + '">' + report.verdict + '</strong>' +
     '<p class="meta">Run <code>' + report.runId + '</code></p></header><section class="panel"><h2>What this report means</h2>' +
     '<p>This summary contains private application descriptions. Review it before sharing. Hashes bind these local inputs; this report is not signed and does not prove that arbitrary report data was left unedited.</p>' +
-    '<p>Run reason codes: ' + (report.reasonCodes.length ? report.reasonCodes.map(value => '<code>' + value + '</code>').join(', ') : 'none') + '</p></section>' + details +
+    '<p>Run reason codes: ' + (report.reasonCodes.length ? report.reasonCodes.map(value => '<code>' + value + '</code>').join(', ') : 'none') + '</p>' +
+    (report.diagnostics ?? runDiagnostics(report.reasonCodes)).map(guidance).join('') + '</section>' + details +
     '<section class="panel"><h2>Input hashes</h2><p>Plan SHA256 <code>' + report.plan.sha256 + '</code></p><p>Harness version ' + escape(report.harness.version) + ' · SHA256 <code>' + (report.harness.sha256 ?? 'not recorded') + '</code></p>' +
     '<p>Authoring helper SHA256 <code>' + (report.helper?.sha256 ?? 'not recorded') + '</code></p><ul>' + specs + '</ul></section>' +
     '<section class="panel"><h2>Limits</h2><ul>' + report.limits.map(value => '<li>' + escape(value) + '</li>').join('') + '</ul></section></main></body></html>\n';

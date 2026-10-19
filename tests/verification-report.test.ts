@@ -13,6 +13,11 @@ const { renderVerificationReport } = await import(rendererUrl.href) as {
   renderVerificationReport: (options: { reportFile: string; planFile: string }) => Promise<{ status: string; filename: string }>;
 };
 const { LIMITS } = await import(runtimeUrl.href) as { LIMITS: string[] };
+type Diagnostic = { code: string; summary: string; remedy: string };
+const { diagnostic, runDiagnostics } = await import(new URL("../examples/agent-verification/contracts.mjs", import.meta.url).href) as {
+  diagnostic: (code: string) => Diagnostic;
+  runDiagnostics: (reasonCodes: string[]) => Diagnostic[];
+};
 const execute = promisify(execFile);
 const sha = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const runId = "b4b5ecaf-9108-44f3-bc61-c07ba480207f";
@@ -81,6 +86,8 @@ describe("private static verification report", () => {
     expect(html).toContain("Saved note survives reload");
     expect(html).toContain("3 observed assertions");
     expect(html).toContain("CASE_FAILED");
+    expect(html).toContain("RUNNER_FAILED");
+    expect(html).toContain("Review case and run diagnostics");
     expect(html).toContain("Cleanup: completed (required)");
     expect(html).toContain(item.report.plan.sha256);
     expect(html).toContain("c".repeat(64));
@@ -89,6 +96,72 @@ describe("private static verification report", () => {
     expect(html).toContain("base-uri 'none'; form-action 'none'");
     expect(html).toContain("prefers-reduced-motion");
     expect(html).not.toMatch(/<script|<link|<iframe|<img|\sonclick=/i);
+  });
+
+  it("renders fixed case and run remedies while preserving schema-v1 reports without diagnostic fields", async () => {
+    const item = await fixture();
+    item.report.verdict = "failed";
+    item.report.execution.exitCode = 1;
+    item.report.reasonCodes = ["GLOBAL_TEST_ERROR"];
+    Object.assign(item.report, { diagnostics: runDiagnostics(item.report.reasonCodes) });
+    Object.assign(item.report.cases[0]!, { status: "failed", reason: "CASE_FAILED", diagnostic: diagnostic("CASE_BODY_FAILED") });
+    await item.saveReport();
+    await renderVerificationReport(item);
+    const html = await fs.readFile(path.join(item.directory, "summary.html"), "utf8");
+    expect(html).toContain("CASE_BODY_FAILED");
+    expect(html).toContain("Inspect actions and app-owned helper calls");
+    expect(html).toContain("Review spec imports, suite hooks");
+    expect(html).not.toContain("browser is missing");
+    // The pre-existing fixture and tests omit both optional diagnostic fields.
+    expect(html).toContain("What to check");
+  });
+
+  it("accepts reordered diagnostic object members while preserving run-code order and exact catalogue values", async () => {
+    const item = await fixture();
+    item.report.verdict = "failed";
+    item.report.execution.exitCode = 1;
+    item.report.reasonCodes = ["GLOBAL_TEST_ERROR", "RUNNER_START_FAILED"];
+    const reordered = (value: Diagnostic) => ({ remedy: value.remedy, code: value.code, summary: value.summary });
+    Object.assign(item.report, { diagnostics: runDiagnostics(item.report.reasonCodes).map(reordered) });
+    Object.assign(item.report.cases[0]!, { status: "failed", reason: "CASE_FAILED", diagnostic: reordered(diagnostic("CASE_BODY_FAILED")) });
+    await item.saveReport();
+    await renderVerificationReport(item);
+    const html = await fs.readFile(path.join(item.directory, "summary.html"), "utf8");
+    expect(html).toContain(diagnostic("CASE_BODY_FAILED").summary);
+    expect(html).toContain(diagnostic("RUNNER_START_FAILED").remedy);
+  });
+
+  it.each(["reversed", "duplicated", "missing"])("rejects %s run diagnostics even with valid catalogue text", async mutation => {
+    const item = await fixture();
+    item.report.verdict = "failed";
+    item.report.execution.exitCode = 1;
+    item.report.reasonCodes = ["GLOBAL_TEST_ERROR", "RUNNER_START_FAILED"];
+    Object.assign(item.report.cases[0]!, { status: "failed", reason: "CASE_FAILED" });
+    const values = runDiagnostics(item.report.reasonCodes);
+    if (mutation === "reversed") values.reverse();
+    if (mutation === "duplicated") values[1] = { ...values[0]! };
+    if (mutation === "missing") values.pop();
+    Object.assign(item.report, { diagnostics: values });
+    await item.saveReport();
+    await expect(renderVerificationReport(item)).rejects.toThrow("REPORT_INVALID");
+  });
+
+  it.each(["summary", "remedy", "extra", "unknown-code", "wrong-reason", "run-payload", "run-mismatch"])("rejects untrusted diagnostic text or inconsistent codes: %s", async mutation => {
+    const item = await fixture();
+    item.report.verdict = "failed";
+    item.report.execution.exitCode = 1;
+    Object.assign(item.report.cases[0]!, { status: "failed", reason: "CASE_FAILED" });
+    const value: Record<string, unknown> = { ...diagnostic("CASE_BODY_FAILED") };
+    if (mutation === "summary" || mutation === "remedy") value[mutation] = "<script>private observed value</script>";
+    if (mutation === "extra") value.error = "private observed error";
+    if (mutation === "unknown-code") value.code = "private observed value";
+    if (mutation === "wrong-reason") Object.assign(value, diagnostic("CLEANUP_FAILED"));
+    Object.assign(item.report.cases[0]!, { diagnostic: value });
+    if (mutation === "run-payload") Object.assign(item.report, { diagnostics: [{ ...diagnostic("GLOBAL_TEST_ERROR"), summary: "private observed error" }] });
+    if (mutation === "run-mismatch") Object.assign(item.report, { diagnostics: [diagnostic("GLOBAL_TEST_ERROR")] });
+    await item.saveReport();
+    await expect(renderVerificationReport(item)).rejects.toThrow("REPORT_INVALID");
+    await expect(fs.stat(path.join(item.directory, "summary.html"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("binds the exact plan bytes rather than equivalent parsed JSON", async () => {

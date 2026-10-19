@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { readFile, writeFile, mkdir, realpath, lstat, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HARNESS_VERSION, validatePlan } from './contracts.mjs';
+import { HARNESS_VERSION, validatePlan, diagnostic, caseDiagnosticCode, runDiagnostics, CASE_FAILURE_DIAGNOSTICS } from './contracts.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const sha256 = value => createHash('sha256').update(value).digest('hex');
@@ -26,6 +26,7 @@ export const LIMITS = [
 ];
 export function reconcile(plan, journal, execution) {
   const errors = [];
+  if (execution.startupFailed === true) errors.push('RUNNER_START_FAILED');
   const rawRows = Array.isArray(journal?.results) ? journal.results : [];
   const rows = rawRows.filter(row => row && typeof row === 'object');
   if (!journal || journal.schemaVersion !== 1 || !Number.isInteger(journal.discovered) ||
@@ -36,10 +37,15 @@ export function reconcile(plan, journal, execution) {
       !['mapped', 'expectedPassed', 'helper', 'started', 'unexpectedAttachments'].every(key => typeof row[key] === 'boolean') ||
       !Number.isInteger(row.retry) || !['completed', 'failed', 'not-required', 'unknown'].includes(row.cleanup) ||
       !Number.isInteger(row.assertionsObserved) || row.assertionsObserved < 0 ||
+      (row.diagnosticCode !== undefined && row.diagnosticCode !== null &&
+        (![...CASE_FAILURE_DIAGNOSTICS, 'CASE_TIMED_OUT', 'CLEANUP_FAILED'].includes(row.diagnosticCode) ||
+          (!['failed', 'timedOut'].includes(row.status) && row.cleanup !== 'failed') ||
+          (row.diagnosticCode === 'ASSERTION_FAILED' && row.assertionsObserved < 1))) ||
       (row.failureLocation !== undefined && (!validFailureLocation(row.failureLocation) ||
         (row.failureLocation !== null && (!row.mapped || !['failed', 'timedOut'].includes(row.status) || row.assertionsObserved < 1)))) ||
       !Array.isArray(row.screenshots))) errors.push('REPORTER_INVALID');
   if (journal?.discovered === 0) errors.push('NO_TESTS_DISCOVERED');
+  if (journal?.outcome === 'timedout') errors.push('RUN_TIMED_OUT');
   if (rows.some(r => !r.mapped || !plan.cases.some(c => c.id === r.id))) errors.push('CASE_MAPPING_INVALID');
   const cases = plan.cases.map(item => {
     const results = rows.filter(r => r.id === item.id);
@@ -60,7 +66,9 @@ export function reconcile(plan, journal, execution) {
       else if (row.assertionsObserved < 1) reason = 'NO_ASSERTIONS_OBSERVED';
       else if (row.status === 'passed') { status = 'passed'; reason = 'CASE_PASSED'; }
     } else if (execution.cancelled) { status = 'cancelled'; reason = execution.forced ? 'FORCED_STOP' : 'RUN_CANCELLED'; }
+    const code = caseDiagnosticCode(reason, results.length === 1 ? results[0].diagnosticCode : undefined);
     return { id: item.id, status, reason, cleanup: { required: item.cleanup.required, status: cleanup }, attempts: results.length,
+      ...(code ? { diagnostic: diagnostic(code) } : {}),
       failureLocation: status === 'failed' && results.length === 1 && results[0].mapped && validFailureLocation(results[0].failureLocation) && results[0].failureLocation !== null && results[0].assertionsObserved > 0 ?
         { line: results[0].failureLocation.line, column: results[0].failureLocation.column } : null,
       assertionsObserved: results.reduce((sum, row) => sum + (Number.isInteger(row.assertionsObserved) && row.assertionsObserved > 0 ? row.assertionsObserved : 0), 0) };
@@ -72,20 +80,20 @@ export function reconcile(plan, journal, execution) {
   if (execution.cancelled || cases.some(c => c.status === 'cancelled')) verdict = 'cancelled';
   else if (cases.some(c => c.status === 'failed')) verdict = 'failed';
   else if (errors.length || cases.length === 0 || cases.some(c => c.status !== 'passed')) verdict = 'blocked';
-  return { verdict, reasonCodes: [...new Set(errors)], cases };
+  return { verdict, reasonCodes: [...new Set(errors)], diagnostics: runDiagnostics(errors), cases };
 }
 function expression(file) {
   return '^' + file.split(/[\\/]/).map(part => part.replace(/[.*+?^$()|[\]{}\\]/g, '\\$&')).join('[\\\\/]') + '$';
 }
 async function runChild(cli, config, project, env, signal) {
   return new Promise(resolve => {
-    let child, timer, forceTimer, settled = false, cancelled = signal?.aborted === true, forced = false;
-    const finish = exitCode => {
+    let child, timer, forceTimer, settled = false, spawned = false, cancelled = signal?.aborted === true, forced = false;
+    const finish = (exitCode, startupFailed = false) => {
       if (settled) return;
       settled = true; clearTimeout(timer); clearTimeout(forceTimer); signal?.removeEventListener('abort', cancel);
       child?.stdout?.destroy(); child?.stderr?.destroy();
       if (child?.connected) child.disconnect();
-      resolve({ exitCode, cancelled, forced });
+      resolve({ exitCode, cancelled, forced, startupFailed });
     };
     const cancel = () => {
       cancelled = true;
@@ -99,11 +107,12 @@ async function runChild(cli, config, project, env, signal) {
         env, cwd: project, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       });
       child.stdout.on('data', () => {}); child.stderr.on('data', () => {});
-      child.once('error', () => finish(null)); child.once('exit', code => finish(code));
+      child.once('spawn', () => { spawned = true; });
+      child.once('error', () => finish(null, !spawned)); child.once('exit', code => finish(code));
       timer = setTimeout(cancel, 180000);
       signal?.addEventListener('abort', cancel, { once: true });
       if (cancelled) cancel();
-    } catch { finish(null); }
+    } catch { finish(null, true); }
   });
 }
 export async function runVerification({ planFile, outputDir, signal }) {
@@ -191,6 +200,8 @@ export async function runVerification({ planFile, outputDir, signal }) {
     report.verdict = signal?.aborted ? 'cancelled' : 'blocked';
   }
   report.reasonCodes = [...new Set(report.reasonCodes)];
+  report.diagnostics = runDiagnostics(report.reasonCodes);
+  for (const item of report.cases) if (item.status !== 'passed' && !item.diagnostic) item.diagnostic = diagnostic(caseDiagnosticCode(item.reason));
   const filename = path.join(directory, 'report.json');
   await writeFile(filename, JSON.stringify(report, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   return { report, reportPath: filename, directory };

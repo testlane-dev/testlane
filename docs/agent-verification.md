@@ -163,3 +163,8 @@ Trace, video and automatic screenshots remain off. Set manual screenshots only w
 The fixture supports approved cookie profiles and requires the browser to share the broker filesystem. It does not add generic SSO/MFA, token-header, browser-storage or remote-browser support. Profile environment labels and declared production-host refusal cannot discover an undeclared production app. Contexts separate cookies, not shared records or concurrent invocations. See [compatibility](compatibility.md), [session lifetime](sessions.md#lifetime-and-cleanup) and the [threat model](threat-model.md).
 
 A pass is evidence for the cases you designed and ran. It is not an independent security audit, a general authorization proof or certification of every coding-agent client.
+
+Development builds after beta.2 add [fixed failure diagnostics](verification-diagnostics.md)
+with phase-specific next steps. The [approval demonstration](../examples/verification-demo/README.md)
+also lives on current source and is unreleased; use its source instructions rather
+than expecting it in the immutable beta.2 npm package.

@@ -1,4 +1,4 @@
-/** Installed-package launch proof: diagnostics, real MCP file delivery and both workflow commands. */
+/** Installed-package launch proof: diagnostics, MCP, workflow commands and verification demo. */
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -12,6 +12,7 @@ import { consumerProject, assertNoLeaks } from '../examples/playwright/tests/con
 import { createRealBrokerHarness, realBrokerSupport, referenceProfiles } from '../examples/workflows/test-support/real-broker.mjs';
 import { REFERENCE_FORM, REFERENCE_HEADING, REFERENCE_PATHS, startReferenceApp } from '../examples/workflows/test-support/reference-app.mjs';
 import { issueReceipt } from '../examples/workflows/test-support/receipt.mjs';
+import { runVerificationDemoProof } from './verification-demo-proof.mjs';
 
 const execute = promisify(execFile);
 const support = realBrokerSupport();
@@ -32,6 +33,16 @@ async function gone(file) {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   return false;
+}
+async function outputText(directory) {
+  let text = '';
+  for (const item of await readdir(directory, { withFileTypes: true })) {
+    const file = path.join(directory, item.name);
+    assert.equal(item.isSymbolicLink(), false, 'proof output contains no symlink');
+    if (item.isDirectory()) text += await outputText(file);
+    else if (item.isFile()) text += await readFile(file, 'utf8');
+  }
+  return text;
 }
 
 if (!support.supported) {
@@ -114,14 +125,15 @@ if (!support.supported) {
     const featureReport = JSON.parse(featureResult.stdout);
     checks.featureCommand = featureResult.code === 0 && featureReport.verdict === 'passed' && featureReport.steps.length === 13 && app.records().length === 0;
     if (!checks.featureCommand) console.error(JSON.stringify({ stage: 'feature', code: featureResult.code, verdict: featureReport.verdict, steps: featureReport.steps.map(({ id,status,reasonCode }) => ({ id,status,reasonCode })) }));
+    const verification = await runVerificationDemoProof({ consumer, support, onStage: name => { phase = 'verification-demo-' + name; } });
+    checks.verificationDemo = verification.passed;
     phase = 'artifact-validation';
     checks.packageUnchanged = before === await digestTree(installed);
     checks.noRetainedSessionFiles = (await readdir(consumer.sessionTemp)).length === 0;
-    let evidence = '';
-    for (const file of await readdir(path.join(consumer.root, 'output'))) evidence += await readFile(path.join(consumer.root, 'output', file), 'utf8');
+    const evidence = await outputText(path.join(consumer.root, 'output'));
     assertNoLeaks(captured + evidence + await harness.auditText(), [writer.password, reader.password, ...app.issuedSessionTokens()]);
     checks.noCredentialLeak = true;
-    console.log(JSON.stringify({ passed: Object.values(checks).every(Boolean), nativeStore: support.store, checks }));
+    console.log(JSON.stringify({ passed: Object.values(checks).every(Boolean), nativeStore: support.store, checks, verification }));
     assert.ok(Object.values(checks).every(Boolean), 'all launch consumer checks pass');
   } catch {
     console.error('FAIL launch consumer proof at fixed stage: ' + phase);
