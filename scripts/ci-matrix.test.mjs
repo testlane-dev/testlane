@@ -42,6 +42,16 @@ test('docs and platform-specific Windows/Linux adapters do not select macOS', ()
   ]) assert.deepEqual(macOSCoverage(path), [], path);
 });
 
+test('source-only account provisioning changes select cross-platform unit checks without native-store jobs', () => {
+  assert.deepEqual(macOSCoverage('examples/account-provisioning/controller.mjs'), ['check']);
+  assert.deepEqual(macOSCoverage('examples/account-provisioning/tests/provisioning.test.mjs'), ['check']);
+  assert.deepEqual(macOSCoverage('examples/account-provisioning/README.md'), []);
+  const selected = selectRunners('pull_request', ['examples/account-provisioning/controller.mjs']);
+  assert.deepEqual(selected.checkOS, ['windows-latest', 'ubuntu-latest', 'macos-latest']);
+  assert.deepEqual(selected.workflowOS, ['windows-latest', 'ubuntu-latest']);
+  assert.deepEqual(selected.keychainOS, ['ubuntu-latest']);
+});
+
 test('ordinary pushes and PRs keep Windows DPAPI and Linux keychain coverage', () => {
   const selected = selectRunners('pull_request', ['README.md']);
   assert.deepEqual(selected.checkOS, ['windows-latest', 'ubuntu-latest']);

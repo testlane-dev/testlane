@@ -14,6 +14,7 @@ export function macOSCoverage(path) {
     return ['check', 'workflow', 'cleanRoom', 'keychain'];
   }
   if (file.endsWith('.md')) return [];
+  if (/^examples\/account-provisioning\//.test(file)) return ['check'];
   if (/^src\/store\/(?:keychain-macos|select|index|encrypted-file|input)\.ts$/.test(file) ||
       /^tests\/store-(?:keychain-macos|real-keychain|select|encrypted-file|input)\.test\.ts$/.test(file) ||
       /^src\/(?:vault|paths|lock)\.ts$/.test(file) || file === 'tests/vault.test.ts') {

@@ -28,29 +28,33 @@ export function demoStorePolicy({ platform = process.platform, allowUserKeychain
 }
 async function stopTree(child) {
   if (!child.pid) return false;
-  let closed = false;
+  let closed = false, treeStopped = false;
   const observe = () => { closed = true; };
+  const killRoot = () => { if (!closed) try { child.kill('SIGKILL'); } catch {} };
   child.once('close', observe);
   if (process.platform !== 'win32') {
-    try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+    try { process.kill(-child.pid, 'SIGKILL'); treeStopped = true; } catch { killRoot(); }
   } else {
     const system = process.env.SystemRoot ?? process.env.windir;
-    if (!system || !path.isAbsolute(system)) child.kill('SIGKILL');
-    else await new Promise(resolve => {
-      const killer = spawn(path.join(system, 'System32', 'taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], {
-        windowsHide: true, shell: false, stdio: 'ignore',
-      });
+    if (!system || !path.isAbsolute(system)) killRoot();
+    else treeStopped = await new Promise(resolve => {
+      let killer;
       let finished = false;
       const done = code => {
         if (finished) return; finished = true; clearTimeout(timer);
-        if (code !== 0 && !closed) child.kill('SIGKILL');
-        resolve();
+        if (code !== 0) killRoot();
+        resolve(code === 0);
       };
-      const timer = setTimeout(() => { killer.kill(); done(null); }, 5000);
-      killer.once('error', () => done(null)); killer.once('close', done);
+      const timer = setTimeout(() => { try { killer?.kill(); } catch {} done(null); }, 5000);
+      try {
+        killer = spawn(path.join(system, 'System32', 'taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], {
+          windowsHide: true, shell: false, stdio: 'ignore',
+        });
+        killer.once('error', () => done(null)); killer.once('close', done);
+      } catch { done(null); }
     });
   }
-  if (closed) return true;
+  if (closed) return treeStopped;
   const confirmed = await new Promise(resolve => {
     const done = () => { clearTimeout(timer); child.off('close', done); resolve(true); };
     const timer = setTimeout(() => { child.off('close', done); resolve(false); }, 5000);
@@ -59,7 +63,9 @@ async function stopTree(child) {
   });
   child.off('close', observe);
   if (!confirmed) { child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy(); child.unref(); }
-  return confirmed;
+  // A root process can close while an orphaned child is still running. Fallback
+  // root termination therefore never proves that the owned process tree stopped.
+  return treeStopped && confirmed;
 }
 
 /** Secrets may be supplied only as input; argv and env must contain no generated credentials. */
@@ -70,7 +76,10 @@ export async function runDemoChild({ entry, args = [], cwd, env = process.env, i
   if (signal?.aborted) throw new Error('DEMO_CANCELLED');
   return new Promise((resolve, reject) => {
     let child, stdout = '', stderr = '', settled = false, stopping = false, timer;
-    const fail = code => { if (!settled) { settled = true; clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(new Error(code)); } };
+    const fail = code => { if (!settled) { settled = true; clearTimeout(timer); signal?.removeEventListener('abort', abort);
+      const error = new Error(code);
+      if (code === 'DEMO_CHILD_TERMINATION_UNCONFIRMED' && Number.isSafeInteger(child?.pid)) error.ownedChildPid = child.pid;
+      reject(error); } };
     const stop = code => {
       if (stopping || settled) return;
       stopping = true;

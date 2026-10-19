@@ -56,6 +56,19 @@ The first mobile milestone targets React Native/Expo and should complete the sam
 approval workflow in an Android emulator. iOS simulator coverage follows on a Mac.
 Tests must include backend state, role denial and verified cleanup.
 
+## Dedicated test-account lifecycle
+
+The [source-only provisioning experiment](../examples/account-provisioning/README.md)
+creates dedicated Editor and Reviewer accounts through local app-owned functions,
+seeds the existing broker, verifies live permissions, and removes owned accounts and
+sessions. Its quota, expiry, replay and recovery checks run against a synthetic
+loopback backend. It does not add account creation to the published CLI or MCP tools.
+
+The next integration needs an explicitly reviewed provider and separate disposable
+test auth/database project. Provider-enforced authority, suppressed external side
+effects, session revocation and ownership-based cleanup each need their own tests.
+Do not infer those guarantees from local policy labels or a successful synthetic run.
+
 ## Following priorities
 
 1. **Reduce time to a useful first run.** Add verification readiness checks for the
