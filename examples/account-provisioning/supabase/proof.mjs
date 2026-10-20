@@ -31,6 +31,15 @@ const FILES = ['examples/account-provisioning/contracts.mjs', 'examples/account-
   'examples/account-provisioning/supabase/tools/private-directory.mjs', 'examples/verification-demo/native.mjs',
   'examples/playwright/tests/consumer.mjs', 'examples/workflows/test-support/real-broker.mjs'];
 const sources = async () => Object.fromEntries(await Promise.all(FILES.map(async file => [file, sha(await readFile(path.join(REPO, file)))])));
+/** All permission-verifier children settle before the leased TMP is removed. */
+export async function disposePrivateProofDirectories(directories) {
+  const owned = directories.filter(Boolean);
+  for (const directory of owned) {
+    await assertPrivateRuntimeDirectory(directory);
+    assert.equal((await readdir(directory)).length, 0);
+  }
+  for (const directory of owned) await rmdir(directory);
+}
 async function textTree(root) {
   let result = '';
   for (const item of await readdir(root, { withFileTypes: true })) {
@@ -298,9 +307,8 @@ export async function runSupabaseProvisioningProof({ toolsRoot, outputDir, authM
       try { await harness?.dispose(); } catch { cleanupIssue('native-home-disposal'); }
       if (!cleanupFailed) try { await consumer?.dispose(); } catch { cleanupIssue('consumer-disposal'); }
     }
-    if (!cleanupFailed) for (const directory of [scratchRoot, sessionRoot].filter(Boolean)) try {
-      await assertPrivateRuntimeDirectory(directory); assert.equal((await readdir(directory)).length, 0); await rmdir(directory);
-    } catch { cleanupIssue('private-directory-disposal'); }
+    if (!cleanupFailed) try { await disposePrivateProofDirectories([scratchRoot, sessionRoot]); }
+    catch { cleanupIssue('private-directory-disposal'); }
     restoreTemporaryEnvironment();
     if (cleanupFailed) {
       await writeFile(path.join(output, 'recovery.json'), canonical({ schemaVersion: 1, status: 'manual-inspection-required', stage: failedStage,
