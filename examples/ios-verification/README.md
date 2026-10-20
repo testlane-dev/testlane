@@ -53,6 +53,25 @@ the same owned Simulator for the authenticated cases. Final teardown removes the
 Simulator. Ordinary
 `npm run test:mobile` executes unit/control tests without starting a device.
 
+Cold boot is a prerequisite observation, separate from test execution. One
+absolute monotonic window of at most 600 seconds covers the owned boot command,
+`simctl bootstatus -b` and the first fresh owned/foreign inventory and path
+confirmation. The boot command keeps its 30-second cap; the first ownership
+confirmation keeps a 90-second cap. Each receives only the time remaining in the
+shared window. No step retries or renews the window. A printed completion message
+is not success: `bootstatus` must exit zero and the complete fresh ownership
+checks must succeed before WebDriverAgent or credentials are prepared.
+
+This bounded cold-start policy is an experiment, not a validated cure for a live
+`bootstatus` client or slow CoreSimulator services. Deadline and cancellation
+checks are cooperative around filesystem work; a pending operation must settle
+before failure returns. Retained command stop/close and independent cleanup may
+take additional time, and uncertainty still preserves recovery rather than
+passing. Failure at this bound blocks acceptance; it does not automatically
+increase the window. Ordinary driver requests, visibility waits and the declared
+90-second body, 15-second cleanup, 5-second settlement and 600-second worker
+budgets are unchanged.
+
 The hosted workflow also enables `--preauth-controls` in that same readiness
 session. This optional diagnostic scrolls to eight fixed synthetic controls,
 focuses the quantity input without typing, checks keyboard dismissal and restores
