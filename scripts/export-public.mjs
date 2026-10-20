@@ -140,6 +140,7 @@ export const URL_ALLOWLIST = [
   "dl.google.com/android/repository/emulator-linux_x64-13610412.zip",
   "dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip",
   "dl.google.com/android/repository/sys-img/google_apis/x86_64-34_r14.zip",
+  "www.freedesktop.org/standards/dbus/1.0/busconfig.dtd",
   "example.com",
   "example.net",
   "example.org",

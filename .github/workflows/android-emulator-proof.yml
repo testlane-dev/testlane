@@ -1,0 +1,131 @@
+name: Android emulator proof
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/android-emulator-proof.yml
+      - scripts/android-*.mjs
+      - scripts/native-proof-support.mjs
+      - examples/android-verification/**
+      - examples/mobile-approval-app/**
+      - examples/verification-demo/**
+      - examples/workflows/test-support/real-broker.mjs
+      - examples/playwright/tests/consumer.mjs
+      - package.json
+      - package-lock.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-proof-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  emulator:
+    name: owned Android emulator proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      TESTLANE_ANDROID_PROOF_CI: '1'
+      REVIEWED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.3
+      - run: npm ci
+      - run: npm run build
+      - name: Verify contracts before SDK installation or native allocation
+        run: npm run test:mobile
+      - name: Verify private service lifecycle sequencing without starting services
+        run: node --test scripts/android-hosted-runtime.test.mjs
+      - name: Verify retained Linux groups using controlled Node children
+        run: node --test examples/android-verification/tests/process-group.linux-test.mjs
+      - name: Check the hosted policy before privileged prerequisites
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFile} from 'node:fs/promises';
+          import {requireHostedAndroid} from './scripts/android-hosted-setup.mjs';
+          requireHostedAndroid({osRelease:await readFile('/etc/os-release','utf8')});
+          NODE
+      - name: Install the isolated Secret Service prerequisites and grant this UID KVM access
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gnome-keyring libsecret-tools dbus-x11 acl
+          test -c /dev/kvm
+          sudo setfacl -m "u:$(id -u):rw" /dev/kvm
+      - name: Install pinned Android archives in a new owned SDK
+        id: sdk
+        run: |
+          umask 077
+          proof_root="$(cd "$RUNNER_TEMP" && pwd -P)/testlane-android-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          base_sdk="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          mkdir -p output
+          node scripts/android-hosted-setup.mjs "$proof_root" "$base_sdk" "$JAVA_HOME_21_X64" "$GITHUB_WORKSPACE/output/android-preflight.json"
+          echo "ANDROID_PROOF_ROOT=$proof_root" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$proof_root/sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$proof_root/sdk" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "HOME=$proof_root/home" >> "$GITHUB_ENV"
+          echo "TMPDIR=$proof_root/tmp" >> "$GITHUB_ENV"
+          echo "TMP=$proof_root/tmp" >> "$GITHUB_ENV"
+          echo "TEMP=$proof_root/tmp" >> "$GITHUB_ENV"
+          echo "XDG_CACHE_HOME=$proof_root/cache" >> "$GITHUB_ENV"
+      - name: Install the exact optional Appium and UiAutomator2 lock
+        id: tools
+        run: npm --prefix examples/android-verification/tools run setup -- --output-dir "$ANDROID_PROOF_ROOT/tools"
+      - name: Build only the synthetic public Release APK
+        id: build
+        run: npm run build:android-proof -- --output-dir "$ANDROID_PROOF_ROOT/build" --sdk-root "$ANDROID_PROOF_ROOT/sdk" --java-home "$JAVA_HOME_21_X64"
+      - name: Verify the installed package with a private bus, keyring and owned emulator
+        id: proof
+        run: node scripts/android-hosted-runtime.mjs "$ANDROID_PROOF_ROOT" "$GITHUB_WORKSPACE/output/android-proof"
+      - name: Verify acceptance and project safe source-bound evidence
+        id: evidence
+        run: node scripts/android-hosted-evidence.mjs "$ANDROID_PROOF_ROOT" "$GITHUB_WORKSPACE/output/android-proof" "$GITHUB_WORKSPACE/output/android-public-evidence" "$GITHUB_WORKSPACE/output/android-preflight.json"
+      - name: Retain only the nine validated public JSON projections
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-emulator-proof
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            output/android-public-evidence/android-preflight.json
+            output/android-public-evidence/readiness.json
+            output/android-public-evidence/plan.json
+            output/android-public-evidence/positive.json
+            output/android-public-evidence/fault.json
+            output/android-public-evidence/corrected.json
+            output/android-public-evidence/receipt.json
+            output/android-public-evidence/build-manifest.json
+            output/android-public-evidence/linux-runtime-cleanup.json
+      - name: Write a fixed failure stage without logs or private payloads
+        if: failure()
+        env:
+          SDK_OUTCOME: ${{ steps.sdk.outcome }}
+          TOOLS_OUTCOME: ${{ steps.tools.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          PROOF_OUTCOME: ${{ steps.proof.outcome }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import {mkdir,writeFile} from 'node:fs/promises';
+          const stages=[['sdk','SDK_OUTCOME'],['tools','TOOLS_OUTCOME'],['build','BUILD_OUTCOME'],['proof','PROOF_OUTCOME'],['evidence','EVIDENCE_OUTCOME']];
+          const stage=stages.find(([,key])=>process.env[key]==='failure')?.[0]??'prerequisites';
+          await mkdir('output',{recursive:true});
+          await writeFile('output/android-hosted-failure.json',JSON.stringify({schemaVersion:1,status:'failed',stage,code:'ANDROID_HOSTED_EXPERIMENT_FAILED'})+'\n',{flag:'wx',mode:0o600});
+          NODE
+      - name: Retain only the fixed failure stage
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-proof-failure-summary
+          if-no-files-found: error
+          retention-days: 3
+          path: output/android-hosted-failure.json

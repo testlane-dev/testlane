@@ -38,6 +38,30 @@ receipt records the three automation APK hashes; no installation checks are disa
 
 ## Run from the checkout
 
+The draft `Android emulator proof` workflow runs on one ephemeral Ubuntu 24.04
+x64 VM with KVM. It installs explicitly pinned emulator, platform-tools and API 34
+image archives into a new owned SDK, verifies their published digests, then builds
+only the public synthetic app. Version-selected build dependencies, the runner's
+SDK installer and JDK remain trusted tools; this is not whole-SDK byte attestation.
+Storage and acceleration prerequisites fail rather than prune unrelated tools or
+fall back to software emulation. Actual passing evidence is required before this
+workflow establishes Linux compatibility.
+
+Its private D-Bus and foreground keyring are separate retained process groups,
+with no service-activation search directories or desktop-bus access. A generated
+canary must be stored, read and removed before account credentials are used.
+Success requires the installed-package business proof, retained group/listener
+absence, a bounded owned-output secret scan and removal of the private keyring
+runtime directory. Failure or cancellation cannot become passing evidence.
+Uncertain native teardown preserves credential state and private recovery files.
+Captured streams and owned files are scanned; OS-managed GNOME syslog/journal
+state is outside that scan and relies on disposal of the ephemeral runner.
+
+The workflow uploads only nine validated JSON projections, bound to the reviewed
+and executed source, actual APK and authored case bytes. It excludes raw logs,
+keyrings, package archives, screenshots, account identifiers and recovery folders.
+The source-packed candidate is separate from the published web verification beta.
+
 Use new absolute output paths. These Windows commands require the ephemeral
 GitHub-hosted runner above; its first two host flags are provided by GitHub Actions.
 In PowerShell use `npm.cmd` when its `.ps1` shim is blocked. Replace the SDK and JDK paths:

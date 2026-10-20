@@ -41,7 +41,7 @@ async function fixture(mode = 'passed') {
     export async function startDemoApp({accounts}){state.accounts++;state.events.push('account-backend-start');
       state.roles=Object.values(accounts).map(account=>account.role);
       if(state.mode==='backend-failed')throw Error('private-backend-canary');
-      return {origin:'http://127.0.0.1:42999',setDefect(value){state.defect=value;},records(){return [];},
+      return {origin:'http://127.0.0.1:42999',setDefect(value){state.defect=value;},records(){if(state.mode==='worker-device-records-uncertain')throw Error('FIXTURE_RECORDS_UNAVAILABLE');return [];},
         issuedSessionTokens(){return [];},async close(){state.events.push('backend-close');}};}
   `);
   await put('examples/verification-demo/native.mjs', stateImport + `
@@ -49,11 +49,13 @@ async function fixture(mode = 'passed') {
     import {randomBytes} from 'node:crypto';
     export async function runDemoChild({args,input}){
       if(args[0]==='store'&&args[1]==='set'){state.seeds++;state.events.push('store-set');if(typeof input!=='string')throw Error('FIXTURE_STDIN_REQUIRED');}
+      if(args[0]==='store'&&args[1]==='delete')state.events.push('store-delete');
+      if(args[0]==='check')state.events.push('store-check');
       if(args[0]==='session')await writeFile(args[args.indexOf('--out')+1],JSON.stringify({cookies:[{name:'tldemo_session',value:randomBytes(24).toString('base64url')}]}));
       return {code:args[0]==='check'?4:0,stdout:'',stderr:''};}
   `);
   await put('examples/android-verification/device.mjs', stateImport + `
-    import {mkdir,writeFile} from 'node:fs/promises';
+    import {mkdir,rmdir,writeFile} from 'node:fs/promises';
     import path from 'node:path';
     export async function startOwnedAndroid(options){state.events.push('device-start');
       if(['factory-cleanup-failed','factory-cleanup-diagnostics-failed','factory-cleanup-status-failed'].includes(state.mode)){
@@ -69,8 +71,12 @@ async function fixture(mode = 'passed') {
       serial:'emulator-5556',serverUrl:'http://127.0.0.1:4723',adbPort:5039,systemPort:8211,versions:{fixture:true},
       async installApk(){state.events.push('app-install');if(state.mode==='install-failed')throw Error('private-install-canary');},
       async assertOwned(){return true;},async adb(){state.events.push('adb-reverse');return {code:0};},
-      async close(){state.deviceCloses++;state.events.push('device-close');if(state.mode==='close-and-device-failed')throw Error('ANDROID_PROCESS_TERMINATION_UNCONFIRMED');},
-      capturedText(){return state.mode==='capture-overflow'?'x'.repeat(8*1024*1024+1):'private-preauth-native-canary';}};}
+      async close(){state.deviceCloses++;state.events.push('device-close');
+        if(state.mode==='worker-device-status-uncertain')await mkdir(path.join(path.dirname(options.outputDir),'cleanup-status.json'));
+        if(state.mode==='worker-device-recovery-uncertain')await rmdir(path.join(path.dirname(options.outputDir),'recovery'));
+        if(state.mode==='close-and-device-failed'||state.mode.startsWith('worker-device-'))throw Error('ANDROID_PROCESS_TERMINATION_UNCONFIRMED');},
+      capturedText(){if(state.mode==='worker-device-capture-uncertain')throw Error('FIXTURE_CAPTURE_UNAVAILABLE');
+        return state.mode==='capture-overflow'?'x'.repeat(8*1024*1024+1):'private-preauth-native-canary';}};}
   `);
   await put('examples/android-verification/driver.mjs', stateImport + `
     import {writeFile} from 'node:fs/promises';
@@ -95,6 +101,7 @@ async function fixture(mode = 'passed') {
       sameCaps:driverOptions.capabilities===state.installedCaps,sameUrl:driverOptions.url===state.installedUrl,
       frozenOptions:Object.isFrozen(driverOptions),frozenCaps:Object.isFrozen(driverOptions.capabilities)});
       if(state.mode==='worker-failed')throw Error('private-worker-canary');
+      if(state.mode.startsWith('worker-device-'))throw Error('NATIVE_WORKER_TERMINATION_UNCONFIRMED');
       return {report:{verdict:state.defect?'failed':'passed',reasonCodes:[],cases:plan.cases.map(row=>{
         const failed=state.defect&&['editor-native-total','reviewer-native-approval'].includes(row.id);
         return {id:row.id,status:failed?'failed':'passed',reason:failed?'NATIVE_ASSERTION_FAILED':undefined,attempts:1,
@@ -133,6 +140,25 @@ test('controller blocks passwords/backend/broker/bootstrap on failed create, con
       assert.equal(fixed.includes('private-'), false); assert.equal(fixed.includes('emulator-'), false);
       assert.equal(JSON.parse(fixed).stage, 'android-readiness');
       assert.equal((await readdir(path.join(owned.outputDir, 'recovery'))).length, 0);
+    } finally { await owned.close(); }
+  }
+});
+
+test('uncertain authenticated native teardown preserves credential state and consumer even if diagnostic/status writes fail', async () => {
+  for (const mode of ['worker-device-uncertain','worker-device-capture-uncertain','worker-device-status-uncertain','worker-device-recovery-uncertain','worker-device-records-uncertain']) {
+    const owned = await fixture(mode);
+    try {
+      await assert.rejects(owned.run(), error => error.message === 'ANDROID_PROOF_CLEANUP_INCOMPLETE' && error.preserveConsumer === true);
+      assert.equal(owned.state.seeds, 2); assert.equal(owned.state.workers.length, 1);
+      assert.equal(owned.state.events.includes('stage:fault'), false); assert.equal(owned.state.events.includes('stage:corrected'), false);
+      assert.equal(owned.state.events.includes('store-delete'), false); assert.equal(owned.state.events.includes('store-check'), false);
+      assert.equal(owned.state.events.includes('broker-dispose'), false); assert.equal(owned.state.events.includes('backend-close'), true);
+      await assert.rejects(readFile(path.join(owned.outputDir, 'receipt.json')), { code: 'ENOENT' });
+      await assert.rejects(readFile(path.join(owned.outputDir, 'preauth-device.log')), { code: 'ENOENT' });
+      if (mode !== 'worker-device-status-uncertain') {
+        const status = JSON.parse(await readFile(path.join(owned.outputDir, 'cleanup-status.json'), 'utf8'));
+        assert.ok(status.steps.includes('device-stop')); assert.ok(status.steps.includes('credential-cleanup-deferred'));
+      }
     } finally { await owned.close(); }
   }
 });

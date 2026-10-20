@@ -97,6 +97,7 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
     // A factory can fail its own teardown before returning a device handle.
     // Arm preservation before diagnostic work, which may itself fail.
     if(!device&&error?.message==='ANDROID_DEVICE_CLEANUP_UNCONFIRMED')deviceStartUnconfirmed=true;
+    if(/TERMINATION_UNCONFIRMED|STOP_UNCONFIRMED/.test(String(error?.code??error?.message??'')))workerUnconfirmed=true;
     if(typeof error?.capturedText==='function')captured+=error.capturedText();
     // Only setup before even generating passwords may retain existing bounded
     // error-level native output. Authenticated failures never write this log.
@@ -107,14 +108,17 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
       await writeFile(path.join(output,'preauth-device.log'),startupText,{flag:'wx',mode:0o600});
       if(stage==='android-readiness')await writeFile(path.join(output,'readiness-failure.json'),JSON.stringify(androidReadinessFailure(error),null,2)+'\n',{flag:'wx',mode:0o600});
     }
-    if(/TERMINATION_UNCONFIRMED|STOP_UNCONFIRMED/.test(String(error?.code??error?.message??'')))workerUnconfirmed=true;
     throw error;
   } finally {
     const priorStage=stage;at('cleanup');
     const errors=workerUnconfirmed?['worker-stop']:[];
     if(deviceStartUnconfirmed)errors.push('device-start');
-    if(device) {try{await device.close();}catch{errors.push('device-stop');}captured+=device.capturedText();}
-    if(harness) {
+    if(device) {
+      try{await device.close();}catch{errors.push('device-stop');}
+      try{captured+=device.capturedText();}catch{errors.push('device-diagnostics');}
+    }
+    const nativeStopped=!workerUnconfirmed&&!deviceStartUnconfirmed&&!errors.includes('device-stop');
+    if(harness&&nativeStopped) {
       for(const profile of attempted) {
         try {if((await cli(['store','delete',profile],{signal:null})).code!==0)cleanupOK=false;}catch{cleanupOK=false;}
         try {if((await cli(['check',profile],{signal:null})).code!==4)cleanupOK=false;}catch{cleanupOK=false;}
@@ -125,9 +129,9 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
       }catch{errors.push('privacy-scan');}
       if(cleanupOK)try{await harness.dispose();}catch{errors.push('broker-home');}
       else errors.push('native-store');
-    }
-    if(app?.records().length)errors.push('owned-records');
-    if((await readdir(recovery)).length)errors.push('recovery-journal');
+    } else if(harness) errors.push('credential-cleanup-deferred');
+    try{if(app?.records().length)errors.push('owned-records');}catch{errors.push('owned-records');}
+    try{if((await readdir(recovery)).length)errors.push('recovery-journal');}catch{errors.push('recovery-journal');}
     try{await app?.close();}catch{errors.push('backend-stop');}
     if(errors.length) {
       const error=Error('ANDROID_PROOF_CLEANUP_INCOMPLETE');error.preserveConsumer=true;

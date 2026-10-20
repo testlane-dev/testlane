@@ -33,7 +33,7 @@ permissions:
 
 concurrency:
   group: ios-proof-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   simulator:
