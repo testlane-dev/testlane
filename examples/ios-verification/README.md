@@ -85,7 +85,7 @@ confirmation. The boot command keeps its 30-second cap; the first ownership
 confirmation keeps a 90-second cap. Each receives only the time remaining in the
 shared window. No step retries or renews the window. A printed completion message
 is not success: `bootstatus` must exit zero and the complete fresh ownership
-checks must succeed before WebDriverAgent or credentials are prepared.
+checks must succeed before Appium session creation or credential generation.
 
 This bounded cold-start policy is an experiment, not a validated cure for a live
 `bootstatus` client or slow CoreSimulator services. Deadline and cancellation
@@ -270,6 +270,14 @@ retained owned process identities, then checks device/listener absence before
 removing its private temporary directories. A shared device-set path grants no
 process-killing authority.
 
+If an owned group stop remains unconfirmed after its complete attempt settles,
+the failed run attempts a best-effort release of only this Node process's retained
+child streams and reference to allow a nonzero exit. This does not terminate
+native work or prove group absence. The rejected teardown remains latched;
+credentials, consumer state and recovery remain retained even if a later child
+close event arrives. Any remaining native work belongs to the failed ephemeral
+runner's disposal boundary, never a successful cleanup fallback.
+
 Native device tools and Appium use the canonical OS-account home that owns the
 standard CoreSimulator set, with no `CFFIXED_USER_HOME` override. Appium's home,
 DerivedData, temporary directory and configured `XDG_CACHE_HOME` stay private to
@@ -313,8 +321,10 @@ elapsed time, pinned WDA version and project/package/runner/`.xctestrun` hashes;
 it omits local paths and device identifiers. `readiness.json` records only successful
 session creation, native context and exact-session deletion through the installed
 driver, plus setup time and fixed scope. It does not claim device teardown while
-the Simulator is still in use. The final receipt establishes the separate cleanup
-gates. The receipt, readiness record and standalone WDA status identify the fixed
+the Simulator is still in use. The receipt records the separate inner cleanup
+gates. Acceptance also requires a zero proof-command exit and a successful workflow:
+a completed inner receipt may remain if cancellation or failure occurs during
+later consumer disposal. The receipt, readiness record and standalone WDA status identify the fixed
 `ephemeral-hosted-standard-device-set` scope; none includes the foreign-device
 baseline or owned device identifiers. Reports omit raw exceptions, response bodies, UI hierarchies, screenshots, recordings and device
 logs. Temporary driver text stays bounded in memory and is checked for generated
@@ -344,6 +354,11 @@ transient inputs to the live validators. The cumulative diagnostic log omits the
 raw payloads and records fixed command kinds, status and timing instead. This keeps
 repeated ownership checks from filling the unchanged eight-MiB log cap; it does not
 cache ownership decisions or omit response validation.
+
+On GitHub Actions, up to fifteen fixed, deduplicated checkpoint notices may survive
+a lost runner. Delivery is best-effort; subsequent state remains unknown. A notice
+establishes neither cleanup nor credential absence and grants no permission to
+read logs. It cannot replace the successful workflow and validated evidence.
 
 The workflow uploads selected sanitized evidence after success. Proof failures
 retain fixed stages/error codes, any successful readiness record and native reports

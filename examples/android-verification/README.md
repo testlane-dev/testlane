@@ -134,6 +134,10 @@ The private output directory contains a reviewed native plan, three fixed-shape 
 reports and a receipt with APK, plan, source and installed-package hashes. Reports
 retain case IDs, counts, fixed diagnostics and cleanup status. They omit actual and
 expected values, exception text, UI hierarchies, screenshots, video and logcat.
+
+Acceptance requires a zero proof-command exit and a successful workflow alongside
+these files. A completed inner receipt may remain if cancellation or failure
+occurs during later consumer disposal; the command still fails.
 Hashes bind inputs; they do not authenticate arbitrary reports or assess test quality.
 
 A fixed `readiness.json` is written only after the credential-free setup session

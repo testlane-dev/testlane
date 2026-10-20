@@ -9,7 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {consumerProject,assertNoLeaks} from '../examples/playwright/tests/consumer.mjs';
 import {createRealBrokerHarness,realBrokerSupport} from '../examples/workflows/test-support/real-broker.mjs';
 
-import {sha,tree,digestTree,installedModule,proofProfiles,runProofPhases} from './native-proof-support.mjs';
+import {sha,tree,digestTree,installedModule,proofProfiles,runProofPhases,writeNativeProofReceipt} from './native-proof-support.mjs';
 import {createAndroidFailureFact,retainAndroidFailureFact,publicAndroidFailure} from '../examples/android-verification/failure.mjs';
 const PACKAGE='dev.testlane.androidproof';
 export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHome,toolsRoot,systemImagePath,signal,onStage=()=>{}}) {
@@ -143,9 +143,11 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
     }
     at(priorStage);
   }
+  if(signal?.aborted)throw Error('ANDROID_CANCELLED');
   assert.equal((await readdir(consumer.sessionTemp)).length,0);
+  if(signal?.aborted)throw Error('ANDROID_CANCELLED');
   receipt.cleanupVerified=true;receipt.credentialLeakScanPassed=true;
-  await writeFile(path.join(output,'receipt.json'),JSON.stringify(receipt,null,2)+'\n',{flag:'wx',mode:0o600});return receipt;
+  return writeNativeProofReceipt({outputDir:output,receipt,signal,cancelCode:'ANDROID_CANCELLED'});
 }
 
 async function main() {
@@ -158,20 +160,34 @@ async function main() {
   options.sdkRoot??=process.env.ANDROID_HOME??process.env.ANDROID_SDK_ROOT;
   options.javaHome??=process.env.JAVA_HOME;
   if(options.sdkRoot)options.systemImagePath??=path.join(options.sdkRoot,'system-images/android-34/google_apis/x86_64');
-  let consumer,preserveConsumer=false;let stage='consumer-install';
+  let consumer,preserveConsumer=false,result,failure;let stage='consumer-install';
+  const entryExitCode=process.exitCode,provisional=entryExitCode===undefined||entryExitCode===0;
+  if(provisional)process.exitCode=1;
+  const markFailure=()=>{if(process.exitCode===undefined||process.exitCode===0)process.exitCode=1;};
   const controller=new AbortController(),cancel=()=>controller.abort();
   process.on('SIGINT',cancel);process.on('SIGTERM',cancel);
-  try {consumer=await consumerProject({tarball:process.env.TESTLANE_PACKAGE_TARBALL});
-    const result=await runAndroidProof({...options,consumer,signal:controller.signal,onStage:name=>{stage=name;console.log('ANDROID_PROOF_STAGE '+name);}});console.log(JSON.stringify(result));
+  try {
+    if(!provisional)throw Error('NATIVE_PROOF_COMPLETION_REFUSED');
+    try {
+      consumer=await consumerProject({tarball:process.env.TESTLANE_PACKAGE_TARBALL});
+      result=await runAndroidProof({...options,consumer,signal:controller.signal,onStage:name=>{stage=name;console.log('ANDROID_PROOF_STAGE '+name);}});
+    }catch(error){failure={error};preserveConsumer=error?.preserveConsumer===true;}
+    finally {
+      try{if(!preserveConsumer)await consumer?.dispose();}
+      catch{console.error('FAIL Android proof consumer cleanup');failure??={error:Error('NATIVE_PROOF_CONSUMER_CLEANUP_FAILED')};markFailure();}
+    }
+    if(failure)throw failure.error;
+    if(controller.signal.aborted)throw Error('ANDROID_CANCELLED');
+    if(process.exitCode!==1)throw Error('NATIVE_PROOF_COMPLETION_REFUSED');
+    // Final synchronous commit: no awaited cleanup follows stdout success.
+    console.log(JSON.stringify(result));process.exitCode=0;
   }catch(error){
-    preserveConsumer=error?.preserveConsumer===true;
     let summary;
     try{summary=await publicAndroidFailure({output:options.outputDir,stage,error});
       await writeFile(path.join(options.outputDir,'public-failure.json'),JSON.stringify(summary,null,2)+'\n',{flag:'wx',mode:0o600});}catch{}
-    console.error('FAIL Android proof at fixed stage: '+(summary?.stage??'setup')+' ('+(summary?.code??'ANDROID_PROOF_FAILED')+')');process.exitCode=1;
+    console.error('FAIL Android proof at fixed stage: '+(summary?.stage??'setup')+' ('+(summary?.code??'ANDROID_PROOF_FAILED')+')');markFailure();
   }
-  finally{try{if(!preserveConsumer)await consumer?.dispose();}catch{console.error('FAIL Android proof consumer cleanup');process.exitCode=1;}
-    process.removeListener('SIGINT',cancel);process.removeListener('SIGTERM',cancel);}
+  finally{process.removeListener('SIGINT',cancel);process.removeListener('SIGTERM',cancel);}
 }
 function isEntryPoint() {
   try {
@@ -179,4 +195,4 @@ function isEntryPoint() {
     return process.platform==='win32'?entry.toLowerCase()===self.toLowerCase():entry===self;
   }catch{return false;}
 }
-if(isEntryPoint())try{await main();}catch{console.error('FAIL Android proof arguments or prerequisites');process.exitCode=2;}
+if(isEntryPoint())try{await main();}catch{console.error('FAIL Android proof arguments or prerequisites');if(process.exitCode===undefined||process.exitCode===0)process.exitCode=2;}

@@ -1,11 +1,52 @@
 /** Common installed-package business proof. Platform owners supply device/build/store lifecycles. */
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {readFile,readdir,realpath,unlink,writeFile} from 'node:fs/promises';
+import {lstat,open,readFile,readdir,realpath,unlink,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 
 export const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
+
+/** Publish only after verified cleanup; rollback authority is this exclusive handle. */
+export async function writeNativeProofReceipt({outputDir,receipt,signal,cancelCode}) {
+  const fixed=code=>Error(code),cancel=()=>{if(signal?.aborted)throw fixed(cancelCode);};
+  if(!['ANDROID_CANCELLED','IOS_CANCELLED'].includes(cancelCode)||typeof outputDir!=='string'||!path.isAbsolute(outputDir)||
+    receipt?.passed!==true||receipt.cleanupVerified!==true||receipt.credentialLeakScanPassed!==true)throw fixed('NATIVE_PROOF_FINALIZATION_FAILED');
+  const output=path.resolve(outputDir),file=path.join(output,'receipt.json');
+  let handle,identity,parentIdentity;
+  const parent=async()=>{
+    const current=await lstat(output,{bigint:true});
+    if(!current.isDirectory()||current.isSymbolicLink()||await realpath(output)!==output||
+      (parentIdentity&&(current.dev!==parentIdentity.dev||current.ino!==parentIdentity.ino)))throw fixed('NATIVE_PROOF_FINALIZATION_UNCONFIRMED');
+    return current;
+  };
+  try{
+    cancel();parentIdentity=await parent();cancel();
+    handle=await open(file,'wx',0o600);
+    identity=await handle.stat({bigint:true});
+    if(!identity.isFile())throw fixed('NATIVE_PROOF_FINALIZATION_UNCONFIRMED');
+    cancel();await handle.writeFile(JSON.stringify(receipt,null,2)+'\n');cancel();
+    await handle.close();handle=undefined;cancel();
+    return receipt;
+  }catch{
+    let uncertain=false;
+    if(handle){
+      if(!identity)try{identity=await handle.stat({bigint:true});}catch{uncertain=true;}
+      try{await handle.close();}catch{uncertain=true;}
+    }
+    if(identity){
+      try{
+        await parent();const current=await lstat(file,{bigint:true});
+        if(!identity.isFile()||!current.isFile()||current.isSymbolicLink()||current.dev!==identity.dev||current.ino!==identity.ino)throw fixed('NATIVE_PROOF_FINALIZATION_UNCONFIRMED');
+        await unlink(file);
+        try{await lstat(file);throw fixed('NATIVE_PROOF_FINALIZATION_UNCONFIRMED');}catch(error){if(error.code!=='ENOENT')throw error;}
+      }catch{uncertain=true;}
+    }
+    if(uncertain)throw fixed('NATIVE_PROOF_FINALIZATION_UNCONFIRMED');
+    cancel();throw fixed('NATIVE_PROOF_FINALIZATION_FAILED');
+  }
+}
+
 export async function tree(root) {
   const result=[];
   async function walk(dir) {

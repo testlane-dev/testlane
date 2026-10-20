@@ -339,6 +339,15 @@ async function stop(state) {
   if (!state.closed) { state.child.stdin.destroy(); state.child.stdout.destroy(); state.child.stderr.destroy(); state.child.unref(); throw fail('IOS_PROCESS_STOP_UNCONFIRMED'); }
 }
 
+// Terminal failure releases this Node process's handles, not native processes.
+// The rejected group-stop latch still blocks cleanup and acceptance.
+function releaseUnknownChildHandles(state) {
+  for (const name of ['stdin', 'stdout', 'stderr']) {
+    try { state.child[name]?.destroy(); } catch {}
+  }
+  try { state.child.unref(); } catch {}
+}
+
 /** Requires installed Xcode/runtime and explicit pinned tooling; downloads nothing. */
 export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = () => {}, runtimeId, deviceType, diagnostics = false, prewarmDiagnostics = false } = {}) {
   requireIosHostedDevice();
@@ -616,7 +625,10 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     await waitClosed(ownedState, 5000);
     if (!ownedState.closed) problem ??= fail('IOS_PROCESS_STOP_UNCONFIRMED');
     if (problem) throw fail('IOS_PROCESS_STOP_UNCONFIRMED');
-    })();
+    })().catch(error => {
+      releaseUnknownChildHandles(ownedState);
+      throw error;
+    });
     return ownedState.treeStop;
   }
   async function containerFile() {

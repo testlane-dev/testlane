@@ -7,7 +7,7 @@ import {mkdir,readFile,readdir,realpath,unlink,writeFile} from 'node:fs/promises
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {consumerProject} from '../examples/playwright/tests/consumer.mjs';
-import {sha,tree,digestTree,installedModule,proofProfiles,runProofPhases} from './native-proof-support.mjs';
+import {sha,tree,digestTree,installedModule,proofProfiles,runProofPhases,writeNativeProofReceipt} from './native-proof-support.mjs';
 import {publicIosFailure} from '../examples/ios-verification/failure.mjs';
 import {readIosStartupFailure,retainIosStartupFailure} from '../examples/ios-verification/failure-facts.mjs';
 
@@ -134,9 +134,11 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
     }
     at(priorStage);
   }
+  if(signal?.aborted)throw Error('IOS_CANCELLED');
   assert.equal((await readdir(consumer.sessionTemp)).length,0);
+  if(signal?.aborted)throw Error('IOS_CANCELLED');
   receipt.cleanupVerified=true;receipt.credentialLeakScanPassed=true;
-  await writeFile(path.join(output,'receipt.json'),JSON.stringify(receipt,null,2)+'\n',{flag:'wx',mode:0o600});return receipt;
+  return writeNativeProofReceipt({outputDir:output,receipt,signal,cancelCode:'IOS_CANCELLED'});
 }
 async function main(){
   const args=process.argv.slice(2),options={};
@@ -146,24 +148,62 @@ async function main(){
     if(!key||options[key]||!args[i+1])throw Error('IOS_PROOF_ARGUMENTS_INVALID');options[key]=path.resolve(args[++i]);
   }
   assert.ok(options.appDirectory&&options.toolsRoot&&options.outputDir,'--app, --tools-root and a NEW --output-dir are required');
+  const entryExitCode=process.exitCode,provisional=entryExitCode===undefined||entryExitCode===0;
+  if(provisional)process.exitCode=1;
+  const markFailure=()=>{if(process.exitCode===undefined||process.exitCode===0)process.exitCode=1;};
   const controller=new AbortController(),cancel=()=>controller.abort();process.on('SIGINT',cancel);process.on('SIGTERM',cancel);
-  let consumer,preserve=false,stage='consumer-install';
+  let consumer,preserve=false,stage='consumer-install',result,failure,projectFailure=publicIosFailure;
+  const checkpoint=createIosProofCheckpointEmitter();
   try{
-    consumer=await consumerProject({tarball:process.env.TESTLANE_PACKAGE_TARBALL});
-    const result=await runIosProof({...options,consumer,signal:controller.signal,onStage:name=>{stage=name;console.log('IOS_PROOF_STAGE '+name);}});
-    console.log(JSON.stringify(result));
+    if(!provisional)throw Error('NATIVE_PROOF_COMPLETION_REFUSED');
+    try{
+      consumer=await consumerProject({tarball:process.env.TESTLANE_PACKAGE_TARBALL});
+      // Cache the installed class-aware projector before consumer deletion.
+      projectFailure=(await installedModule(consumer.packageRoot,'examples/ios-verification/failure.mjs')).publicIosFailure;
+      result=await runIosProof({...options,consumer,signal:controller.signal,onStage:name=>{stage=name;console.log('IOS_PROOF_STAGE '+name);checkpoint(name);}});
+    }catch(error){failure={error};preserve=error?.preserveConsumer===true;}
+    finally{
+      try{if(!preserve)await consumer?.dispose();}
+      catch{console.error('FAIL iOS proof consumer cleanup');failure??={error:Error('NATIVE_PROOF_CONSUMER_CLEANUP_FAILED')};markFailure();}
+    }
+    if(failure)throw failure.error;
+    if(controller.signal.aborted)throw Error('IOS_CANCELLED');
+    if(process.exitCode!==1)throw Error('NATIVE_PROOF_COMPLETION_REFUSED');
+    // Final synchronous commit: no awaited cleanup follows stdout success.
+    console.log(JSON.stringify(result));process.exitCode=0;
   }catch(error){
-    preserve=error.preserveConsumer===true;
-    // Driver error classes belong to the installed package, including its reader.
-    const projectFailure=consumer?(await installedModule(consumer.packageRoot,'examples/ios-verification/failure.mjs')).publicIosFailure:publicIosFailure;
     const summary=await projectFailure({output:options.outputDir,stage,error});
     try{await writeFile(path.join(options.outputDir,'public-failure.json'),JSON.stringify(summary,null,2)+'\n',{flag:'wx',mode:0o600});}catch{}
-    console.error('FAIL iOS proof at fixed stage: '+summary.stage+' ('+summary.code+')');process.exitCode=1;
+    console.error('FAIL iOS proof at fixed stage: '+summary.stage+' ('+summary.code+')');markFailure();
   }
-  finally{
-    try{if(!preserve)await consumer?.dispose();}catch{console.error('FAIL iOS proof consumer cleanup');process.exitCode=1;}
-    process.off('SIGINT',cancel);process.off('SIGTERM',cancel);
-  }
+  finally{process.off('SIGINT',cancel);process.off('SIGTERM',cancel);}
+}
+// Fixed, best-effort breadcrumbs only: an uploaded checkpoint establishes no
+// later phase, credential absence, termination, cleanup or evidence permission.
+function createIosProofCheckpointEmitter() {
+  const notices=new Map([
+    ['owned-simulator-start','::notice title=Testlane iOS checkpoint::Checkpoint observed: owned-simulator-start; subsequent state unknown.'],
+    ['device-xcode-runtime-and-pinned-tools-validated','::notice title=Testlane iOS checkpoint::Checkpoint observed: device-xcode-runtime-and-pinned-tools-validated; subsequent state unknown.'],
+    ['device-owned-simulator-created','::notice title=Testlane iOS checkpoint::Checkpoint observed: device-owned-simulator-created; subsequent state unknown.'],
+    ['device-wda-build-for-testing','::notice title=Testlane iOS checkpoint::Checkpoint observed: device-wda-build-for-testing; subsequent state unknown.'],
+    ['device-wda-prepared','::notice title=Testlane iOS checkpoint::Checkpoint observed: device-wda-prepared; subsequent state unknown.'],
+    ['device-owned-simulator-boot-started','::notice title=Testlane iOS checkpoint::Checkpoint observed: device-owned-simulator-boot-started; subsequent state unknown.'],
+    ['device-owned-simulator-booted','::notice title=Testlane iOS checkpoint::Checkpoint observed: device-owned-simulator-booted; subsequent state unknown.'],
+    ['device-private-appium-ready','::notice title=Testlane iOS checkpoint::Checkpoint observed: device-private-appium-ready; subsequent state unknown.'],
+    ['app-prewarm','::notice title=Testlane iOS checkpoint::Checkpoint observed: app-prewarm; subsequent state unknown.'],
+    ['wda-readiness','::notice title=Testlane iOS checkpoint::Checkpoint observed: wda-readiness; subsequent state unknown.'],
+    ['broker-setup','::notice title=Testlane iOS checkpoint::Checkpoint observed: broker-setup; subsequent state unknown.'],
+    ['positive','::notice title=Testlane iOS checkpoint::Checkpoint observed: positive; subsequent state unknown.'],
+    ['fault','::notice title=Testlane iOS checkpoint::Checkpoint observed: fault; subsequent state unknown.'],
+    ['corrected','::notice title=Testlane iOS checkpoint::Checkpoint observed: corrected; subsequent state unknown.'],
+    ['cleanup','::notice title=Testlane iOS checkpoint::Checkpoint observed: cleanup; subsequent state unknown.'],
+  ]);
+  const seen=new Set();
+  return stage=>{
+    if(typeof stage!=='string'||process.env.GITHUB_ACTIONS!=='true'||seen.has(stage))return;
+    const notice=notices.get(stage);if(notice===undefined)return;
+    seen.add(stage);try{console.log(notice);}catch{/* Delivery never changes the proof outcome. */}
+  };
 }
 function entry(){try{return realpathSync(process.argv[1])===realpathSync(fileURLToPath(import.meta.url));}catch{return false;}}
-if(entry())main().catch(()=>{console.error('FAIL iOS proof arguments or prerequisites');process.exitCode=2;});
+if(entry())main().catch(()=>{console.error('FAIL iOS proof arguments or prerequisites');if(process.exitCode===undefined||process.exitCode===0)process.exitCode=2;});
