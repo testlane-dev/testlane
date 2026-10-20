@@ -35,8 +35,8 @@ async function completeTools(f) {
   const host = { win32: 'windows-x86_64', linux: 'linux-x86_64', darwin: 'darwin-x86_64' }[process.platform];
   for (const file of [
     'platforms/android-37.0/android.jar', 'platforms/android-37.0/source.properties',
-    'build-tools/37.0.0/source.properties', 'build-tools/37.0.0/aapt2' + executable,
-    'build-tools/37.0.0/zipalign' + executable, 'build-tools/37.0.0/lib/d8.jar', 'build-tools/37.0.0/lib/apksigner.jar',
+    ...['36.0.0', '37.0.0'].flatMap(revision => ['build-tools/' + revision + '/source.properties', 'build-tools/' + revision + '/aapt2' + executable,
+      'build-tools/' + revision + '/zipalign' + executable, 'build-tools/' + revision + '/lib/d8.jar', 'build-tools/' + revision + '/lib/apksigner.jar']),
     'ndk/27.1.12297006/source.properties', 'ndk/27.1.12297006/build/cmake/android.toolchain.cmake',
     'ndk/27.1.12297006/toolchains/llvm/prebuilt/' + host + '/bin/clang' + executable,
     'cmake/3.22.1/source.properties', 'cmake/3.22.1/bin/cmake' + executable, 'cmake/3.22.1/bin/ninja' + executable,
@@ -51,9 +51,8 @@ test('an absent SDK refuses before creating output or a temporary build root', a
 
 test('a newer aapt2 cannot substitute for the pinned build-tools prerequisite', async t => {
   const f = await fixture(t), executable = process.platform === 'win32' ? '.exe' : '';
-  await f.file(f.sdk, 'platforms/android-37.0/android.jar');
-  await f.file(f.sdk, 'platforms/android-37.0/source.properties');
-  await f.file(f.sdk, 'build-tools/37.0.0/source.properties');
+  await completeTools(f);
+  await rm(path.join(f.sdk, 'build-tools/37.0.0/aapt2' + executable));
   await f.file(f.sdk, 'build-tools/99.0.0/aapt2' + executable);
   await f.refusesBeforeAllocation();
 });
@@ -62,6 +61,13 @@ test('missing pinned CMake refuses before dependency installation or temporary a
   const f = await fixture(t), executable = process.platform === 'win32' ? '.exe' : '';
   await completeTools(f);
   await rm(path.join(f.sdk, 'cmake/3.22.1/bin/cmake' + executable));
+  await f.refusesBeforeAllocation();
+});
+
+test('AGP library-default Build Tools 36.0.0 is required independently of the app selection 37.0.0', async t => {
+  const f = await fixture(t), executable = process.platform === 'win32' ? '.exe' : '';
+  await completeTools(f);
+  await rm(path.join(f.sdk, 'build-tools/36.0.0/aapt2' + executable));
   await f.refusesBeforeAllocation();
 });
 

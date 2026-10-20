@@ -20,12 +20,20 @@ existing Expo apps still need their own integration and evidence.
   uses DPAPI in a scratch home. Linux requires an explicitly isolated Secret Service
   session (`TESTLANE_REAL_KEYCHAIN=1`); this is not permission to use a personal keyring.
   macOS is refused by this credential-store proof.
-- Android SDK platform 37.0, build tools 37.0.0, NDK 27.1.12297006, CMake 3.22.1, platform-tools,
+- Android SDK platform 37.0, build tools **36.0.0 and 37.0.0**, NDK 27.1.12297006, CMake 3.22.1, platform-tools,
   emulator, and the API 34 Google APIs **x86_64** system image. Install any requested
   SDK components before building. Provision SDK packages and accept their terms using
-  the Android SDK tools; the runner never downloads an SDK image or accepts licenses.
+  the Android SDK tools. The device runner uses installed components and never
+  accepts licenses; the separate hosted setup below downloads reviewed archives.
 - Enough disk and memory for the native build and a new disposable emulator. Initial
   dependency installation and compilation can take several minutes.
+
+Both Build Tools revisions are required: the pinned Expo app selects 37.0.0,
+while Android library modules use the pinned
+[AGP 9.2.1 default of 36.0.0](https://developer.android.com/build/releases/agp-9-2-0-release-notes).
+The build keeps automatic SDK downloads disabled and does not substitute a newer
+revision for a missing one. The pinned Expo plugin applies NDK 27.1.12297006 to
+Android libraries as well, so AGP's different default NDK is not an extra prerequisite.
 
 The explicit installer pins Appium 3.8.0 and UiAutomator2 8.7.0 in a new short
 directory you choose. It does not register a driver in your default Appium home.

@@ -5,12 +5,18 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ANDROID_EXTRACT_PYTHON, ANDROID_HOSTED_ARCHIVES, hostedAndroidEnvironment,
+import { ANDROID_EXTRACT_PYTHON, ANDROID_HOSTED_ARCHIVES, ANDROID_HOSTED_BUILD_PACKAGES, hostedAndroidEnvironment,
   officialAndroidDownloadUrl, requireHostedAndroid } from '../../../scripts/android-hosted-setup.mjs';
 
 const hosted = () => ({ platform: 'linux', architecture: 'x64', uid: 1001,
   env: { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', RUNNER_OS: 'Linux',
     TESTLANE_ANDROID_PROOF_CI: '1', GITHUB_RUN_ID: '12345', GITHUB_RUN_ATTEMPT: '1' }, osRelease: 'ID=ubuntu\nVERSION_ID="24.04"\n' });
+
+test('the explicit hosted SDK pins both app and library-default Build Tools revisions', () => {
+  assert.equal(Object.isFrozen(ANDROID_HOSTED_BUILD_PACKAGES), true);
+  assert.deepEqual(ANDROID_HOSTED_BUILD_PACKAGES, ['platforms;android-37.0', 'build-tools;36.0.0', 'build-tools;37.0.0',
+    'ndk;27.1.12297006', 'cmake;3.22.1']);
+});
 
 test('Linux hosted proof policy refuses missing flags, root, ARM and other OS contexts before allocation', () => {
   assert.equal(requireHostedAndroid(hosted()), true);

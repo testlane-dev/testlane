@@ -133,6 +133,8 @@ export const URL_ALLOWLIST = [
   "docs.maestro.dev/reference/commands-available/asserttrue.md",
   "docs.expo.dev/develop/development-builds/introduction",
   "docs.expo.dev/versions/v58.0.0/",
+  // Exact AGP compatibility table used by the Android proof SDK recipe.
+  "developer.android.com/build/releases/agp-9-2-0-release-notes",
   // Exact Apple ATS reference used by the proof-only iOS build recipe.
   "developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsexceptiondomains",
   // Exact public upstream source and Android archives reviewed for native proofs.

@@ -14,6 +14,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_FILES = ['package.json', 'package-lock.json', 'app.config.cjs', 'index.js', 'App.js', 'bootstrap.mjs', 'plugins/withProofBuild.cjs'];
 const TEMPLATE = 'expo-template-bare-minimum@58.0.25';
 const BUILD_TOOLS = '37.0.0', PLATFORM = 'android-37.0', NDK = '27.1.12297006', CMAKE = '3.22.1';
+// App selection and AGP 9.2.1's default for Android library modules are distinct.
+const LIBRARY_BUILD_TOOLS = '36.0.0';
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 async function requireFiles(root, files, code) {
   try {
@@ -30,9 +32,11 @@ async function prerequisites(sdkRoot, javaHome) {
   const aapt = path.join('build-tools', BUILD_TOOLS, executable('aapt2'));
   await requireFiles(sdk, [
     path.join('platforms', PLATFORM, 'android.jar'), path.join('platforms', PLATFORM, 'source.properties'),
-    path.join('build-tools', BUILD_TOOLS, 'source.properties'), aapt,
-    path.join('build-tools', BUILD_TOOLS, executable('zipalign')),
-    path.join('build-tools', BUILD_TOOLS, 'lib/d8.jar'), path.join('build-tools', BUILD_TOOLS, 'lib/apksigner.jar'),
+    ...[LIBRARY_BUILD_TOOLS, BUILD_TOOLS].flatMap(revision => [
+      path.join('build-tools', revision, 'source.properties'), path.join('build-tools', revision, executable('aapt2')),
+      path.join('build-tools', revision, executable('zipalign')),
+      path.join('build-tools', revision, 'lib/d8.jar'), path.join('build-tools', revision, 'lib/apksigner.jar'),
+    ]),
     path.join('ndk', NDK, 'source.properties'), path.join('ndk', NDK, 'build/cmake/android.toolchain.cmake'),
     path.join('ndk', NDK, 'toolchains/llvm/prebuilt', host, 'bin', executable('clang')),
     path.join('cmake', CMAKE, 'source.properties'), path.join('cmake', CMAKE, 'bin', executable('cmake')),

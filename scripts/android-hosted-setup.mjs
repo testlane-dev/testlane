@@ -12,6 +12,10 @@ import { confirmRetainedGroupAbsent, retainDetachedChild, stopRetainedGroup } fr
 const fail = code => new Error('ANDROID_HOSTED_' + code);
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const GIB = 1024 ** 3;
+// Expo's app selects 37.0.0; library modules retain AGP 9.2.1's
+// documented 36.0.0 default. Neither revision substitutes for the other.
+export const ANDROID_HOSTED_BUILD_PACKAGES = Object.freeze(['platforms;android-37.0',
+  'build-tools;36.0.0', 'build-tools;37.0.0', 'ndk;27.1.12297006', 'cmake;3.22.1']);
 export const ANDROID_HOSTED_ARCHIVES = Object.freeze([
   Object.freeze({ id: 'emulator', url: 'https://dl.google.com/android/repository/emulator-linux_x64-13610412.zip',
     bytes: 319086252, algorithm: 'sha256', digest: '2fe2b56fe93ce75e1d478a40162131381d911c355efeaedb54dd1e0d0897a5cf',
@@ -199,7 +203,7 @@ export async function setupHostedAndroid({ root, sdkBase, javaHome, outputFile, 
   await access(path.join(licenses, 'android-sdk-license'));
   console.log('ANDROID_HOSTED_STAGE sdk-packages');
   await assertOwned();
-  await run(sdkmanager, ['--sdk_root=' + sdk, '--install', 'platforms;android-37.0', 'build-tools;37.0.0', 'ndk;27.1.12297006', 'cmake;3.22.1'],
+  await run(sdkmanager, ['--sdk_root=' + sdk, '--install', ...ANDROID_HOSTED_BUILD_PACKAGES],
     { cwd: root, env, signal, milliseconds: 20 * 60 * 1000, logFile: path.join(root, 'sdk-install.log') });
   const archives = [];
   for (const archive of ANDROID_HOSTED_ARCHIVES) {
