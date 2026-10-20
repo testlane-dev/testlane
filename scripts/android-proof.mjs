@@ -10,6 +10,7 @@ import {consumerProject,assertNoLeaks} from '../examples/playwright/tests/consum
 import {createRealBrokerHarness,realBrokerSupport} from '../examples/workflows/test-support/real-broker.mjs';
 
 import {sha,tree,digestTree,installedModule,proofProfiles,runProofPhases} from './native-proof-support.mjs';
+import {createAndroidFailureFact,retainAndroidFailureFact,publicAndroidFailure} from '../examples/android-verification/failure.mjs';
 const PACKAGE='dev.testlane.androidproof';
 export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHome,toolsRoot,systemImagePath,signal,onStage=()=>{}}) {
   signal?.throwIfAborted();
@@ -37,7 +38,7 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
   for(const file of publicFiles)assert.equal(build.publicSourceSHA256[file],sha(await readFile(path.join(consumer.packageRoot,'examples/mobile-approval-app',file))),'APK build inputs match installed public app source');
   const namespace='android-'+randomBytes(8).toString('hex');
   let accounts={},identities,preauthDiagnosticsAllowed=true;
-  let app,harness,device,cli,captured='',receipt,androidReadiness,cleanupOK=true,stage='setup',workerUnconfirmed=false,deviceStartUnconfirmed=false;const attempted=new Set();
+  let app,harness,device,cli,captured='',receipt,androidReadiness,cleanupOK=true,stage='setup',workerUnconfirmed=false,deviceStartUnconfirmed=false,originalFailure;const attempted=new Set();
   const at=name=>{stage=name;onStage(name);};
   try {
     at('owned-device-start');
@@ -98,6 +99,7 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
     // Arm preservation before diagnostic work, which may itself fail.
     if(!device&&error?.message==='ANDROID_DEVICE_CLEANUP_UNCONFIRMED')deviceStartUnconfirmed=true;
     if(/TERMINATION_UNCONFIRMED|STOP_UNCONFIRMED/.test(String(error?.code??error?.message??'')))workerUnconfirmed=true;
+    originalFailure=createAndroidFailureFact({stage,error});retainAndroidFailureFact(error,originalFailure);
     if(typeof error?.capturedText==='function')captured+=error.capturedText();
     // Only setup before even generating passwords may retain existing bounded
     // error-level native output. Authenticated failures never write this log.
@@ -134,7 +136,7 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
     try{if((await readdir(recovery)).length)errors.push('recovery-journal');}catch{errors.push('recovery-journal');}
     try{await app?.close();}catch{errors.push('backend-stop');}
     if(errors.length) {
-      const error=Error('ANDROID_PROOF_CLEANUP_INCOMPLETE');error.preserveConsumer=true;
+      const error=retainAndroidFailureFact(Error('ANDROID_PROOF_CLEANUP_INCOMPLETE'),originalFailure);error.preserveConsumer=true;
       try{await writeFile(path.join(output,'cleanup-status.json'),JSON.stringify({status:'incomplete',steps:errors,consumerRoot:consumer.root})+'\n',{mode:0o600});}
       catch{/* Metadata failure cannot revoke preservation of uncertain owned state. */}
       throw error;
@@ -161,7 +163,13 @@ async function main() {
   process.on('SIGINT',cancel);process.on('SIGTERM',cancel);
   try {consumer=await consumerProject({tarball:process.env.TESTLANE_PACKAGE_TARBALL});
     const result=await runAndroidProof({...options,consumer,signal:controller.signal,onStage:name=>{stage=name;console.log('ANDROID_PROOF_STAGE '+name);}});console.log(JSON.stringify(result));
-  }catch(error){preserveConsumer=error?.preserveConsumer===true;console.error('FAIL Android proof at fixed stage: '+stage);process.exitCode=1;}
+  }catch(error){
+    preserveConsumer=error?.preserveConsumer===true;
+    let summary;
+    try{summary=await publicAndroidFailure({output:options.outputDir,stage,error});
+      await writeFile(path.join(options.outputDir,'public-failure.json'),JSON.stringify(summary,null,2)+'\n',{flag:'wx',mode:0o600});}catch{}
+    console.error('FAIL Android proof at fixed stage: '+(summary?.stage??'setup')+' ('+(summary?.code??'ANDROID_PROOF_FAILED')+')');process.exitCode=1;
+  }
   finally{try{if(!preserveConsumer)await consumer?.dispose();}catch{console.error('FAIL Android proof consumer cleanup');process.exitCode=1;}
     process.removeListener('SIGINT',cancel);process.removeListener('SIGTERM',cancel);}
 }

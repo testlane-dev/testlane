@@ -42,8 +42,8 @@ jobs:
       - run: npm run build
       - name: Verify contracts before SDK installation or native allocation
         run: npm run test:mobile
-      - name: Verify private service lifecycle sequencing without starting services
-        run: node --test scripts/android-hosted-runtime.test.mjs
+      - name: Verify private service lifecycle and failure projection without starting services
+        run: node --test scripts/android-hosted-runtime.test.mjs scripts/android-hosted-failure.test.mjs
       - name: Verify retained Linux groups using controlled Node children
         run: node --test examples/android-verification/tests/process-group.linux-test.mjs
       - name: Check the hosted policy before privileged prerequisites
@@ -124,9 +124,22 @@ jobs:
           if(stage==='build' && process.env.ANDROID_PROOF_ROOT) {
             try { buildDiagnostic=await readAndroidBuildFailure(path.join(process.env.ANDROID_PROOF_ROOT,'build','build-failure.json')); } catch {}
           }
+          let runtimeDiagnostic,nativeDiagnostic;
+          if(stage==='proof') {
+            try {
+              const {readHostedAndroidRuntimeFailure}=await import('./scripts/android-hosted-failure.mjs');
+              runtimeDiagnostic=await readHostedAndroidRuntimeFailure(path.resolve('output/android-proof/linux-runtime-failure.json'));
+            } catch {}
+            try {
+              const {readPublicAndroidFailure}=await import('./examples/android-verification/failure.mjs');
+              nativeDiagnostic=await readPublicAndroidFailure(path.resolve('output/android-proof/public-failure.json'));
+            } catch {}
+          }
           await mkdir('output',{recursive:true});
           await writeFile('output/android-hosted-failure.json',JSON.stringify({schemaVersion:1,status:'failed',stage,code:'ANDROID_HOSTED_EXPERIMENT_FAILED',
-            ...(buildDiagnostic?{buildDiagnostic}:stage==='build'?{buildDiagnosticStatus:'unavailable'}:{})})+'\n',{flag:'wx',mode:0o600});
+            ...(buildDiagnostic?{buildDiagnostic}:stage==='build'?{buildDiagnosticStatus:'unavailable'}:{}),
+            ...(stage==='proof'?{...(runtimeDiagnostic?{runtimeDiagnostic}:{runtimeDiagnosticStatus:'unavailable'}),
+              ...(nativeDiagnostic?{nativeDiagnostic}:{nativeDiagnosticStatus:'unavailable'})}:{})})+'\n',{flag:'wx',mode:0o600});
           NODE
       - name: Retain only the fixed failure stage
         if: failure()

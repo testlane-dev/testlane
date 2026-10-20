@@ -2,10 +2,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import {spawn} from 'node:child_process';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import {publicAndroidFailure} from '../failure.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const IDs = ['editor-native-total', 'editor-cannot-approve', 'reviewer-native-approval', 'duplicate-approval-unchanged', 'anonymous-denied'];
@@ -28,6 +30,7 @@ async function fixture(mode = 'passed') {
   await file(controllerRoot, 'scripts/android-proof.mjs', controller);
   assert.equal(sha(await readFile(path.join(controllerRoot, 'scripts/android-proof.mjs'))), sha(controller));
   await file(controllerRoot, 'scripts/native-proof-support.mjs', await readFile(new URL('../../../scripts/native-proof-support.mjs', import.meta.url)));
+  for(const name of ['failure.mjs','contracts.mjs','proof-cases.mjs'])await file(controllerRoot,'examples/android-verification/'+name,await readFile(new URL('../'+name,import.meta.url)));
   await file(controllerRoot, 'examples/playwright/tests/consumer.mjs', stateImport + `
     export function consumerProject(){throw Error('FIXTURE_CONSUMER_NOT_EXPECTED');}
     export function assertNoLeaks(text,secrets){state.scans.push(secrets.length);}
@@ -122,6 +125,22 @@ async function fixture(mode = 'passed') {
       state.events.push('stage:' + value);
       if(state.mode==='allocation-failed'&&value==='credential-allocation')throw Error('private-allocation-canary');
     } }),
+    async runMain(){
+      await file(controllerRoot,'examples/playwright/tests/consumer.mjs',stateImport+`
+        import {writeFile} from 'node:fs/promises';
+        export async function consumerProject(){return {...${JSON.stringify({root,packageRoot,sessionTemp,brokerCli:path.join(packageRoot,'fake-cli.mjs')})},
+          dispose:async()=>writeFile(${JSON.stringify(path.join(root,'consumer-disposed'))},'disposed')};}
+        export function assertNoLeaks(text,secrets){state.scans.push(secrets.length);}
+      `);
+      return new Promise((resolve,reject)=>{
+        const child=spawn(process.execPath,[path.join(controllerRoot,'scripts/android-proof.mjs'),'--apk',apkFile,'--output-dir',outputDir,
+          '--tools-root',path.join(root,'tools'),'--sdk-root',path.join(root,'sdk'),'--java-home',path.join(root,'java')],
+          {shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});
+        let stdout='',stderr='';child.stdout.on('data',part=>{stdout+=part;});child.stderr.on('data',part=>{stderr+=part;});
+        const timer=setTimeout(()=>{child.kill();reject(Error('FIXTURE_NODE_TIMEOUT'));},5000);
+        child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('close',code=>{clearTimeout(timer);resolve({code,stdout,stderr});});
+      });
+    },
     close: () => rm(root, { recursive: true, force: true }) };
 }
 
@@ -148,7 +167,11 @@ test('uncertain authenticated native teardown preserves credential state and con
   for (const mode of ['worker-device-uncertain','worker-device-capture-uncertain','worker-device-status-uncertain','worker-device-recovery-uncertain','worker-device-records-uncertain']) {
     const owned = await fixture(mode);
     try {
-      await assert.rejects(owned.run(), error => error.message === 'ANDROID_PROOF_CLEANUP_INCOMPLETE' && error.preserveConsumer === true);
+      let failure;
+      await assert.rejects(owned.run(), error => {failure=error;return error.message === 'ANDROID_PROOF_CLEANUP_INCOMPLETE' && error.preserveConsumer === true;});
+      const summary=await publicAndroidFailure({output:owned.outputDir,stage:'cleanup',error:failure});
+      assert.deepEqual(summary.originalFailure,{stage:'positive',code:'NATIVE_WORKER_TERMINATION_UNCONFIRMED'});
+      assert.equal(summary.code,'ANDROID_PROOF_CLEANUP_INCOMPLETE');
       assert.equal(owned.state.seeds, 2); assert.equal(owned.state.workers.length, 1);
       assert.equal(owned.state.events.includes('stage:fault'), false); assert.equal(owned.state.events.includes('stage:corrected'), false);
       assert.equal(owned.state.events.includes('store-delete'), false); assert.equal(owned.state.events.includes('store-check'), false);
@@ -286,5 +309,23 @@ test('pre-readiness native failure capture stays credential-free and the existin
       if (mode === 'capture-overflow') await assert.rejects(readFile(path.join(owned.outputDir, 'preauth-device.log')), { code: 'ENOENT' });
       else assert.equal(await readFile(path.join(owned.outputDir, 'preauth-device.log'), 'utf8'), 'private-preauth-native-canary');
     } finally { await owned.close(); }
+  }
+});
+
+test('actual controller main writes only fixed failure evidence and keeps consumer preservation after unknown factory cleanup',async()=>{
+  for(const mode of ['create-failed','factory-cleanup-failed']){
+    const owned=await fixture(mode);
+    try{
+      const result=await owned.runMain();assert.equal(result.code,1);
+      const summary=JSON.parse(await readFile(path.join(owned.outputDir,'public-failure.json'),'utf8'));
+      assert.equal(summary.code,mode==='create-failed'?'NATIVE_DRIVER_SESSION_TIMEOUT':'ANDROID_PROOF_CLEANUP_INCOMPLETE');
+      assert.equal(summary.stage,mode==='create-failed'?'android-readiness':'cleanup');
+      assert.deepEqual(summary.originalFailure,{stage:mode==='create-failed'?'android-readiness':'owned-device-start',
+        code:mode==='create-failed'?'NATIVE_DRIVER_SESSION_TIMEOUT':'ANDROID_DEVICE_CLEANUP_UNCONFIRMED'});
+      assert.deepEqual(summary.reports,[]);
+      for(const text of [JSON.stringify(summary),result.stdout,result.stderr])assert.equal(text.includes('private-'),false);
+      if(mode==='factory-cleanup-failed')await assert.rejects(readFile(path.join(owned.root,'consumer-disposed')),{code:'ENOENT'});
+      else assert.equal(await readFile(path.join(owned.root,'consumer-disposed'),'utf8'),'disposed');
+    }finally{await owned.close();}
   }
 });
