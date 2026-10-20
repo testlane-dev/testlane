@@ -40,7 +40,7 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
   for(const file of publicFiles)assert.equal(build.publicSourceSHA256[file],sha(await readFile(path.join(consumer.packageRoot,'examples/mobile-approval-app',file))),'installed app source matches the compiled build inputs');
   const namespace='ios-'+randomBytes(8).toString('hex');
   let accounts={},identities;
-  let app,device,broker,receipt,wdaReadiness,captured='',audit='',stage='setup',workerUnconfirmed=false,brokerRecovery;
+  let app,device,broker,receipt,wdaReadiness,captured='',audit='',stage='setup',workerUnconfirmed=false,deviceStartUnconfirmed=false,brokerRecovery;
   const at=name=>{stage=name;onStage(name);};const attempted=new Set();
   try {
     at('owned-simulator-start');
@@ -83,12 +83,13 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
       assertBuildUnchanged:async()=>{assert.equal((await hashIosTree(appRoot)).sha256,appTree.sha256);assert.equal(sha(await readFile(manifestFile)),sha(manifestBytes));await device.assertWdaPrepared();},
       driverOptions});
     receipt={schemaVersion:1,passed:true,runner:'ios-xcuitest',context:'NATIVE_APP',proofOnly:true,deviceScope:device.deviceBinding.scope,appPrewarmed:true,nativeStore:'keychain-macos',
-      wdaPreparation:device.wdaPreparation,wdaReadiness,
+      wdaPreparation:device.wdaPreparation,wdaReadiness,wdaStartupPatch:device.wdaStartupPatch,
       brokerEntry:'installed runCli with explicit temporary KeychainMacosStore',packageTreeSha256:before,appSha256:appTree.sha256,
       buildManifestSha256:sha(manifestBytes),publicAppSourceSha256:build.publicSourceSHA256,versions:device.versions,budgets:NATIVE_PROOF_BUDGETS,...result};
     if(/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA??'')&&/^[1-9][0-9]*$/.test(process.env.GITHUB_RUN_ID??''))
       receipt.ci={sourceCommit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID};
   }catch(error){
+    if(!device&&error?.message==='IOS_DEVICE_CLEANUP_UNCONFIRMED')deviceStartUnconfirmed=true;
     if(typeof error?.capturedText==='function')captured+=error.capturedText();
     // The backend, keychain and broker have not started. A credential-free
     // readiness session may exist; no credential reached native tools.
@@ -100,25 +101,30 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
     if(/TERMINATION_UNCONFIRMED|STOP_UNCONFIRMED/.test(String(error?.code??error?.message??'')))workerUnconfirmed=true;
     throw error;
   }finally{
-    const priorStage=stage;at('cleanup');const errors=workerUnconfirmed?['worker-stop']:[];
-    if(device){try{await device.close();}catch{errors.push('device-stop');}captured+=device.capturedText();}
+    const priorStage=stage;at('cleanup');const errors=[...(workerUnconfirmed?['worker-stop']:[]),...(deviceStartUnconfirmed?['device-start']:[])];let deviceStopped=false;
+    if(device){try{await device.close();deviceStopped=true;}catch{errors.push('device-stop');}
+      try{captured+=device.capturedText();}catch{errors.push('device-capture');}}
     if(broker){
-      for(const profile of attempted){
+      const credentialsMayBeCleaned=deviceStopped&&!workerUnconfirmed;
+      if(!credentialsMayBeCleaned)errors.push('credential-cleanup-deferred');
+      for(const profile of credentialsMayBeCleaned?attempted:[]){
         try{if((await broker.cli(['store','delete',profile],{signal:null})).code!==0)errors.push('native-store-delete');}catch{errors.push('native-store-delete');}
         try{if((await broker.cli(['check',profile],{signal:null})).code!==4)errors.push('native-store-absence');}catch{errors.push('native-store-absence');}
       }
       try{audit=await broker.auditText();}catch{errors.push('audit-read');}
       const secrets=[...Object.values(accounts).map(item=>item.password),...app.issuedSessionTokens()];
       try{broker.scan(captured+(await tree(output)).map(([,bytes])=>bytes.toString('utf8')).join('\n')+audit,secrets);}catch{errors.push('privacy-scan');}
-      try{await broker.dispose({removeHome:errors.length===0});}catch{errors.push('temporary-keychain-cleanup');}
+      if(credentialsMayBeCleaned)try{await broker.dispose({removeHome:errors.length===0});}catch{errors.push('temporary-keychain-cleanup');}
       try{broker.scan(captured+audit,secrets);}catch{errors.push('privacy-scan');}
     }else if(brokerRecovery)errors.push('broker-start-recovery');
-    if(app?.records().length)errors.push('owned-records');if((await readdir(recovery)).length)errors.push('recovery-journal');
+    try{if(app?.records().length)errors.push('owned-records');}catch{errors.push('owned-records');}
+    try{if((await readdir(recovery)).length)errors.push('recovery-journal');}catch{errors.push('recovery-journal');}
     try{await app?.close();}catch{errors.push('backend-stop');}
     if(errors.length){
       const brokerRoot=broker?.root??brokerRecovery;
-      await writeFile(path.join(output,'cleanup-status.json'),JSON.stringify({status:'incomplete',steps:[...new Set(errors)],consumerRoot:consumer.root,...(brokerRoot?{brokerRoot}:{})})+'\n',{mode:0o600});
-      const error=Error('IOS_PROOF_CLEANUP_INCOMPLETE');error.preserveConsumer=true;throw error;
+      const error=Error('IOS_PROOF_CLEANUP_INCOMPLETE');error.preserveConsumer=true;
+      try{await writeFile(path.join(output,'cleanup-status.json'),JSON.stringify({status:'incomplete',steps:[...new Set(errors)],consumerRoot:consumer.root,...(brokerRoot?{brokerRoot}:{})})+'\n',{mode:0o600});}catch{}
+      throw error;
     }
     at(priorStage);
   }

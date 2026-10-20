@@ -149,6 +149,29 @@ that every Xcode background service exited. Interrupted or uncertain compilation
 blocks authentication and retains recovery state when owned process settlement
 cannot be confirmed.
 
+The explicit tools installer applies one byte-bound compatibility change to
+XCUITest 12.19.1's compiled WDA session-start path. It admits exactly one loopback
+`POST /session` request with a 30-second transport limit, while the shared proxy,
+ordinary commands and direct native routes retain five seconds. Concurrent or
+additional requests are refused during that startup request. The original method
+is restored before successful startup or a settled rejection returns; no public
+timeout capability, retries, UI-idle change or business-budget change is added.
+The installer refuses source drift or reapplication. Device setup and the prepared
+artifact checks verify the patched bytes and the pinned proxy implementations;
+the receipt records the original and patched SHA256 values. Existing unpatched
+tools directories must be replaced through a fresh explicit installation.
+
+This is a maintained local compatibility patch, not an upstream capability or
+successful iOS acceptance. Its source is the
+[published 12.19.1 archive](https://registry.npmjs.org/appium-xcuitest-driver/-/appium-xcuitest-driver-12.19.1.tgz)
+and the immutable upstream
+[WDA session-start implementation](https://github.com/appium/appium-xcuitest-driver/blob/71ab559399ef0a88a337cfe781af9e1a8ba4205b/lib/commands/wda/startup.ts#L415-L423).
+An aborted HTTP request does not prove that XCTest stopped. Pinned Appium
+cancellation can leave its proxy promise unresolved; the startup lease then stays
+fenced and the proof requires independent owned-server and Simulator teardown.
+If their stop cannot be confirmed, later phases and native credential deletion,
+keychain disposal and consumer removal remain blocked, with recovery state retained.
+
 Setup launches only the fixed proof bundle on the owned Simulator before the
 application backend, broker or bootstrap credentials exist. WDA attaches to that
 running app with forced relaunch disabled and one startup attempt. This separates

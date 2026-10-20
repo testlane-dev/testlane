@@ -11,6 +11,7 @@ import { createIosDeviceEnvironment } from './environment.mjs';
 import { IOS_DEVICE_SCOPE, validateIosDeviceBinding, normalizeIosDeviceInventory,
   snapshotIosForeignDevices, assertIosForeignSnapshot } from './device-scope.mjs';
 import { hashIosTree } from '../mobile-approval-app/build-ios.mjs';
+import { verifyPinnedWdaStartupPatch } from './tools/wda-startup-patch.mjs';
 
 const UUID = /^[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}$/;
 const BUNDLE = 'dev.testlane.iosproof', MARKER = 'testlane-owned-simulator.json';
@@ -260,6 +261,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   try { [appiumPackage, driverPackage, wdaPackage] = await Promise.all([appiumRoot, driverRoot, wdaRoot].map(dir => readFile(path.join(dir, 'package.json'), 'utf8').then(JSON.parse))); }
   catch { throw fail('IOS_TOOLS_MISSING'); }
   if (appiumPackage.version !== '3.8.0' || driverPackage.version !== '12.19.1' || wdaPackage.version !== '16.16.3') throw fail('IOS_TOOLS_VERSION_MISMATCH');
+  const wdaStartupPatch = await verifyPinnedWdaStartupPatch({ toolsRoot: tools });
   try { await Promise.all([access('/usr/bin/xcrun'), access('/usr/bin/xcodebuild'), access(path.join(wdaRoot, 'WebDriverAgent.xcodeproj', 'project.pbxproj'))]); }
   catch { throw fail('IOS_XCODE_PREREQUISITE_MISSING'); }
   await mkdir(outputDir, { recursive: true, mode: 0o700 });
@@ -436,6 +438,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   }
   async function assertWdaPrepared() {
     await assertOwned();
+    await verifyPinnedWdaStartupPatch({ toolsRoot: tools });
     if (!wdaPreparation?.wdaPrepared) throw fail('IOS_WDA_PREPARE_FAILED');
     const source = await wdaSourceBinding(), artifacts = await wdaArtifactBinding();
     if (source.projectSHA256 !== wdaPreparation.projectSHA256 || source.packageSHA256 !== wdaPreparation.packageSHA256 ||
@@ -646,7 +649,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     await assertOwned(); onStage('private-appium-ready');
     const deviceBinding = validateIosDeviceBinding({ schemaVersion: 1, scope: IOS_DEVICE_SCOPE, nativeHome, deviceSetPath, privateRoot: root, udid: marker.udid, nonce: marker.nonce });
     return Object.freeze({ udid: marker.udid, serverUrl, deviceSetPath, derivedDataPath, deviceBinding, wdaPreparation, wdaPort, mjpegPort,
-      versions: Object.freeze({ appium: '3.8.0', xcuitest: '12.19.1', webdriveragent: '16.16.3', xcode: xcodeVersion, ios: target.platformVersion, runtimeId: target.runtimeId, deviceType: target.deviceType }),
+      versions: Object.freeze({ appium: '3.8.0', xcuitest: '12.19.1', webdriveragent: '16.16.3', xcode: xcodeVersion, ios: target.platformVersion, runtimeId: target.runtimeId, deviceType: target.deviceType }), wdaStartupPatch,
       assertOwned: () => assertOwned(), assertWdaPrepared: () => assertWdaPrepared(), capturedText: captured.text,
       async installApp(appPath) {
         if (!safePath(appPath) || !appPath.endsWith('.app') || !(await lstat(appPath)).isDirectory() || (await lstat(appPath)).isSymbolicLink()) throw fail('IOS_APP_INPUT_INVALID');

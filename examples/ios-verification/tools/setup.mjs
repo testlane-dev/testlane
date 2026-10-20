@@ -6,6 +6,7 @@ import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runDemoChild } from '../../verification-demo/native.mjs';
+import { applyPinnedWdaStartupPatch } from './wda-startup-patch.mjs';
 
 const SOURCE = path.dirname(fileURLToPath(import.meta.url)), MARKER = 'testlane-ios-tools.json';
 const fail = code => new Error(code), hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -57,8 +58,9 @@ export async function installPinnedIosTools({ outputDir, npmCli, signal } = {}) 
     for (const [parts, version] of PINS) if (JSON.parse(await readFile(path.join(requested, 'node_modules', ...parts, 'package.json'), 'utf8')).version !== version) throw fail('IOS_TOOLS_VERSION_MISMATCH');
     const project = path.join(requested, 'node_modules', 'appium-xcuitest-driver', 'node_modules', 'appium-webdriveragent', 'WebDriverAgent.xcodeproj', 'project.pbxproj');
     const info = await lstat(project); if (!info.isFile() || info.isSymbolicLink()) throw fail('IOS_TOOLS_WDA_PROJECT_MISSING');
+    marker.wdaStartupPatch = await applyPinnedWdaStartupPatch({ toolsRoot: requested });
     marker.status = 'ready'; await writeFile(path.join(requested, MARKER), JSON.stringify(marker) + '\n', { mode: 0o600 });
-    return Object.freeze({ toolsRoot: requested, packageSha256: marker.packageSha256, lockSha256: marker.lockSha256 });
+    return Object.freeze({ toolsRoot: requested, packageSha256: marker.packageSha256, lockSha256: marker.lockSha256, wdaStartupPatch: marker.wdaStartupPatch });
   } catch (error) {
     if (error.message === 'DEMO_CHILD_TERMINATION_UNCONFIRMED') terminationConfirmed = false;
     try {
