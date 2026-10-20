@@ -6,6 +6,7 @@ import { access, copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeF
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { androidDeviceDirectories, createAndroidControlEnvironment, createAndroidDeviceEnvironment, requireAndroidProofHost } from './environment.mjs';
 
 const PREFIX = 'tld-android-';
 const MARKER = 'testlane-owned-device.json';
@@ -72,9 +73,10 @@ async function consolePort() {
 }
 
 function launch(executable, args, { cwd, env, capture }) {
+  const controlEnvironment = process.platform === 'win32' ? createAndroidControlEnvironment(env) : undefined;
   const child = spawn(executable, args, { cwd, env, windowsHide: true, shell: false,
     detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
-  const state = { child, pid: null, spawned: false, exited: false, closed: false, code: null, startError: false };
+  const state = { child, controlEnvironment, pid: null, spawned: false, exited: false, closed: false, code: null, startError: false };
   state.started = new Promise(resolve => {
     child.once('spawn', () => { state.spawned = true; state.pid = child.pid; resolve(true); });
     child.once('error', () => { state.startError = true; resolve(false); });
@@ -95,10 +97,12 @@ async function stopProcess(state, graceMs = 1500) {
       state.child.stdin?.destroy(); state.child.stdout?.destroy(); state.child.stderr?.destroy(); state.child.unref();
       throw fail('ANDROID_PROCESS_TERMINATION_UNCONFIRMED');
     }
-    const system = process.env.SystemRoot ?? process.env.windir;
-    if (!safePath(system)) throw fail('ANDROID_PROCESS_TERMINATION_UNCONFIRMED');
+    let controlEnvironment;
+    try { controlEnvironment = createAndroidControlEnvironment(state.controlEnvironment); }
+    catch { throw fail('ANDROID_PROCESS_TERMINATION_UNCONFIRMED'); }
+    const system = controlEnvironment.SystemRoot;
     const killer = spawn(path.join(system, 'System32', 'taskkill.exe'), ['/PID', String(state.pid), '/T', '/F'], {
-      windowsHide: true, shell: false, stdio: 'ignore',
+      windowsHide: true, shell: false, stdio: 'ignore', env: controlEnvironment,
     });
     await new Promise(resolve => {
       const timer = setTimeout(() => { killer.kill(); resolve(); }, 5000);
@@ -142,7 +146,10 @@ export async function stopOwnedAndroidProcesses({ commands = [], appium, emulato
 export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemImagePath, outputDir, signal, onStage = () => {} }) {
   if ([sdkRoot, javaHome, toolsRoot, systemImagePath, outputDir].some(value => !safePath(value))) throw fail('ANDROID_DEVICE_INPUT_INVALID');
   if (signal?.aborted) throw fail('ANDROID_CANCELLED');
+  requireAndroidProofHost();
   const sdk = await realpath(sdkRoot), java = await realpath(javaHome), tools = await realpath(toolsRoot), image = await realpath(systemImagePath);
+  const nodeExecutable = await realpath(process.execPath);
+  if (process.platform === 'win32') createAndroidControlEnvironment();
   if (!inside(path.join(sdk, 'system-images'), image)) throw fail('ANDROID_SYSTEM_IMAGE_REFUSED');
   const properties = Object.fromEntries((await readFile(path.join(image, 'source.properties'), 'utf8')).split(/\r?\n/).filter(line => /^[A-Za-z]/.test(line) && line.includes('=')).map(line => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
   if (properties['SystemImage.Abi'] !== 'x86_64' || properties['SystemImage.TagId'] !== 'google_apis' || !/^\d{2}$/.test(properties['AndroidVersion.ApiLevel'] ?? '')) throw fail('ANDROID_SYSTEM_IMAGE_UNSUPPORTED');
@@ -187,15 +194,7 @@ export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemIm
     if (captureBytes + size > CAPTURE_LIMIT) { captureFailed = true; return; }
     captured += value; captureBytes += size;
   };
-  const env = { ...process.env, ANDROID_HOME: sdk, ANDROID_SDK_ROOT: sdk, JAVA_HOME: java,
-    ANDROID_USER_HOME: androidHome, ANDROID_EMULATOR_HOME: androidHome, ANDROID_AVD_HOME: avdHome,
-    ADB_VENDOR_KEYS: path.join(androidHome, 'adbkey'), ADB_SERVER_SOCKET: 'tcp:127.0.0.1:' + ports.adbPort,
-    ANDROID_ADB_SERVER_PORT: String(ports.adbPort), ADB_MDNS_AUTO_CONNECT: '0', ADB_USB: '0', ADB_EMU: '0', APPIUM_HOME: appiumHome,
-    PATH: [path.join(java, 'bin'), path.join(sdk, 'platform-tools'), path.join(sdk, 'emulator'), process.env.PATH ?? process.env.Path ?? ''].join(path.delimiter),
-    DEBUG: '', NODE_DEBUG: '', ANDROID_VERBOSE: '', APPIUM_SKIP_EXTENSIONS_INSTALL: '1',
-  };
-  delete env.NODE_OPTIONS; delete env.ANDROID_SERIAL; delete env.ANDROID_LOG_TAGS;
-  delete env.ANDROID_ADB_SERVER_ADDRESS; delete env.ANDROID_PRODUCT_OUT;
+  let env;
   const writeMarker = () => writeFile(markerPath, JSON.stringify(marker) + '\n', { mode: 0o600 });
   const ensureLive = (allowClosing = false) => {
     if (closed || (closing && !allowClosing) || signal?.aborted) throw fail('ANDROID_CANCELLED');
@@ -284,7 +283,9 @@ export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemIm
   const abortLifecycle = () => { void close().catch(() => {}); };
   try {
     await writeMarker();
-    await Promise.all([mkdir(avd, { recursive: true, mode: 0o700 }), mkdir(appiumHome, { recursive: true, mode: 0o700 })]);
+    const directories = androidDeviceDirectories(root);
+    await Promise.all([avd, appiumHome, ...Object.values(directories)].map(dir => mkdir(dir, { recursive: true, mode: 0o700 })));
+    env = createAndroidDeviceEnvironment({ root, sdkRoot: sdk, javaHome: java, nodeExecutable, adbPort: ports.adbPort });
     await writeFile(path.join(avd, 'config.ini'), ownedAvdConfiguration({ avdName, image, apiLevel: properties['AndroidVersion.ApiLevel'] }), { flag: 'wx', mode: 0o600 });
     await writeFile(path.join(avdHome, avdName + '.ini'), ['avd.ini.encoding=UTF-8', 'path=' + avd.replaceAll('\\', '/'), 'target=android-' + properties['AndroidVersion.ApiLevel'], ''].join('\n'), { flag: 'wx', mode: 0o600 });
     const generated = await raw(adbPath, ['keygen', env.ADB_VENDOR_KEYS]);

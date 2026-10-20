@@ -12,8 +12,12 @@ existing Expo apps still need their own integration and evidence.
 ## Prerequisites
 
 - A checkout of this revision, Node 22.14 or newer compatible with Expo 58, and npm 10+.
-- Windows with hardware acceleration enabled, Android SDK and Java 21. The proof uses
-  DPAPI in a scratch home. Linux requires an explicitly isolated Secret Service
+- An ephemeral GitHub-hosted Windows runner with hardware acceleration enabled,
+  Android SDK and Java 21. Windows startup requires `GITHUB_ACTIONS=true`,
+  `RUNNER_ENVIRONMENT=github-hosted` and an explicit `TESTLANE_ANDROID_PROOF_CI=1`.
+  These flags are a conservative policy check, not host attestation. Personal and
+  shared Windows hosts are refused before SDK reads or device allocation. The proof
+  uses DPAPI in a scratch home. Linux requires an explicitly isolated Secret Service
   session (`TESTLANE_REAL_KEYCHAIN=1`); this is not permission to use a personal keyring.
   macOS is refused by this credential-store proof.
 - Android SDK platform 37.0, build tools 37.0.0, NDK 27.1.12297006, CMake 3.22.1, platform-tools,
@@ -34,8 +38,9 @@ receipt records the three automation APK hashes; no installation checks are disa
 
 ## Run from the checkout
 
-Use new absolute output paths. In PowerShell use `npm.cmd` when its `.ps1` shim is
-blocked. Replace the SDK and JDK paths with the paths on your machine:
+Use new absolute output paths. These Windows commands require the ephemeral
+GitHub-hosted runner above; its first two host flags are provided by GitHub Actions.
+In PowerShell use `npm.cmd` when its `.ps1` shim is blocked. Replace the SDK and JDK paths:
 
 ```powershell
 New-Item -ItemType Directory -Force C:/temp | Out-Null
@@ -43,6 +48,7 @@ npm.cmd ci
 npm.cmd run build
 npm.cmd --prefix examples/android-verification/tools run setup -- --output-dir C:/temp/testlane-android-tools-1
 npm.cmd run build:android-proof -- --output-dir C:/temp/testlane-apk-1 --sdk-root C:/Users/you/AppData/Local/Android/Sdk --java-home "C:/Program Files/Android/Android Studio/jbr"
+$env:TESTLANE_ANDROID_PROOF_CI = "1"
 npm.cmd run proof:android -- --apk C:/temp/testlane-apk-1/testlane-android-proof.apk --tools-root C:/temp/testlane-android-tools-1 --output-dir C:/temp/testlane-proof-1 --sdk-root C:/Users/you/AppData/Local/Android/Sdk --java-home "C:/Program Files/Android/Android Studio/jbr"
 ```
 
@@ -134,6 +140,31 @@ This is an app-specific bootstrap contract, not a way to sign into production ap
 or a general guarantee for Expo. Trusted app code, test callbacks and the same OS user
 can access live session material. Real applications need a reviewed test-build
 contract, dedicated accounts and target policy before reuse.
+
+The fixed Windows tree-kill child and the owned device processes receive explicit
+environments. Device tools get canonical SDK/Java paths, owned Android/AVD/ADB-key,
+Appium, home, temporary and cache locations, and selected validated OS/executable
+configuration. The tree-kill child gets only fixed Windows OS configuration.
+Unrelated credentials, proxy settings and runtime-injection variables are not
+forwarded. PATH and the configured tool directories remain trusted executable
+configuration; this does not establish executable provenance.
+
+Home/profile overrides do not change the OS user, establish a Windows ACL, prevent
+trusted tools reading same-user files, guarantee the JVM's user.home setting, or
+redirect every OS/service cache. In particular, the emulator can resolve its
+console-authentication token through the Windows OS profile independently of these
+environment paths; no owned-token-file guarantee or token-path override is claimed.
+Appium receives only the owned HOME/USERPROFILE values. The installed SDK has not
+been bound to an exact emulator source commit, so the Windows restriction is
+conservative. OS-managed profile and service state lie outside private-root cleanup
+and rely on disposal of the ephemeral host. Compatibility still requires actual
+native setup evidence. Owned-resource checks and independent teardown
+remain required, and retained preauth tool logs need review before sharing. The
+controller, broker, isolated Linux Secret Service transport, dependency installer
+and app build keep their separate environment handling. This is a device-child
+boundary, not a repository-wide environment sandbox. Darwin uses the same POSIX
+environment rules at configuration level; this does not establish a macOS Android
+proof or alter the credential-store proof's Windows/isolated-Linux requirements.
 
 Each native case has a 90-second body budget for its compound role-loading and
 native UI flow, a 15-second cleanup budget and up to 5 seconds to settle after an
