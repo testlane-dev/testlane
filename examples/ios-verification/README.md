@@ -205,6 +205,12 @@ the authenticated cases pass. The workflow does not upload
 post-authentication driver logs, keychain homes or failure directories. Hashes bind reviewed inputs;
 they do not authenticate arbitrary reports or establish assertion quality.
 
+For a launch still pending after 15 seconds, the credential-free diagnostic can
+sample the exact retained launch process for one second, with a five-second helper
+bound. It rechecks process identity, captures only to the bounded pre-auth log and
+joins the helper before returning or completing cleanup. The app launch still has
+its 30-second limit. Credential-backed runs do not enable this diagnostic.
+
 This experiment covers one synthetic app, installed runtime and Simulator type.
 It does not establish physical-device or existing-app support, App Store builds,
 push notifications, biometrics, camera permissions, offline synchronization,

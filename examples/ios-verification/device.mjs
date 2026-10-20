@@ -20,6 +20,25 @@ const inside = (root, file) => { const rel = path.relative(root, file); return r
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
+export function iosPrewarmDiagnosticDue({ diagnostics, kind, elapsedMs, state }) {
+  return diagnostics === true && kind === 'owned-proof-app-prewarm' && Number.isFinite(elapsedMs) && elapsedMs >= 15000 &&
+    state?.spawned === true && state.exited === false && state.closed === false && Number.isSafeInteger(state.pid) && state.pid > 1;
+}
+
+export function verifyIosDiagnosticIdentity(state, info, { ownerPid, started } = {}) {
+  if (!state || state.spawned !== true || state.exited !== false || state.closed !== false || state.pid !== state.child?.pid ||
+      !Number.isSafeInteger(state.pid) || state.pid < 2 || !Number.isSafeInteger(ownerPid) || ownerPid < 1 ||
+      !info || info.pid !== state.pid || info.ppid !== ownerPid || info.pgid !== state.pid || info.zombie !== false ||
+      typeof info.started !== 'string' || !/^[A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4}$/.test(info.started) ||
+      (started !== undefined && info.started !== started)) throw fail('IOS_PROCESS_OWNERSHIP_REFUSED');
+  return info.started;
+}
+
+export function iosPrewarmDiagnosticFailure(error) {
+  return Object.freeze({ status: 'unavailable',
+    code: ['IOS_PROCESS_STOP_UNCONFIRMED', 'IOS_PROCESS_OWNERSHIP_REFUSED', 'IOS_COMMAND_TIMEOUT', 'IOS_CANCELLED'].includes(error?.message) ? error.message : 'IOS_PREAUTH_DIAGNOSTIC_FAILED' });
+}
+
 export function requireIosHostedDevice({ platform = process.platform, env = process.env } = {}) {
   if (platform !== 'darwin') throw fail('IOS_MACOS_REQUIRED');
   if (!env || env.GITHUB_ACTIONS !== 'true' || env.RUNNER_ENVIRONMENT !== 'github-hosted' || env.TESTLANE_IOS_PROOF_CI !== '1') throw fail('IOS_HOSTED_CI_REQUIRED');
@@ -44,6 +63,7 @@ function commandKind(executable, args) {
   if (executable === '/usr/bin/xcodebuild') return 'xcode-version';
   if (executable === '/usr/sbin/lsof') return 'loopback-listeners';
   if (executable === '/bin/ps') return 'process-identity';
+  if (executable === '/usr/bin/sample') return 'owned-prewarm-stack-sample';
   if (executable === '/usr/bin/pgrep') return args[0] === '-P' ? 'owned-descendants' : 'owned-process-group';
   if (executable !== '/usr/bin/xcrun' || args[0] !== 'simctl') return 'other';
   const index = args[1] === '--set' ? 3 : 1;
@@ -170,7 +190,8 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   const derivedDataPath = path.join(root, 'derived-data'), home = path.join(root, 'home'), appiumHome = path.join(root, 'appium');
   const marker = { schemaVersion: 2, scope: IOS_DEVICE_SCOPE, nativeHome, privateRoot: root, nonce: randomBytes(12).toString('hex'), ownerPid: process.pid, name: '', udid: null, deviceSetPath, runtimeId: null, deviceType: null, appiumPid: null, baselineSHA256: null };
   marker.name = 'testlane_ios_' + marker.nonce;
-  const commands = new Set(); let appium, closing, closed = false, ready = false, createAttempted = false, createSettled = false, captured = '', captureBytes = 0, captureFailed = false, target, xcodeVersion;
+  const commands = new Set(), diagnosticTasks = new Set(); let diagnosticCleanupUncertain = false;
+  let appium, closing, closed = false, ready = false, createAttempted = false, createSettled = false, captured = '', captureBytes = 0, captureFailed = false, target, xcodeVersion;
   let env, baseline;
   const capture = text => { const bytes = Buffer.byteLength(text); if (captureBytes + bytes > LIMIT) { captureFailed = true; return; } captured += text; captureBytes += bytes; };
   const writeMarker = () => writeFile(path.join(root, MARKER), JSON.stringify(marker) + '\n', { mode: 0o600 });
@@ -191,6 +212,33 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     commands.add(state);
     if (!await state.started) { diagnostic('start-failed'); commands.delete(state); throw fail('IOS_COMMAND_START_FAILED'); }
     state.child.stdin.end(); const deadline = Date.now() + timeoutMs;
+    let diagnosticTask;
+    if (diagnostics && kind === 'owned-proof-app-prewarm') {
+      // Only the retained child of this fixed pre-auth command may be sampled.
+      // There is no timer callback that could launch work after run()/close().
+      diagnosticTask = (async () => {
+        let started;
+        try {
+          if (closing || signal?.aborted || state.exited || state.closed) return;
+          started = verifyIosDiagnosticIdentity(state, await processInfo(state.pid, { timeoutMs: 1000 }), { ownerPid: process.pid });
+          while (Date.now() < deadline && !closing && !signal?.aborted && !state.exited && !state.closed) {
+            if (iosPrewarmDiagnosticDue({ diagnostics, kind, elapsedMs: performance.now() - began, state })) break;
+            await sleep(30);
+          }
+          if (closing || signal?.aborted || !iosPrewarmDiagnosticDue({ diagnostics, kind, elapsedMs: performance.now() - began, state })) return;
+          verifyIosDiagnosticIdentity(state, await processInfo(state.pid, { timeoutMs: 1000 }), { ownerPid: process.pid, started });
+          if (closing || signal?.aborted || state.exited || state.closed || deadline - Date.now() < 6000) return;
+          const result = await run('/usr/bin/sample', [String(state.pid), '1', '1', '-file', '/dev/stdout'], { timeoutMs: 5000 });
+          capture('\nIOS_PREWARM_DIAGNOSTIC ' + JSON.stringify({ status: result.code === 0 ? 'captured' : 'unavailable' }) + '\n');
+        } catch (error) {
+          if (error?.message === 'IOS_PROCESS_STOP_UNCONFIRMED') diagnosticCleanupUncertain = true;
+          capture('\nIOS_PREWARM_DIAGNOSTIC ' + JSON.stringify(iosPrewarmDiagnosticFailure(error)) + '\n');
+        }
+      })();
+      diagnosticTasks.add(diagnosticTask);
+      // The task catches its errors and always settles before it is forgotten.
+      void diagnosticTask.then(() => diagnosticTasks.delete(diagnosticTask));
+    }
     let completed = false;
     try {
       while (!state.closed && Date.now() < deadline && !(signal?.aborted && !ignoreSignal) && !overflow && !captureFailed) await sleep(30);
@@ -201,7 +249,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       if (overflow || captureFailed) throw fail('IOS_CAPTURE_LIMIT');
       completed = true;
       return { code: state.code, stdout, stderr };
-    } finally { diagnostic(completed ? 'end' : 'error'); if (state.closed) commands.delete(state); }
+    } finally { if (diagnosticTask) await diagnosticTask; diagnostic(completed ? 'end' : 'error'); if (state.closed) commands.delete(state); }
   }
   const simctl = (args, options) => run('/usr/bin/xcrun', ['simctl', '--set', deviceSetPath, ...args], options);
   async function assertRoot() {
@@ -239,9 +287,9 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       validateIosListener(result.stdout, port);
     }
   }
-  async function processInfo(pid) {
+  async function processInfo(pid, { timeoutMs = 30000 } = {}) {
     if (!Number.isSafeInteger(pid) || pid < 2) throw fail('IOS_PROCESS_OWNERSHIP_REFUSED');
-    const result = await run('/bin/ps', ['-o', 'pid=,ppid=,pgid=,stat=,lstart=,command=', '-p', String(pid)], { ignoreSignal: true });
+    const result = await run('/bin/ps', ['-o', 'pid=,ppid=,pgid=,stat=,lstart=,command=', '-p', String(pid)], { ignoreSignal: true, timeoutMs });
     if (result.code === 1 && !result.stdout.trim()) return null;
     const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+([A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+?)\s*$/.exec(result.stdout);
     if (result.code !== 0 || !match || Number(match[1]) !== pid) throw fail('IOS_PROCESS_OWNERSHIP_REFUSED');
@@ -328,6 +376,10 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       for (const [kind, state] of [...commands].map(state => ['command', state])) {
         try { await stop(state); } catch { failures.push({ kind, pid: state?.pid, exited: state?.exited, closed: state?.closed }); }
       }
+      // Marking closing prevents a diagnostic from creating another child.
+      // Its current sampler/identity command is included in commands above.
+      await Promise.allSettled([...diagnosticTasks]);
+      if (diagnosticCleanupUncertain) failures.push({ kind: 'prewarm-diagnostic' });
       try { await stopAppiumGroups(); } catch { failures.push({ kind: 'appium-or-detached-build', pid: appium?.pid, exited: appium?.exited, closed: appium?.closed }); }
       if (failures.length) { await recover('process-stop-unconfirmed', failures); throw fail('IOS_DEVICE_CLEANUP_UNCONFIRMED'); }
       try {
