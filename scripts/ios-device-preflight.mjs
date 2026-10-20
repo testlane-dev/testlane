@@ -9,10 +9,11 @@ import {startOwnedIos,requireIosHostedDevice} from '../examples/ios-verification
 
 const MARKER='testlane-ios-device-preflight.json',CAPTURE_LIMIT=8*1024*1024;
 const STAGES=new Set(['starting','xcode-runtime-and-pinned-tools-validated','owned-simulator-created',
-  'owned-simulator-boot-started','owned-simulator-booted','private-appium-ready','ownership-verified']);
+  'owned-simulator-boot-started','owned-simulator-booted','wda-build-for-testing','wda-prepared','private-appium-ready','ownership-verified']);
 const CODES=new Set(['IOS_MACOS_REQUIRED','IOS_CANCELLED','IOS_CAPTURE_LIMIT','IOS_COMMAND_START_FAILED','IOS_COMMAND_TIMEOUT',
   'IOS_HOSTED_CI_REQUIRED','IOS_STANDARD_DEVICE_SET_REFUSED','IOS_FOREIGN_INVENTORY_CHANGED','IOS_DEVICE_INVENTORY_INVALID','IOS_DEVICE_BINDING_REFUSED',
   'IOS_APP_LAUNCH_FAILED','IOS_APP_INPUT_INVALID','IOS_APP_INSTALL_FAILED',
+  'IOS_WDA_PREPARE_INPUT_INVALID','IOS_WDA_PREPARE_FAILED','IOS_WDA_PROJECT_REFUSED','IOS_WDA_ARTIFACT_INVALID','IOS_WDA_ARTIFACT_CHANGED',
   'IOS_DEVICE_CLEANUP_UNCONFIRMED','IOS_DEVICE_INPUT_INVALID','IOS_DEVICE_ENV_INVALID','IOS_DEVICE_START_FAILED','IOS_DEVICE_TYPE_UNAVAILABLE',
   'IOS_APPIUM_READY_TIMEOUT','IOS_APPIUM_START_FAILED','IOS_APPIUM_STOPPED','IOS_LISTENER_BINDING_REFUSED',
   'IOS_LISTENER_STOP_UNCONFIRMED','IOS_OUTPUT_PATH_REFUSED','IOS_OWNERSHIP_REFUSED','IOS_PROCESS_OWNERSHIP_REFUSED',

@@ -75,9 +75,15 @@ requires retained owned process identities. Headless Appium can terminate Simula
 UI clients, which further limits this experiment to an ephemeral host. It does not
 require an Apple/Expo account or accept SDK licenses.
 
-Setup launches the unauthenticated proof app before WDA attaches, with one startup
-attempt and no forced relaunch. The proof checks authenticated workflows after
-that setup; it does not establish cold app-start performance.
+Setup prebuilds the pinned WDA project for the exact owned Simulator into private
+DerivedData, with a separate 300-second compile bound. It verifies and binds the
+generated runner/test artifacts and measured source inputs, then rechecks them
+before sessions and between phases. Session creation requires the prebuilt runner;
+uncertain compilation blocks authentication. Setup launches the unauthenticated
+proof app before WDA attaches, with one startup attempt and no forced relaunch.
+The 240-second session and ordinary five-second command limits remain separate
+from compilation. The proof checks authenticated workflows after that setup;
+it does not establish cold app-start performance.
 
 Generated sandbox credentials pass through the real installed CLI and an explicitly
 selected temporary macOS keychain. A private file in the owned app container delivers

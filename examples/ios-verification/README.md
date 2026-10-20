@@ -45,7 +45,8 @@ certificate, provisioning profile, Expo account or human test account is needed.
 Use the repository's [iOS Simulator workflow](../../.github/workflows/ios-simulator-proof.yml).
 It inspects prerequisites, runs the policy tests and builds the Simulator app without
 Apple signing credentials. A credential-free diagnostic then creates a new owned
-Simulator, installs and launches the unauthenticated app, opens one WebDriverAgent session, verifies `NATIVE_APP`
+Simulator, prebuilds the pinned WebDriverAgent runner for that exact destination,
+installs and launches the unauthenticated app, opens one WebDriverAgent session, verifies `NATIVE_APP`
 and removes that session and Simulator. Only after that passes does the
 installed-package proof create credentials and use another new Simulator. Ordinary
 `npm run test:mobile` executes unit/control tests without starting a device.
@@ -127,6 +128,18 @@ control. The driver activates that configured control once and observes that the
 keyboard disappears; it does not assume an iPhone number pad has a system Done key
 or ignore a failed dismissal. This is part of the synthetic app's UI contract.
 
+Setup compiles only the pinned WebDriverAgent project into the run's private
+DerivedData, for the exact owned Simulator UUID. Compilation has a separate
+300-second bound and must finish successfully before setup can continue. The
+controller verifies and hashes the generated Simulator runner, test bundle and
+`.xctestrun` file, along with the measured project/package inputs. It checks those
+bindings again before session creation and between proof phases. WDA session
+creation uses `usePrebuiltWDA: true`; there is no external WDA endpoint or fallback
+build, device or SDK selection. Successful compiler completion does not establish
+that every Xcode background service exited. Interrupted or uncertain compilation
+blocks authentication and retains recovery state when owned process settlement
+cannot be confirmed.
+
 Setup launches only the fixed proof bundle on the owned Simulator before the
 application backend, broker or bootstrap credentials exist. WDA attaches to that
 running app with forced relaunch disabled and one startup attempt. This separates
@@ -173,8 +186,10 @@ diagnostic exposure; it does not isolate trusted tools from the same OS user.
 Each compound role-loading and native UI case has a 90-second body budget,
 15 seconds for cleanup and up to 5 seconds to settle after abort. The installed
 shared `budgets.mjs` declares these bounds and the 600-second outer worker ceiling;
-cases run once without retries. Cold Appium/WebDriverAgent session creation has
-its own 240-second ceiling within that outer limit. Fixed numeric `timings.json`
+cases run once without retries. Appium/WebDriverAgent session creation has
+its own 240-second ceiling within that outer limit. The separate 300-second WDA
+compile happens during device setup, before the worker and credentials exist;
+it does not extend session or business-case deadlines. Fixed numeric `timings.json`
 metrics retain per-phase elapsed time and ownership-check RPC counts/time even on
 phase failure, without identifiers, view text, raw errors or driver payloads.
 Simulator boot has a 180-second bound. Its first read-only ownership inventory query
@@ -184,7 +199,9 @@ inventory queries retain their ordinary 30-second bound.
 Successful output contains the reviewed plan, three fixed-shape JSON reports and a
 receipt with source, app-tree, build-manifest, plan, case and installed-package
 hashes, resolved tool versions, declared bounds, timings and cleanup/leak-scan
-outcomes. The receipt and WDA status identify the fixed
+outcomes. Its WDA preparation record contains the fixed build budget, compile
+elapsed time, pinned WDA version and project/package/runner/`.xctestrun` hashes;
+it omits local paths and device identifiers. The receipt and WDA status identify the fixed
 `ephemeral-hosted-standard-device-set` scope; neither includes the foreign-device
 baseline or owned device identifiers. Reports omit raw exceptions, response bodies, UI hierarchies, screenshots, recordings and device
 logs. Temporary driver text stays bounded in memory and is checked for generated

@@ -13,7 +13,7 @@ const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4})
 const port = value => Number.isSafeInteger(value) && value >= 1024 && value <= 65535;
 const optionalCaps = ['appium:deviceName', 'appium:platformVersion', 'appium:newCommandTimeout', 'appium:waitForIdleTimeout',
   'appium:wdaLaunchTimeout', 'appium:wdaConnectionTimeout', 'appium:isHeadless', 'appium:wdaStartupRetries',
-  'appium:forceAppLaunch', 'appium:shouldTerminateApp'];
+  'appium:forceAppLaunch', 'appium:shouldTerminateApp', 'appium:usePrebuiltWDA'];
 const requiredCaps = ['platformName', 'appium:automationName', 'appium:udid', 'appium:bundleId', 'appium:simulatorDevicesSetPath',
   'appium:derivedDataPath', 'appium:wdaLocalPort', 'appium:wdaRemotePort', 'appium:wdaBindingIP', 'appium:wdaBaseUrl', 'appium:mjpegServerPort',
   'appium:skipLogCapture', 'appium:showIOSLog', 'appium:showXcodeLog', 'appium:printPageSourceOnFindFailure',
@@ -39,6 +39,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
       (supplied['appium:isHeadless'] !== undefined && supplied['appium:isHeadless'] !== true) ||
       (supplied['appium:wdaStartupRetries'] !== undefined && supplied['appium:wdaStartupRetries'] !== 1) ||
       (supplied['appium:wdaConnectionTimeout'] !== undefined && supplied['appium:wdaConnectionTimeout'] !== 5000) ||
+      (supplied['appium:usePrebuiltWDA'] !== undefined && supplied['appium:usePrebuiltWDA'] !== true) ||
       ['appium:forceAppLaunch', 'appium:shouldTerminateApp'].some(key => supplied[key] !== undefined && supplied[key] !== false)) throw new Error();
     for (const key of ['appium:deviceName', 'appium:platformVersion']) if (supplied[key] !== undefined && !identifier(supplied[key])) throw new Error();
     for (const key of ['appium:newCommandTimeout', 'appium:waitForIdleTimeout', 'appium:wdaLaunchTimeout', 'appium:wdaConnectionTimeout']) {
@@ -47,7 +48,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     // The owner has already booted this owned Simulator without a UI client.
     // Avoid Appium rebooting it just to make a Simulator window visible.
     capabilities = { ...structuredClone(supplied), 'appium:isHeadless': true, 'appium:wdaStartupRetries': 1,
-      'appium:wdaConnectionTimeout': 5000, 'appium:forceAppLaunch': false, 'appium:shouldTerminateApp': false };
+      'appium:wdaConnectionTimeout': 5000, 'appium:forceAppLaunch': false, 'appium:shouldTerminateApp': false, 'appium:usePrebuiltWDA': true };
   } catch { throw fail('NATIVE_DRIVER_CONFIGURATION_INVALID'); }
   let session, closed = false;
   async function request(method, route, body, requestSignal = signal, timeoutMs = 5000) {

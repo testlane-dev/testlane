@@ -8,6 +8,8 @@ import {requireIosWdaCi,publicIosWdaStatus,validateWdaBuildManifest,probeOwnedWd
 import {IOS_DEVICE_SCOPE} from '../device-scope.mjs';
 
 const ci={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',TESTLANE_IOS_PROOF_CI:'1'};
+const preparation=()=>({schemaVersion:1,wdaPrepared:true,buildBudgetMs:300000,buildMs:12345,webdriveragent:'16.16.3',
+  projectSHA256:'a'.repeat(64),packageSHA256:'b'.repeat(64),runnerSHA256:'c'.repeat(64),xctestrunSHA256:'d'.repeat(64)});
 const testDevice=()=>({serverUrl:'http://127.0.0.1:8210/',udid:'12345678-1234-1234-1234-123456789ABC',
   deviceSetPath:'/Users/runner/Library/Developer/CoreSimulator/Devices',derivedDataPath:'/private/tmp/tld-ios-Abc123/derived-data',
   wdaPort:8211,mjpegPort:8212,assertOwned:async()=>true,deviceBinding:{schemaVersion:1,scope:IOS_DEVICE_SCOPE,nativeHome:'/Users/runner',
@@ -33,7 +35,10 @@ test('public WDA status never retains arbitrary errors, stages, session IDs or r
   const successful={ownershipVerified:true,session:{sessionCreated:true,nativeContextVerified:true,sessionCleanup:'deleted'},deviceCleanup:'completed'};
   assert.equal(publicIosWdaStatus(successful).status,'failed','success cannot silently omit the prewarmed setup condition');
   assert.equal(publicIosWdaStatus({...successful,appPrewarmed:true}).appPrewarmed,true);
-  assert.equal(publicIosWdaStatus({...successful,appPrewarmed:true}).status,'passed');
+  assert.equal(publicIosWdaStatus({...successful,appPrewarmed:true}).status,'failed','missing prepared artifact binding cannot pass');
+  assert.equal(publicIosWdaStatus({...successful,appPrewarmed:true,wdaPreparation:preparation()}).status,'passed');
+  const invalid=publicIosWdaStatus({...successful,appPrewarmed:true,wdaPreparation:{...preparation(),raw:secret}});
+  assert.equal(invalid.status,'failed');assert.equal(invalid.wdaPrepared,false);assert.equal(JSON.stringify(invalid).includes(secret),false);
 });
 test('build binding rejects changed public source, builder, app tree, signing and architecture metadata',()=>{
   const sourceHashes=Object.fromEntries(['package.json','package-lock.json','app.ios.config.cjs','index.js','App.js','bootstrap.mjs','plugins/withIosProofBuild.cjs'].map(file=>[file,'a'.repeat(64)]));
@@ -70,6 +75,7 @@ test('credential-free probe creates once, checks native context and deletes only
     assert.equal(caps['appium:isHeadless'],true);
     assert.equal(caps['appium:wdaStartupRetries'],1);assert.equal(caps['appium:wdaConnectionTimeout'],5000);
     assert.equal(caps['appium:forceAppLaunch'],false);assert.equal(caps['appium:shouldTerminateApp'],false);
+    assert.equal(caps['appium:usePrebuiltWDA'],true);
     assert.equal(caps['appium:simulatorDevicesSetPath'],fixture.device.deviceBinding.deviceSetPath);
     assert.equal(Object.hasOwn(caps,'deviceBinding'),false);
     assert.equal(Object.hasOwn(caps,'appium:processArguments'),false);

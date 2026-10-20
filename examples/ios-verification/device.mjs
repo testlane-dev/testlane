@@ -1,7 +1,7 @@
 /** Own one nonce-bound Simulator in an ephemeral hosted Mac's standard device set. */
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
 import os from 'node:os';
@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { createIosDeviceEnvironment } from './environment.mjs';
 import { IOS_DEVICE_SCOPE, validateIosDeviceBinding, normalizeIosDeviceInventory,
   snapshotIosForeignDevices, assertIosForeignSnapshot } from './device-scope.mjs';
+import { hashIosTree } from '../mobile-approval-app/build-ios.mjs';
 
 const UUID = /^[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}$/;
 const BUNDLE = 'dev.testlane.iosproof', MARKER = 'testlane-owned-simulator.json';
@@ -19,6 +20,37 @@ const safePath = value => typeof value === 'string' && path.isAbsolute(value) &&
 const inside = (root, file) => { const rel = path.relative(root, file); return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel); };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const sha = value => createHash('sha256').update(value).digest('hex');
+const WDA_BUILD_MS = 300000;
+
+export function ownedIosWdaBuildArguments({ projectPath, derivedDataPath, udid, platformVersion }) {
+  if (!safePath(projectPath) || path.basename(projectPath) !== 'WebDriverAgent.xcodeproj' ||
+      !safePath(derivedDataPath) || path.basename(derivedDataPath) !== 'derived-data' ||
+      !/^tld-ios-[A-Za-z0-9]+$/.test(path.basename(path.dirname(derivedDataPath))) || !UUID.test(udid ?? '') ||
+      typeof platformVersion !== 'string' || !/^\d+\.\d+(?:\.\d+)?$/.test(platformVersion)) throw fail('IOS_WDA_PREPARE_INPUT_INVALID');
+  return ['build-for-testing', '-project', projectPath, '-scheme', 'WebDriverAgentRunner', '-derivedDataPath', derivedDataPath,
+    '-destination', 'id=' + udid, 'IPHONEOS_DEPLOYMENT_TARGET=' + platformVersion.split('.').slice(0, 2).join('.'),
+    'GCC_TREAT_WARNINGS_AS_ERRORS=0', 'COMPILER_INDEX_STORE_ENABLE=NO', 'APPIUM_XCODEBUILD_WDA_MARKER=1'];
+}
+
+export function validateIosWdaBundleMetadata({ app, test, architecture, platform, expectedArchitecture }) {
+  if (!app || app.CFBundleIdentifier !== 'com.facebook.WebDriverAgentRunner.xctrunner' || app.CFBundleExecutable !== 'WebDriverAgentRunner-Runner' ||
+      app.DTPlatformName !== 'iphonesimulator' || JSON.stringify(app.CFBundleSupportedPlatforms) !== JSON.stringify(['iPhoneSimulator']) ||
+      !test || test.CFBundleIdentifier !== 'com.facebook.WebDriverAgentRunner' || test.CFBundleExecutable !== 'WebDriverAgentRunner' ||
+      test.DTPlatformName !== 'iphonesimulator' || JSON.stringify(test.CFBundleSupportedPlatforms) !== JSON.stringify(['iPhoneSimulator']) ||
+      !['arm64', 'x86_64'].includes(expectedArchitecture) || architecture !== expectedArchitecture || typeof platform !== 'string' ||
+      !/platform\s+IOSSIMULATOR\b/.test(platform)) throw fail('IOS_WDA_ARTIFACT_INVALID');
+  return true;
+}
+
+export function validateIosWdaPreparation(value) {
+  const fields = ['schemaVersion', 'wdaPrepared', 'buildBudgetMs', 'buildMs', 'webdriveragent', 'projectSHA256', 'packageSHA256', 'runnerSHA256', 'xctestrunSHA256'];
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== fields.length ||
+      Object.keys(value).some(key => !fields.includes(key)) || value.schemaVersion !== 1 || value.wdaPrepared !== true ||
+      value.buildBudgetMs !== WDA_BUILD_MS || !Number.isSafeInteger(value.buildMs) || value.buildMs < 0 || value.buildMs > WDA_BUILD_MS ||
+      value.webdriveragent !== '16.16.3' || fields.filter(key => key.endsWith('SHA256')).some(key => typeof value[key] !== 'string' || !/^[a-f0-9]{64}$/.test(value[key]))) throw fail('IOS_WDA_PREPARE_FAILED');
+  return Object.freeze(Object.fromEntries(fields.map(key => [key, value[key]])));
+}
 
 export function iosPrewarmDiagnosticDue({ diagnostics, kind, elapsedMs, state }) {
   return diagnostics === true && kind === 'owned-proof-app-prewarm' && Number.isFinite(elapsedMs) && elapsedMs >= 15000 &&
@@ -60,7 +92,7 @@ export async function canonicalIosStandardSet(nativeHome) {
 
 // Fixed diagnostic labels only: never retain command arguments or environment.
 function commandKind(executable, args) {
-  if (executable === '/usr/bin/xcodebuild') return 'xcode-version';
+  if (executable === '/usr/bin/xcodebuild') return args[0] === 'build-for-testing' ? 'owned-wda-prebuild' : 'xcode-version';
   if (executable === '/usr/sbin/lsof') return 'loopback-listeners';
   if (executable === '/bin/ps') return 'process-identity';
   if (executable === '/usr/bin/sample') return 'owned-prewarm-stack-sample';
@@ -188,11 +220,11 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   const [appiumPort, wdaPort, mjpegPort] = ports;
   const parent = await realpath(os.tmpdir()), root = await mkdtemp(path.join(parent, 'tld-ios-'));
   const derivedDataPath = path.join(root, 'derived-data'), home = path.join(root, 'home'), appiumHome = path.join(root, 'appium');
-  const marker = { schemaVersion: 2, scope: IOS_DEVICE_SCOPE, nativeHome, privateRoot: root, nonce: randomBytes(12).toString('hex'), ownerPid: process.pid, name: '', udid: null, deviceSetPath, runtimeId: null, deviceType: null, appiumPid: null, baselineSHA256: null };
+  const marker = { schemaVersion: 2, scope: IOS_DEVICE_SCOPE, nativeHome, privateRoot: root, nonce: randomBytes(12).toString('hex'), ownerPid: process.pid, name: '', udid: null, deviceSetPath, runtimeId: null, deviceType: null, appiumPid: null, baselineSHA256: null, wdaPreparationSHA256: null };
   marker.name = 'testlane_ios_' + marker.nonce;
-  const commands = new Set(), diagnosticTasks = new Set(); let diagnosticCleanupUncertain = false;
+  const commands = new Set(), diagnosticTasks = new Set(); let diagnosticCleanupUncertain = false, wdaBuildIncomplete = false;
   let appium, closing, closed = false, ready = false, createAttempted = false, createSettled = false, captured = '', captureBytes = 0, captureFailed = false, target, xcodeVersion;
-  let env, baseline;
+  let env, baseline, wdaPreparation;
   const capture = text => { const bytes = Buffer.byteLength(text); if (captureBytes + bytes > LIMIT) { captureFailed = true; return; } captured += text; captureBytes += bytes; };
   const writeMarker = () => writeFile(path.join(root, MARKER), JSON.stringify(marker) + '\n', { mode: 0o600 });
   const live = (allowClosing = false) => { if (closed || (closing && !allowClosing) || signal?.aborted) throw fail('IOS_CANCELLED'); if (captureFailed) throw fail('IOS_CAPTURE_LIMIT'); if (ready && (!appium?.spawned || appium.closed)) throw fail('IOS_APPIUM_STOPPED'); };
@@ -201,6 +233,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     let stdout = '', stderr = '', bytes = 0, overflow = false;
     const kind = commandKind(executable, args), began = performance.now();
     const state = launch(executable, args, { cwd: root, env, capture: () => {} });
+    state.commandKind = kind;
     const diagnostic = event => capture('\nIOS_DEVICE_COMMAND ' + JSON.stringify({ kind, event, spawned: state.spawned,
       exited: state.exited, closed: state.closed, code: Number.isSafeInteger(state.code) ? state.code : null,
       elapsedMs: Math.max(0, Math.round(performance.now() - began)) }) + '\n');
@@ -244,7 +277,9 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       while (!state.closed && Date.now() < deadline && !(signal?.aborted && !ignoreSignal) && !overflow && !captureFailed) await sleep(30);
       if (!state.closed) {
         diagnostic(signal?.aborted && !ignoreSignal ? 'cancelled-before-stop' : overflow || captureFailed ? 'capture-limit-before-stop' : 'timeout-before-stop');
-        await stop(state); throw fail(signal?.aborted && !ignoreSignal ? 'IOS_CANCELLED' : overflow || captureFailed ? 'IOS_CAPTURE_LIMIT' : 'IOS_COMMAND_TIMEOUT');
+        if (kind === 'owned-wda-prebuild') await stopOwnedGroups(state);
+        else await stop(state);
+        throw fail(signal?.aborted && !ignoreSignal ? 'IOS_CANCELLED' : overflow || captureFailed ? 'IOS_CAPTURE_LIMIT' : 'IOS_COMMAND_TIMEOUT');
       }
       if (overflow || captureFailed) throw fail('IOS_CAPTURE_LIMIT');
       completed = true;
@@ -264,6 +299,11 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0 ||
         digest(JSON.parse(await readFile(file, 'utf8'))) !== marker.baselineSHA256 || digest(baseline) !== marker.baselineSHA256) throw fail('IOS_OWNERSHIP_REFUSED');
     } else if (marker.baselineSHA256 !== null) throw fail('IOS_OWNERSHIP_REFUSED');
+    if (wdaPreparation) {
+      const file = path.join(root, 'wda-preparation.json'), info = await lstat(file);
+      if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0 ||
+        digest(JSON.parse(await readFile(file, 'utf8'))) !== marker.wdaPreparationSHA256 || digest(wdaPreparation) !== marker.wdaPreparationSHA256) throw fail('IOS_OWNERSHIP_REFUSED');
+    } else if (marker.wdaPreparationSHA256 !== null) throw fail('IOS_OWNERSHIP_REFUSED');
     return current;
   }
   async function listOwned(ignoreSignal = false, timeoutMs = 30000) {
@@ -287,6 +327,67 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       validateIosListener(result.stdout, port);
     }
   }
+  async function wdaSourceBinding() {
+    const project = path.join(wdaRoot, 'WebDriverAgent.xcodeproj'), projectFile = path.join(project, 'project.pbxproj'), packageFile = path.join(wdaRoot, 'package.json');
+    if (!inside(tools, wdaRoot)) throw fail('IOS_WDA_PROJECT_REFUSED');
+    for (const file of [wdaRoot, project, projectFile, packageFile]) {
+      const info = await lstat(file);
+      if (info.isSymbolicLink() || await realpath(file) !== file || !((file === wdaRoot || file === project) ? info.isDirectory() : info.isFile()) ||
+          (info.isFile() && info.size > 16 * 1024 * 1024)) throw fail('IOS_WDA_PROJECT_REFUSED');
+    }
+    const bytes = await readFile(packageFile), candidate = JSON.parse(bytes);
+    if (candidate.version !== '16.16.3') throw fail('IOS_WDA_PROJECT_REFUSED');
+    return { projectPath: project, projectSHA256: sha(await readFile(projectFile)), packageSHA256: sha(bytes) };
+  }
+  async function wdaArtifactBinding() {
+    const products = path.join(derivedDataPath, 'Build', 'Products'), runner = path.join(products, 'Debug-iphonesimulator', 'WebDriverAgentRunner-Runner.app');
+    const test = path.join(runner, 'PlugIns', 'WebDriverAgentRunner.xctest');
+    for (const folder of [derivedDataPath, path.dirname(products), products, path.dirname(runner), runner, path.dirname(test), test]) {
+      const info = await lstat(folder); if (!info.isDirectory() || info.isSymbolicLink() || await realpath(folder) !== folder) throw fail('IOS_WDA_ARTIFACT_INVALID');
+    }
+    const runs = (await readdir(products)).filter(name => /^WebDriverAgentRunner_[A-Za-z0-9._-]+\.xctestrun$/.test(name));
+    if (runs.length !== 1) throw fail('IOS_WDA_ARTIFACT_INVALID');
+    const runFile = path.join(products, runs[0]), runInfo = await lstat(runFile);
+    if (!runInfo.isFile() || runInfo.isSymbolicLink() || await realpath(runFile) !== runFile || runInfo.size < 1 || runInfo.size > 16 * 1024 * 1024) throw fail('IOS_WDA_ARTIFACT_INVALID');
+    const plist = async folder => {
+      const file = path.join(folder, 'Info.plist'), info = await lstat(file);
+      if (!info.isFile() || info.isSymbolicLink() || await realpath(file) !== file) throw fail('IOS_WDA_ARTIFACT_INVALID');
+      const result = await run('/usr/bin/plutil', ['-convert', 'json', '-o', '-', file]);
+      if (result.code !== 0) throw fail('IOS_WDA_ARTIFACT_INVALID'); return JSON.parse(result.stdout);
+    };
+    const appInfo = await plist(runner), testInfo = await plist(test), binary = path.join(runner, 'WebDriverAgentRunner-Runner');
+    const binaryInfo = await lstat(binary);
+    if (!binaryInfo.isFile() || binaryInfo.isSymbolicLink() || await realpath(binary) !== binary) throw fail('IOS_WDA_ARTIFACT_INVALID');
+    const architecture = await run('/usr/bin/xcrun', ['lipo', '-archs', binary]), platform = await run('/usr/bin/xcrun', ['vtool', '-show-build', binary]);
+    if (architecture.code !== 0 || platform.code !== 0) throw fail('IOS_WDA_ARTIFACT_INVALID');
+    validateIosWdaBundleMetadata({ app: appInfo, test: testInfo, architecture: architecture.stdout.trim(), platform: platform.stdout,
+      expectedArchitecture: process.arch === 'arm64' ? 'arm64' : process.arch === 'x64' ? 'x86_64' : null });
+    const runnerSHA256 = (await hashIosTree(runner, { signal })).sha256;
+    return { runnerSHA256, xctestrunSHA256: sha(await readFile(runFile)) };
+  }
+  async function prepareWda() {
+    await assertOwned(); const before = await wdaSourceBinding(); live();
+    const began = performance.now(); wdaBuildIncomplete = true;
+    const result = await run('/usr/bin/xcodebuild', ownedIosWdaBuildArguments({ projectPath: before.projectPath, derivedDataPath, udid: marker.udid, platformVersion: target.platformVersion }), { timeoutMs: WDA_BUILD_MS });
+    const buildMs = Math.round(performance.now() - began);
+    if (result.code !== 0 || buildMs > WDA_BUILD_MS) throw fail('IOS_WDA_PREPARE_FAILED');
+    await assertOwned(); const after = await wdaSourceBinding();
+    if (JSON.stringify(after) !== JSON.stringify(before)) throw fail('IOS_WDA_PROJECT_REFUSED');
+    const artifacts = await wdaArtifactBinding(); await assertOwned();
+    wdaPreparation = validateIosWdaPreparation({ schemaVersion: 1, wdaPrepared: true, buildBudgetMs: WDA_BUILD_MS, buildMs,
+      webdriveragent: '16.16.3', projectSHA256: before.projectSHA256, packageSHA256: before.packageSHA256, ...artifacts });
+    marker.wdaPreparationSHA256 = digest(wdaPreparation);
+    await writeFile(path.join(root, 'wda-preparation.json'), JSON.stringify(wdaPreparation) + '\n', { flag: 'wx', mode: 0o600 });
+    await writeMarker(); await assertRoot(); wdaBuildIncomplete = false;
+  }
+  async function assertWdaPrepared() {
+    await assertOwned();
+    if (!wdaPreparation?.wdaPrepared) throw fail('IOS_WDA_PREPARE_FAILED');
+    const source = await wdaSourceBinding(), artifacts = await wdaArtifactBinding();
+    if (source.projectSHA256 !== wdaPreparation.projectSHA256 || source.packageSHA256 !== wdaPreparation.packageSHA256 ||
+        artifacts.runnerSHA256 !== wdaPreparation.runnerSHA256 || artifacts.xctestrunSHA256 !== wdaPreparation.xctestrunSHA256) throw fail('IOS_WDA_ARTIFACT_CHANGED');
+    await assertOwned(); return true;
+  }
   async function processInfo(pid, { timeoutMs = 30000 } = {}) {
     if (!Number.isSafeInteger(pid) || pid < 2) throw fail('IOS_PROCESS_OWNERSHIP_REFUSED');
     const result = await run('/bin/ps', ['-o', 'pid=,ppid=,pgid=,stat=,lstart=,command=', '-p', String(pid)], { ignoreSignal: true, timeoutMs });
@@ -295,13 +396,15 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     if (result.code !== 0 || !match || Number(match[1]) !== pid) throw fail('IOS_PROCESS_OWNERSHIP_REFUSED');
     return { pid, ppid: Number(match[2]), pgid: Number(match[3]), zombie: match[4].includes('Z'), started: match[5] };
   }
-  async function stopAppiumGroups() {
-    if (!appium?.spawned) return;
-    if (appium.exited || appium.closed) throw fail('IOS_PROCESS_STOP_UNCONFIRMED');
+  async function stopOwnedGroups(ownedState) {
+    if (!ownedState?.spawned) return;
+    if (ownedState.treeStop) return ownedState.treeStop;
+    ownedState.treeStop = (async () => {
+    if (ownedState.exited || ownedState.closed) throw fail('IOS_PROCESS_STOP_UNCONFIRMED');
     const groups = new Map(); let problem;
     try {
-      const rootInfo = await processInfo(appium.pid);
-      if (!rootInfo || rootInfo.zombie || rootInfo.pgid !== appium.pid || rootInfo.ppid !== process.pid) throw fail('IOS_PROCESS_OWNERSHIP_REFUSED');
+      const rootInfo = await processInfo(ownedState.pid);
+      if (!rootInfo || rootInfo.zombie || rootInfo.pgid !== ownedState.pid || rootInfo.ppid !== process.pid) throw fail('IOS_PROCESS_OWNERSHIP_REFUSED');
       groups.set(rootInfo.pid, rootInfo); process.kill(-rootInfo.pgid, 'SIGSTOP');
       let visited = 0;
       async function descendants(parentPid, depth) {
@@ -319,11 +422,12 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
           await descendants(child.pid, depth + 1);
         }
       }
-      await descendants(appium.pid, 0);
+      await descendants(ownedState.pid, 0);
     } catch (error) { problem = error; }
     // Xcodebuild deliberately creates its own process group. Freeze discovery
-    // while Appium is retained, then stop only proven descendant groups, last
-    // terminating Appium itself so no new detached build can escape discovery.
+    // while its parent is retained, then stop only proven descendant groups,
+    // last terminating the retained parent. No shared SDK daemon is selected
+    // by name/path and successful build completion claims no daemon teardown.
     for (const entry of [...groups.values()].reverse()) {
       try {
         const current = await processInfo(entry.pid);
@@ -341,10 +445,12 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
         }
       } catch (error) { problem ??= error; }
     }
-    if (!groups.has(appium.pid)) { try { await stop(appium); } catch (error) { problem ??= error; } }
-    await waitClosed(appium, 5000);
-    if (!appium.closed) problem ??= fail('IOS_PROCESS_STOP_UNCONFIRMED');
+    if (!groups.has(ownedState.pid)) { try { await stop(ownedState); } catch (error) { problem ??= error; } }
+    await waitClosed(ownedState, 5000);
+    if (!ownedState.closed) problem ??= fail('IOS_PROCESS_STOP_UNCONFIRMED');
     if (problem) throw fail('IOS_PROCESS_STOP_UNCONFIRMED');
+    })();
+    return ownedState.treeStop;
   }
   async function containerFile() {
     await assertOwned();
@@ -374,13 +480,15 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       signal?.removeEventListener('abort', abortLifecycle);
       const failures = [];
       for (const [kind, state] of [...commands].map(state => ['command', state])) {
-        try { await stop(state); } catch { failures.push({ kind, pid: state?.pid, exited: state?.exited, closed: state?.closed }); }
+        try { if (state.commandKind === 'owned-wda-prebuild') await stopOwnedGroups(state); else await stop(state); }
+        catch { failures.push({ kind, pid: state?.pid, exited: state?.exited, closed: state?.closed }); }
       }
       // Marking closing prevents a diagnostic from creating another child.
       // Its current sampler/identity command is included in commands above.
       await Promise.allSettled([...diagnosticTasks]);
       if (diagnosticCleanupUncertain) failures.push({ kind: 'prewarm-diagnostic' });
-      try { await stopAppiumGroups(); } catch { failures.push({ kind: 'appium-or-detached-build', pid: appium?.pid, exited: appium?.exited, closed: appium?.closed }); }
+      if (wdaBuildIncomplete) failures.push({ kind: 'wda-prebuild-incomplete' });
+      try { await stopOwnedGroups(appium); } catch { failures.push({ kind: 'appium-or-detached-build', pid: appium?.pid, exited: appium?.exited, closed: appium?.closed }); }
       if (failures.length) { await recover('process-stop-unconfirmed', failures); throw fail('IOS_DEVICE_CLEANUP_UNCONFIRMED'); }
       try {
         await assertRoot();
@@ -464,6 +572,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     // inventory query promptly. Allow that single read-only startup query more
     // time; steady-state ownership checks and all mutation budgets stay fixed.
     await assertOwned(90000); onStage('owned-simulator-booted');
+    onStage('wda-build-for-testing'); await prepareWda(); onStage('wda-prepared');
     const { Manifest } = await import(pathToFileURL(path.join(appiumRoot, 'build', 'lib', 'extension', 'manifest.js')).href);
     const manifest = new Manifest(appiumHome); await manifest.read(); manifest.addExtensionFromPackage(driverPackage, path.join(driverRoot, 'package.json'), 'local'); await manifest.write();
     live();
@@ -480,9 +589,9 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     if (!ready) throw fail('IOS_APPIUM_READY_TIMEOUT');
     await assertOwned(); onStage('private-appium-ready');
     const deviceBinding = validateIosDeviceBinding({ schemaVersion: 1, scope: IOS_DEVICE_SCOPE, nativeHome, deviceSetPath, privateRoot: root, udid: marker.udid, nonce: marker.nonce });
-    return Object.freeze({ udid: marker.udid, serverUrl, deviceSetPath, derivedDataPath, deviceBinding, wdaPort, mjpegPort,
+    return Object.freeze({ udid: marker.udid, serverUrl, deviceSetPath, derivedDataPath, deviceBinding, wdaPreparation, wdaPort, mjpegPort,
       versions: Object.freeze({ appium: '3.8.0', xcuitest: '12.19.1', webdriveragent: '16.16.3', xcode: xcodeVersion, ios: target.platformVersion, runtimeId: target.runtimeId, deviceType: target.deviceType }),
-      assertOwned: () => assertOwned(), capturedText: () => captured,
+      assertOwned: () => assertOwned(), assertWdaPrepared: () => assertWdaPrepared(), capturedText: () => captured,
       async installApp(appPath) {
         if (!safePath(appPath) || !appPath.endsWith('.app') || !(await lstat(appPath)).isDirectory() || (await lstat(appPath)).isSymbolicLink()) throw fail('IOS_APP_INPUT_INVALID');
         await assertOwned(); live(); const result = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'install', [await realpath(appPath)]), { timeoutMs: 120000 });

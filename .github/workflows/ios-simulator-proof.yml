@@ -68,7 +68,7 @@ jobs:
       - name: Build the Release simulator app without Apple signing credentials
         id: build
         run: npm run build:ios-proof -- --output-dir "$IOS_PROOF_ROOT/build"
-      - name: Verify WDA and remove its owned simulator before creating credentials
+      - name: Prebuild WDA, verify readiness and remove the simulator before creating credentials
         id: wda-preflight
         timeout-minutes: 20
         run: node scripts/ios-wda-preflight.mjs --app "$IOS_PROOF_ROOT/build/TestlaneIOSProof.app" --tools-root "$IOS_PROOF_ROOT/tools" --output-dir "$GITHUB_WORKSPACE/output/ios-wda-preflight"

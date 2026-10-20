@@ -5,7 +5,7 @@ import {realpathSync} from 'node:fs';
 import {lstat,mkdir,readFile,realpath,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {startOwnedIos} from '../examples/ios-verification/device.mjs';
+import {startOwnedIos,validateIosWdaPreparation} from '../examples/ios-verification/device.mjs';
 import {hashIosTree} from '../examples/mobile-approval-app/build-ios.mjs';
 import {withDriverSignal} from '../examples/android-verification/driver-phase.mjs';
 import {IOS_DEVICE_SCOPE,validateIosDeviceBinding} from '../examples/ios-verification/device-scope.mjs';
@@ -16,7 +16,7 @@ const BUNDLE='dev.testlane.iosproof',PRODUCT='TestlaneIOSProof.app',MARKER='test
 const LIMIT=8*1024*1024,RESPONSE_LIMIT=64*1024;
 const SOURCES=['package.json','package-lock.json','app.ios.config.cjs','index.js','App.js','bootstrap.mjs','plugins/withIosProofBuild.cjs'];
 const STAGES=new Set(['build-validation','device-start','xcode-runtime-and-pinned-tools-validated','owned-simulator-created',
-  'owned-simulator-boot-started','owned-simulator-booted','private-appium-ready','app-install','app-prewarm','wda-session-create','native-context','session-close','complete']);
+  'owned-simulator-boot-started','owned-simulator-booted','wda-build-for-testing','wda-prepared','private-appium-ready','app-install','app-prewarm','wda-session-create','native-context','session-close','complete']);
 const CODES=new Set(['IOS_WDA_CI_REQUIRED','IOS_WDA_CANCELLED','IOS_WDA_INPUT_INVALID','IOS_WDA_BUILD_INVALID',
   'IOS_WDA_OUTPUT_REFUSED','IOS_WDA_OUTPUT_OWNERSHIP_REFUSED','IOS_WDA_SESSION_TIMEOUT','IOS_WDA_REQUEST_TIMEOUT',
   'IOS_WDA_REQUEST_FAILED','IOS_WDA_RESPONSE_INVALID','IOS_WDA_SESSION_INVALID','IOS_WDA_CONTEXT_REFUSED',
@@ -67,7 +67,7 @@ function capabilities(device) {
     'appium:disableAutomaticScreenshots':true,'appium:shutdownOtherSimulators':false,'appium:resetLocationService':false,
     'appium:noReset':true,'appium:isHeadless':true,'appium:newCommandTimeout':90,'appium:waitForIdleTimeout':1,
     'appium:wdaLaunchTimeout':120000,'appium:wdaConnectionTimeout':5000,'appium:wdaStartupRetries':1,
-    'appium:forceAppLaunch':false,'appium:shouldTerminateApp':false};
+    'appium:forceAppLaunch':false,'appium:shouldTerminateApp':false,'appium:usePrebuiltWDA':true};
 }
 /** One fixed session attempt, one context read, one exact-session deletion. No app actions or credentials. */
 export async function probeOwnedWdaSession({device,signal,onStage=()=>{},onRawResponse=()=>{}}) {
@@ -120,11 +120,13 @@ export async function probeOwnedWdaSession({device,signal,onStage=()=>{},onRawRe
   if(error){const safe=fail(fixedIosWdaCode(error));Object.assign(safe,result);throw safe;}
   return result;
 }
-export function publicIosWdaStatus({stage,error,ownershipVerified=false,appPrewarmed=false,session={},deviceCleanup='not-started',elapsedMs=0,build}={}) {
-  if(!error&&!(ownershipVerified===true&&appPrewarmed===true&&session.sessionCreated===true&&session.nativeContextVerified===true&&session.sessionCleanup==='deleted'&&deviceCleanup==='completed'))error=fail('IOS_WDA_PREFLIGHT_FAILED');
+export function publicIosWdaStatus({stage,error,ownershipVerified=false,appPrewarmed=false,wdaPreparation,session={},deviceCleanup='not-started',elapsedMs=0,build}={}) {
+  let prepared;try{prepared=validateIosWdaPreparation(wdaPreparation);}catch{}
+  if(!error&&!(ownershipVerified===true&&appPrewarmed===true&&prepared?.wdaPrepared===true&&session.sessionCreated===true&&session.nativeContextVerified===true&&session.sessionCleanup==='deleted'&&deviceCleanup==='completed'))error=fail('IOS_WDA_PREFLIGHT_FAILED');
   return {schemaVersion:1,purpose:'credential-free-wda-readiness',deviceScope:IOS_DEVICE_SCOPE,status:error?'failed':'passed',
     stage:STAGES.has(stage)?stage:'build-validation',code:error?fixedIosWdaCode(error):'IOS_WDA_READY',
     ownershipVerified:ownershipVerified===true,appPrewarmed:appPrewarmed===true,sessionCreated:session.sessionCreated===true,nativeContextVerified:session.nativeContextVerified===true,
+    wdaPrepared:prepared?.wdaPrepared===true,...(prepared?{wdaPreparation:prepared}:{}),
     sessionCleanup:['not-created','deleted','unknown','not-addressable'].includes(session.sessionCleanup)?session.sessionCleanup:'not-created',
     deviceCleanup:['not-started','completed','unconfirmed'].includes(deviceCleanup)?deviceCleanup:'unconfirmed',
     sessionSetupMs:Number.isSafeInteger(session.sessionSetupMs)&&session.sessionSetupMs>=0?session.sessionSetupMs:0,
@@ -157,9 +159,11 @@ export async function runIosWdaPreflight({appDirectory,toolsRoot,outputDir,signa
       at('app-install');await device.installApp(appDirectory);
       at('app-prewarm');const warmed=await device.prewarmProofApp();
       if(warmed?.appPrewarmed!==true)throw fail('IOS_WDA_OWNERSHIP_REFUSED');appPrewarmed=true;
+      await device.assertWdaPrepared();
     }finally{signal?.removeEventListener('abort',cancel);}
     session=await probeOwnedWdaSession({device,signal,onStage:at,onRawResponse:append});
     const after=await verifyBuild(appDirectory,signal);
+    await device.assertWdaPrepared();
     if(JSON.stringify(after)!==JSON.stringify(build))throw fail('IOS_WDA_BUILD_INVALID');
   }catch(caught){
     error=caught;session={sessionCreated:typeof caught?.sessionCreated==='boolean'?caught.sessionCreated:session.sessionCreated===true,
@@ -172,7 +176,7 @@ export async function runIosWdaPreflight({appDirectory,toolsRoot,outputDir,signa
   if(signal?.aborted&&!error)error=fail('IOS_WDA_CANCELLED');
   if(!error&&(!session.sessionCreated||!session.nativeContextVerified||session.sessionCleanup!=='deleted'||deviceCleanup!=='completed'))error=fail('IOS_WDA_PREFLIGHT_FAILED');
   if(!error)at('complete');
-  const status=publicIosWdaStatus({stage,error,ownershipVerified,appPrewarmed,session,deviceCleanup,elapsedMs:Math.round(performance.now()-began),build});
+  const status=publicIosWdaStatus({stage,error,ownershipVerified,appPrewarmed,wdaPreparation:device?.wdaPreparation,session,deviceCleanup,elapsedMs:Math.round(performance.now()-began),build});
   await assertOutput();
   if(error){
     let captured='';try{captured=device?.capturedText()??error?.capturedText?.()??'';}catch{}
