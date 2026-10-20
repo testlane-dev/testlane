@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ANDROID_EXTRACT_PYTHON, ANDROID_HOSTED_ARCHIVES, hostedAndroidEnvironment,
@@ -14,7 +14,7 @@ const hosted = () => ({ platform: 'linux', architecture: 'x64', uid: 1001,
 
 test('Linux hosted proof policy refuses missing flags, root, ARM and other OS contexts before allocation', () => {
   assert.equal(requireHostedAndroid(hosted()), true);
-  for (const change of [{ platform: 'win32' }, { platform: 'darwin' }, { architecture: 'arm64' }, { uid: 0 }, { uid: undefined },
+  for (const change of [{ platform: 'win32' }, { platform: 'darwin' }, { architecture: 'arm64' }, { uid: 0 }, { uid: null },
     { osRelease: 'ID=ubuntu\nVERSION_ID="22.04"\n' }, { osRelease: 'ID=debian\nVERSION_ID="24.04"\n' },
     ...Object.keys(hosted().env).map(key => ({ env: { ...hosted().env, [key]: undefined } })),
     { env: { ...hosted().env, RUNNER_ENVIRONMENT: 'self-hosted' } }, { env: { ...hosted().env, GITHUB_RUN_ID: '1\n2' } }]) {
@@ -57,12 +57,24 @@ with zipfile.ZipFile(request['archive'],'w') as output:
 async function python(script, input) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.platform === 'win32' ? 'python' : '/usr/bin/python3', ['-I', '-c', script],
-      { stdio: ['pipe','ignore','pipe'], windowsHide: true, shell: false });
-    let stderr = ''; child.stderr.on('data', value => { if (stderr.length < 16384) stderr += value; });
+      { stdio: ['pipe','pipe','pipe'], windowsHide: true, shell: false });
+    let stderr = '', stdout = ''; child.stderr.on('data', value => { if (stderr.length < 16384) stderr += value; });
+    child.stdout.on('data', value => { if (stdout.length < 16384) stdout += value; });
     child.stdin.on('error', () => {}); child.once('error', reject);
     const timer = setTimeout(() => { child.kill(); reject(Error('fixture Python timeout')); }, 10000);
-    child.once('close', code => { clearTimeout(timer); resolve({ code, stderr }); }); child.stdin.end(JSON.stringify(input));
+    child.once('close', code => { clearTimeout(timer); resolve({ code, stderr, stdout }); }); child.stdin.end(JSON.stringify(input));
   });
+}
+async function extractionInput(archive, parent) {
+  // Windows hosted TEMP can be an alias, and Python and Node can report different
+  // canonical spelling. Supply the extractor's own canonical path convention
+  // without weakening its production Linux directory check.
+  const canonical = await python("import json,os,sys\nr=json.load(sys.stdin)\nr['archive']=os.path.realpath(r['archive'])\nr['parent']=os.path.realpath(r['parent'])\nprint(json.dumps(r))", { archive, parent, top: 'emulator' });
+  assert.equal(canonical.code, 0, canonical.stderr);
+  const input = JSON.parse(canonical.stdout);
+  assert.equal(await realpath(input.parent), await realpath(parent));
+  assert.equal(await realpath(input.archive), await realpath(archive));
+  return input;
 }
 test('verified archive extraction validates the whole manifest before writes and rejects traversal, links and device nodes', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'tld-hosted-zip-'));
@@ -72,13 +84,13 @@ test('verified archive extraction validates the whole manifest before writes and
       { name: 'emulator/back\\slash' }, { name: 'emulator/drive:C' }, { name: 'emulator/link', mode: 0o120777 },
       { name: 'emulator/device', mode: 0o020600 }, { name: 'emulator/good' }]) {
       assert.equal((await python(makeZip, { archive, entries: [{ name: 'emulator/good' }, entry] })).code, 0);
-      assert.notEqual((await python(ANDROID_EXTRACT_PYTHON, { archive, parent: root, top: 'emulator' })).code, 0, entry.name);
+      assert.notEqual((await python(ANDROID_EXTRACT_PYTHON, await extractionInput(archive, root))).code, 0, entry.name);
       assert.deepEqual(await readdir(root), ['fixture.zip'], 'refusal writes no archive entries');
       await rm(archive);
     }
     assert.equal((await python(makeZip, { archive, entries: [{ name: 'emulator/bin/tool', content: 'public tool fixture', mode: 0o100755 },
       { name: 'emulator/source.properties', content: 'Pkg.Revision=35.6.11' }] })).code, 0);
-    const extracted = await python(ANDROID_EXTRACT_PYTHON, { archive, parent: root, top: 'emulator' });
+    const extracted = await python(ANDROID_EXTRACT_PYTHON, await extractionInput(archive, root));
     assert.equal(extracted.code, 0, extracted.stderr);
     assert.equal(await readFile(path.join(root, 'emulator/bin/tool'), 'utf8'), 'public tool fixture');
   } finally {
