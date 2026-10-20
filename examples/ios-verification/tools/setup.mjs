@@ -97,9 +97,6 @@ export async function verifyCoresimSources(toolsRoot) {
   } catch { throw nativeFail(); }
 }
 
-export function coresimRebuildArguments() {
-  return Object.freeze(['rebuild', '@appium/coresim@1.13.1', '--ignore-scripts=false', '--foreground-scripts', '--rebuild-bundle=false', '--no-bin-links']);
-}
 /** Read-only native probes use the same account context as device startup. */
 export function coresimNativeProbeEnvironment({ nativeHome, privateRoot, nodeBin }) {
   return createIosDeviceEnvironment({ nativeHome,
@@ -146,22 +143,15 @@ async function providedBuilder(npmCli) {
     nodeBinarySHA256: await stableFile(node), nodeHeadersSHA256: await treeHash(headersRoot), pythonSHA256: await stableFile(python), compilerToolsSHA256: hash(JSON.stringify(compilers)) } };
 }
 
-// npm prepends ancestor .bin paths. Refuse a shadow executable before the exact
-// reviewed loader/Node. NODE_PATH supplies only the validated npm-owned node-gyp.
-async function verifyBuildCommands(tools, builder) {
-  const packageRoot = path.join(tools, CORESIM), loader = path.join(tools, 'node_modules/appium-xcuitest-driver/node_modules/node-gyp-build/bin.js');
-  const dirs = []; for (let cursor = packageRoot;; cursor = path.dirname(cursor)) { dirs.push(path.join(cursor, 'node_modules/.bin')); if (cursor === path.dirname(cursor)) break; }
-  dirs.push(path.join(builder.npmRoot, 'node_modules/@npmcli/run-script/lib/node-gyp-bin'), path.dirname(process.execPath), '/usr/bin', '/bin', '/usr/sbin', '/sbin');
-  for (const [command, expected] of [['node', await realpath(process.execPath)], ['node-gyp-build', loader]]) {
-    let found; for (const dir of dirs) { try { found = await realpath(path.join(dir, command)); break; } catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error; } }
-    if (found !== expected) throw nativeFail();
+// binding.gyp invokes Node through PATH. Direct node-gyp execution does not add
+// npm lifecycle .bin paths; refuse any earlier executable shadowing this Node.
+async function verifyBuildCommands(environment) {
+  let found;
+  for (const dir of environment.PATH.split(path.delimiter)) {
+    try { found = await realpath(path.join(dir, 'node')); break; }
+    catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error; }
   }
-  // node-gyp-build resolves a module before its PATH fallback. Every closer
-  // package candidate must be absent; the final explicit NODE_PATH is trusted.
-  for (let cursor = path.dirname(loader);; cursor = path.dirname(cursor)) {
-    try { await lstat(path.join(cursor, 'node_modules/node-gyp')); throw nativeFail(); } catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error; }
-    if (cursor === path.dirname(cursor)) break;
-  }
+  if (found !== await realpath(process.execPath)) throw nativeFail();
 }
 
 async function prepareCoresimPrerequisite({ tools, npmCli, signal, environment, privateRoot }) {
@@ -173,8 +163,8 @@ async function prepareCoresimPrerequisite({ tools, npmCli, signal, environment, 
   await canonicalDirectory(privateRoot);
   const nativeEnvironment = coresimNativeProbeEnvironment({ nativeHome, privateRoot, nodeBin: path.dirname(await realpath(process.execPath)) });
   try { await lstat(path.join(tools, CORESIM, 'build')); throw nativeFail(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  await verifyBuildCommands(tools, builder);
-  const env = { ...environment, NODE_PATH: path.join(builder.npmRoot, 'node_modules'), npm_config_node_gyp: builder.nodeGyp,
+  await verifyBuildCommands(environment);
+  const env = { ...environment,
     NODE_GYP_FORCE_PYTHON: builder.python, PYTHON: builder.python, PYTHONDONTWRITEBYTECODE: '1', npm_config_nodedir: builder.prefix,
     npm_config_devdir: path.join(privateRoot, 'gyp-cache'), npm_config_build_from_source: 'true', npm_config_arch: process.arch,
     npm_config_offline: 'true', CC: '/usr/bin/clang', CXX: '/usr/bin/clang++', MAKE: '/usr/bin/make' };
@@ -183,7 +173,8 @@ async function prepareCoresimPrerequisite({ tools, npmCli, signal, environment, 
   const observed = await runDemoChild({ entry: toolProbe, cwd: tools, env: nativeEnvironment, signal, timeoutMs: 35000 });
   if (observed.code !== 0) throw nativeFail(); let versions;
   try { versions = JSON.parse(observed.stdout); if (!exactKeys(versions, ['xcodeVersion', 'xcodeBuild', 'pythonVersion']) || versions.xcodeVersion !== '26.6' || !/^[A-Za-z0-9]+$/.test(versions.xcodeBuild) || !version(versions.pythonVersion)) throw nativeFail(); } catch { throw nativeFail(); }
-  const rebuilt = await runDemoChild({ entry: builder.npm, args: coresimRebuildArguments(), cwd: tools, env, signal, timeoutMs: 220000 });
+  const addonRoot = await canonicalDirectory(path.join(tools, CORESIM));
+  const rebuilt = await runDemoChild({ entry: builder.nodeGyp, args: ['rebuild'], cwd: addonRoot, env, signal, timeoutMs: 220000 });
   if (rebuilt.code !== 0 || JSON.stringify(await verifyCoresimSources(tools)) !== JSON.stringify(sources)) throw nativeFail();
   const binarySHA256 = await inspectCoresimBinary(path.join(tools, NATIVE_BINARY), process.arch);
   const probe = path.join(privateRoot, 'framework-probe.mjs');

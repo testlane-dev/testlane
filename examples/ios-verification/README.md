@@ -41,10 +41,11 @@ The runner needs:
 
 The optional tooling installer pins Appium 3.8.0, XCUITest 12.19.1 and WebDriverAgent
 16.16.3 through its lockfile. It uses `npm ci --ignore-scripts` in a new explicit
-output directory and leaves the default Appium installation alone. It then enables
-only the exact bundled `@appium/coresim@1.13.1` install hook in an explicit targeted
-rebuild. Other package lifecycle scripts remain disabled. This forces a source
-build on both supported Mac architectures, including Intel: the locked archive
+output directory and leaves the default Appium installation alone. It then invokes
+the already validated npm-bundled `node-gyp` directly with `rebuild` in the canonical
+bundled `@appium/coresim@1.13.1` directory. No npm package selector or lifecycle
+hook runs; lifecycle scripts remain disabled during dependency installation.
+This forces a source build on both supported Mac architectures, including Intel: the locked archive
 contains an ARM prebuild but no Intel binary. The exact reviewed addon, loader and
 Node-addon API source trees are checked before and after the rebuild. The resulting
 architecture-specific binary must load and return a numeric CoreSimulator

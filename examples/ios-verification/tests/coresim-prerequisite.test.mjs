@@ -5,7 +5,7 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeF
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { coresimFrameworkProbeSource, coresimNativeProbeEnvironment, coresimRebuildArguments, inspectCoresimBinary, installPinnedIosTools, parseCoresimProbe, verifyCoresimSources, verifyPinnedIosNativePrerequisite } from '../tools/setup.mjs';
+import { coresimFrameworkProbeSource, coresimNativeProbeEnvironment, inspectCoresimBinary, installPinnedIosTools, parseCoresimProbe, verifyCoresimSources, verifyPinnedIosNativePrerequisite } from '../tools/setup.mjs';
 import { runDemoChild } from '../../verification-demo/native.mjs';
 
 async function fixture(fn) {
@@ -108,42 +108,62 @@ test('setup CLI refuses an unsupported host before allocation or child startup',
   assert.deepEqual(await readdir(root), ['unsupported.mjs']);
 }));
 
-test('offline exact bundled rebuild runs only the target install hook, never prepare, sibling or dependency hooks', async () => fixture(async root => {
-  const nodeBin = path.dirname(await realpath(process.execPath)), prefix = path.basename(nodeBin) === 'bin' ? path.dirname(nodeBin) : nodeBin;
-  let npmCli;
-  for (const candidate of [path.join(prefix, 'lib/node_modules/npm/bin/npm-cli.js'), path.join(prefix, 'node_modules/npm/bin/npm-cli.js')]) {
-    try { npmCli = await realpath(candidate); break; } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
-  assert.ok(npmCli, 'the Node distribution must provide npm for this offline fixture');
-  const project = path.join(root, 'project'), home = path.join(root, 'home'), temp = path.join(root, 'tmp'), cache = path.join(root, 'cache');
-  for (const dir of [project, home, temp, cache, path.join(home, 'roaming'), path.join(home, 'local')]) await mkdir(dir, { recursive: true });
-  const events = path.join(root, 'events.jsonl');
-  const hook = "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));fs.appendFileSync(process.env.TL_SELECTOR_SENTINEL,JSON.stringify({name:p.name,version:p.version,event:process.env.npm_lifecycle_event})+'\\n');";
-  const allHooks = Object.fromEntries(['preinstall', 'install', 'postinstall', 'prepare'].map(name => [name, 'node hook.cjs']));
-  const lock = { name: 'fixture-root', version: '1.0.0', lockfileVersion: 3, requires: true, packages: {} };
-  async function add(relative, pkg, inBundle = false) {
-    const dir = path.join(project, relative); await mkdir(dir, { recursive: true });
-    await writeFile(path.join(dir, 'package.json'), JSON.stringify(pkg)); await writeFile(path.join(dir, 'hook.cjs'), hook);
-    lock.packages[relative.split(path.sep).join('/')] = { version: pkg.version, dependencies: pkg.dependencies, ...(inBundle ? { inBundle: true } : {}) };
-  }
-  await add('', { name: 'fixture-root', version: '1.0.0', private: true, scripts: allHooks, dependencies: { 'fixture-wrapper': '1.0.0', 'fixture-decoy-wrapper': '1.0.0' } });
-  await add('node_modules/fixture-wrapper', { name: 'fixture-wrapper', version: '1.0.0', scripts: allHooks, dependencies: { '@appium/coresim': '1.13.1', 'fixture-sibling': '1.0.0' }, bundleDependencies: ['@appium/coresim', 'fixture-sibling'] });
-  await add('node_modules/fixture-wrapper/node_modules/@appium/coresim', { name: '@appium/coresim', version: '1.13.1', scripts: { install: 'node hook.cjs', prepare: 'node hook.cjs' }, dependencies: { 'node-gyp-build': '4.8.4' } }, true);
-  await add('node_modules/fixture-wrapper/node_modules/fixture-sibling', { name: 'fixture-sibling', version: '1.0.0', scripts: allHooks }, true);
-  await add('node_modules/fixture-wrapper/node_modules/node-gyp-build', { name: 'node-gyp-build', version: '4.8.4', scripts: allHooks }, true);
-  await add('node_modules/fixture-decoy-wrapper', { name: 'fixture-decoy-wrapper', version: '1.0.0', scripts: allHooks, dependencies: { '@appium/coresim': '1.13.0' }, bundleDependencies: ['@appium/coresim'] });
-  await add('node_modules/fixture-decoy-wrapper/node_modules/@appium/coresim', { name: '@appium/coresim', version: '1.13.0', scripts: allHooks }, true);
-  await writeFile(path.join(project, 'package-lock.json'), JSON.stringify(lock));
-  const userConfig = path.join(root, 'user.npmrc'), globalConfig = path.join(root, 'global.npmrc');
-  await writeFile(userConfig, ''); await writeFile(globalConfig, '');
-  const system = process.platform === 'win32' ? process.env.SystemRoot : undefined;
-  const environment = { PATH: nodeBin + path.delimiter + (system ? path.join(system, 'System32') : '/usr/bin:/bin'), HOME: home, USERPROFILE: home,
-    APPDATA: path.join(home, 'roaming'), LOCALAPPDATA: path.join(home, 'local'), TMP: temp, TEMP: temp, TMPDIR: temp,
-    npm_config_userconfig: userConfig, npm_config_globalconfig: globalConfig, npm_config_cache: cache, npm_config_offline: 'true',
-    npm_config_update_notifier: 'false', npm_config_audit: 'false', npm_config_fund: 'false', TL_SELECTOR_SENTINEL: events,
-    ...(system ? { SystemRoot: system, ComSpec: path.join(system, 'System32/cmd.exe') } : {}) };
-  const result = await runDemoChild({ entry: npmCli, args: coresimRebuildArguments(), cwd: project, env: environment, timeoutMs: 30000 });
+async function controlledGyp(root, body) {
+  const addon = path.join(root, 'addon'), npmGyp = path.join(root, 'npm/node_modules/node-gyp/bin');
+  await mkdir(addon); await mkdir(npmGyp, { recursive: true });
+  const entry = path.join(npmGyp, 'node-gyp.js'); await writeFile(entry, body);
+  // These hooks must never run when the validated node-gyp entry is invoked directly.
+  const hook = "require('node:fs').writeFileSync('unexpected-lifecycle-hook','fixed')";
+  await writeFile(path.join(addon, 'package.json'), JSON.stringify({ name: '@appium/coresim', version: '1.13.1',
+    scripts: Object.fromEntries(['preinstall', 'install', 'postinstall', 'prepare'].map(event => [event, 'node -e '+JSON.stringify(hook)])) }));
+  return { entry: await realpath(entry), cwd: await realpath(addon) };
+}
+const nodeOnlyEnvironment = () => ({ PATH: path.dirname(process.execPath),
+  npm_config_nodedir: 'fixed-local-headers', NODE_GYP_FORCE_PYTHON: 'fixed-local-python',
+  CC: 'fixed-local-clang', CXX: 'fixed-local-clang++', MAKE: 'fixed-local-make' });
+
+test('direct builder entry receives exact addon cwd and rebuild argument without npm selection or lifecycle hooks', async () => fixture(async root => {
+  const invocation = await controlledGyp(root, "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));fs.writeFileSync('observed.json',JSON.stringify({args:process.argv.slice(2),package:p.name,version:p.version,headers:process.env.npm_config_nodedir,python:process.env.NODE_GYP_FORCE_PYTHON,compiler:process.env.CC,npmLifecycle:process.env.npm_lifecycle_event??null}));\n");
+  const result = await runDemoChild({ ...invocation, args: ['rebuild'], env: nodeOnlyEnvironment(), timeoutMs: 10000 });
   assert.equal(result.code, 0);
-  const observed = (await readFile(events, 'utf8')).trim().split('\n').map(JSON.parse);
-  assert.deepEqual(observed, [{ name: '@appium/coresim', version: '1.13.1', event: 'install' }]);
+  assert.deepEqual(JSON.parse(await readFile(path.join(invocation.cwd, 'observed.json'), 'utf8')), {
+    args: ['rebuild'], package: '@appium/coresim', version: '1.13.1', headers: 'fixed-local-headers',
+    python: 'fixed-local-python', compiler: 'fixed-local-clang', npmLifecycle: null,
+  });
+  await assert.rejects(lstat(path.join(invocation.cwd, 'unexpected-lifecycle-hook')), { code: 'ENOENT' });
+  await writeFile(invocation.entry, 'process.exitCode=23;\n');
+  const failed = await runDemoChild({ ...invocation, args: ['rebuild'], env: nodeOnlyEnvironment(), timeoutMs: 10000 });
+  assert.equal(failed.code, 23);
+}));
+
+test('direct builder signal termination cannot be normalized to a successful exit', async () => fixture(async root => {
+  const invocation = await controlledGyp(root, "process.kill(process.pid,'SIGTERM');\n");
+  const result = await runDemoChild({ ...invocation, args: ['rebuild'], env: nodeOnlyEnvironment(), timeoutMs: 10000 });
+  assert.notEqual(result.code, 0);
+  await assert.rejects(lstat(path.join(invocation.cwd, 'unexpected-lifecycle-hook')), { code: 'ENOENT' });
+}));
+
+test('direct builder cancellation waits for confirmed child termination and pre-abort starts no child', async () => fixture(async root => {
+  const invocation = await controlledGyp(root, "require('node:fs').writeFileSync('ready.pid',String(process.pid));setInterval(()=>{},1000);\n");
+  const controller = new AbortController();
+  const pending = runDemoChild({ ...invocation, args: ['rebuild'], env: nodeOnlyEnvironment(), signal: controller.signal, timeoutMs: 20000 });
+  // Attach immediately; readiness failures still abort and join the actual retained child.
+  const settled = pending.then(value => ({ value }), error => ({ error }));
+  let pid;
+  try {
+    const deadline = performance.now() + 10000;
+    while (performance.now() < deadline) {
+      try { pid = Number(await readFile(path.join(invocation.cwd, 'ready.pid'), 'utf8')); break; }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.ok(Number.isSafeInteger(pid) && pid > 0, 'controlled builder must be ready before cancellation');
+    controller.abort();
+    const result = await settled;
+    assert.equal(result.error?.message, 'DEMO_CANCELLED'); assert.equal(result.value, undefined);
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  } finally { controller.abort(); await settled; }
+  await writeFile(invocation.entry, "require('node:fs').writeFileSync('preabort-started','fixed');\n");
+  await assert.rejects(runDemoChild({ ...invocation, args: ['rebuild'], env: nodeOnlyEnvironment(), signal: controller.signal, timeoutMs: 10000 }), /DEMO_CANCELLED/);
+  await assert.rejects(lstat(path.join(invocation.cwd, 'preabort-started')), { code: 'ENOENT' });
 }));
