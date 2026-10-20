@@ -133,13 +133,27 @@ to trusted app/test code and the same OS user; this is not a credential sandbox.
 The proof-only network policy permits the exact loopback backend, rather than a
 production sign-in bypass or a general session mechanism for other apps.
 
-The device controller creates a nonce-named Simulator in a new private device set.
-Every device operation names that set and exact UUID. Appium, WebDriverAgent and
-MJPEG use owned ports bound to loopback. There is no selection of a booted/default
-device, global Simulator reset or physical-device fallback. Appium's home and
-derived data are private to the run. Teardown stops owned server/build processes,
-shuts down and deletes only that Simulator, and checks device/listener absence
-before removing its owned temporary directories.
+The device controller creates one nonce-named Simulator in the hosted runner's
+existing standard CoreSimulator device set, which makes it visible to Xcode's
+WebDriverAgent build. It derives that set from the OS account's home directory,
+checks its canonical path, and binds the new UUID and nonce to the run's private
+marker. Every device operation names that set and exact UUID. It never selects an
+existing or booted device, resets the set, or creates, repairs or removes the set
+directory. This arrangement is restricted to the ephemeral hosted runner above.
+
+Before creation, the controller snapshots the other devices' stable identity,
+configuration, availability and state. Ownership checks and teardown require that
+inventory to remain unchanged; a mismatch fails the proof and retains recovery
+metadata. Cleanup deletes only the proven owned UUID and verifies its absence. It
+does not repair or delete another device. This inventory check does not establish
+that Simulator UI clients were untouched; Appium's headless behavior is described
+above.
+
+Appium, WebDriverAgent and MJPEG use owned ports bound to loopback. Appium's home,
+temporary files and derived data remain private to the run. Teardown stops only
+retained owned process identities, then checks device/listener absence before
+removing its private temporary directories. A shared device-set path grants no
+process-killing authority.
 
 Native device tools receive only selected toolchain/environment settings and the
 run's private home, temporary and Appium directories. Unrelated inherited
@@ -162,7 +176,9 @@ inventory queries retain their ordinary 30-second bound.
 Successful output contains the reviewed plan, three fixed-shape JSON reports and a
 receipt with source, app-tree, build-manifest, plan, case and installed-package
 hashes, resolved tool versions, declared bounds, timings and cleanup/leak-scan
-outcomes. Reports omit raw exceptions, response bodies, UI hierarchies, screenshots, recordings and device
+outcomes. The receipt and WDA status identify the fixed
+`ephemeral-hosted-standard-device-set` scope; neither includes the foreign-device
+baseline or owned device identifiers. Reports omit raw exceptions, response bodies, UI hierarchies, screenshots, recordings and device
 logs. Temporary driver text stays bounded in memory and is checked for generated
 credential variants. Uncertain teardown fails the proof and retains private recovery
 metadata; failure output must be reviewed before sharing.

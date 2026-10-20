@@ -2,7 +2,8 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateNativePlan, sanitizeNativeReport, nativeFailureReport, appendNativeRunFailure } from './contracts.mjs';
+import { validateNativePlan, sanitizeNativeReport, nativeFailureReport, appendNativeRunFailure, IOS_NATIVE_RUNNER } from './contracts.mjs';
+import { validateIosDeviceBinding } from '../ios-verification/device-scope.mjs';
 
 const ENTRY = fileURLToPath(new URL('./worker.mjs', import.meta.url));
 const MAX_IPC = 256 * 1024, MAX_OUTPUT = 256 * 1024;
@@ -44,9 +45,20 @@ export async function runNativeWorker({ plan: input, driverOptions, identities, 
     return { report: nativeFailureReport(plan, 'NATIVE_CONFIGURATION_INVALID'), captured: '' };
   }
   if (signal?.aborted) return { report: nativeFailureReport(plan, 'NATIVE_RUN_CANCELLED'), captured: '' };
-  const payload = { plan, driverOptions, identities, origin, cookies };
-  try { if (Buffer.byteLength(JSON.stringify(payload)) > MAX_IPC) throw new Error(); }
-  catch { return { report: nativeFailureReport(plan, 'NATIVE_CONFIGURATION_INVALID'), captured: '' }; }
+  let payload;
+  try {
+    // Snapshot synchronously before validation and before spawn/send can yield.
+    // A caller cannot retarget both descriptor and capabilities together while
+    // the parent ownership callback still checks the original device handle.
+    payload = structuredClone({ plan, driverOptions, identities, origin, cookies });
+    if (Buffer.byteLength(JSON.stringify(payload)) > MAX_IPC) throw new Error();
+  } catch { return { report: nativeFailureReport(plan, 'NATIVE_CONFIGURATION_INVALID'), captured: '' }; }
+  // Refuse an unbound shared-set location before spawning the worker. The
+  // descriptor travels only in private IPC, never as an Appium capability.
+  if (plan.runner === IOS_NATIVE_RUNNER) {
+    try { validateIosDeviceBinding(payload.driverOptions?.deviceBinding, { capabilities: payload.driverOptions?.capabilities }); }
+    catch { return { report: nativeFailureReport(plan, 'NATIVE_CONFIGURATION_INVALID'), captured: '' }; }
+  }
   return new Promise(resolve => {
     let child, captured = '', outputBytes = 0, closed = false, exitCode, finishing = false, done = false, budget, grace;
     const requestIds = new Set(), activeRequests = new Set();

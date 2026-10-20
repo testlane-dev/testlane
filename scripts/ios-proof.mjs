@@ -68,13 +68,13 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
     const result=await runProofPhases({consumer,app,device,plan,cookies,identities,output,before,runWorker:runNativeWorker,sanitize:sanitizeNativeReport,signal,
       workerTimeoutMs:NATIVE_PROOF_BUDGETS.workerMs,onStage:at,onCaptured:value=>{captured+=value;},onWorkerRisk:()=>{workerUnconfirmed=true;},
       assertBuildUnchanged:async()=>{assert.equal((await hashIosTree(appRoot)).sha256,appTree.sha256);assert.equal(sha(await readFile(manifestFile)),sha(manifestBytes));},
-      driverOptions:{url:device.serverUrl,keyboardDismissId:'dismiss-keyboard',capabilities:{platformName:'iOS','appium:automationName':'XCUITest','appium:udid':device.udid,'appium:bundleId':BUNDLE,
+      driverOptions:{url:device.serverUrl,deviceBinding:device.deviceBinding,keyboardDismissId:'dismiss-keyboard',capabilities:{platformName:'iOS','appium:automationName':'XCUITest','appium:udid':device.udid,'appium:bundleId':BUNDLE,
         'appium:simulatorDevicesSetPath':device.deviceSetPath,'appium:derivedDataPath':device.derivedDataPath,'appium:wdaLocalPort':device.wdaPort,
         'appium:wdaRemotePort':device.wdaPort,'appium:wdaBindingIP':'127.0.0.1','appium:wdaBaseUrl':'http://127.0.0.1','appium:mjpegServerPort':device.mjpegPort,
         'appium:skipLogCapture':true,'appium:showIOSLog':false,'appium:showXcodeLog':false,'appium:printPageSourceOnFindFailure':false,
         'appium:disableAutomaticScreenshots':true,'appium:shutdownOtherSimulators':false,'appium:resetLocationService':false,'appium:noReset':true,
         'appium:newCommandTimeout':90,'appium:waitForIdleTimeout':1,'appium:wdaLaunchTimeout':120000,'appium:wdaConnectionTimeout':5000}}});
-    receipt={schemaVersion:1,passed:true,runner:'ios-xcuitest',context:'NATIVE_APP',proofOnly:true,nativeStore:'keychain-macos',
+    receipt={schemaVersion:1,passed:true,runner:'ios-xcuitest',context:'NATIVE_APP',proofOnly:true,deviceScope:device.deviceBinding.scope,nativeStore:'keychain-macos',
       brokerEntry:'installed runCli with explicit temporary KeychainMacosStore',packageTreeSha256:before,appSha256:appTree.sha256,
       buildManifestSha256:sha(manifestBytes),publicAppSourceSha256:build.publicSourceSHA256,versions:device.versions,budgets:NATIVE_PROOF_BUDGETS,...result};
     if(/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA??'')&&/^[1-9][0-9]*$/.test(process.env.GITHUB_RUN_ID??''))

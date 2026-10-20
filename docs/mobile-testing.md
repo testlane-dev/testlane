@@ -65,9 +65,15 @@ The iOS controller is restricted to an explicitly opted-in, ephemeral GitHub-hos
 macOS job. It builds a Simulator Release app with embedded JavaScript without Apple
 signing credentials; a linker ad-hoc signature may remain, with no Developer
 identity or team. This is not an App Store or physical-device build. The controller
-creates a new nonce-named Simulator in a private device set, and uses pinned Appium
-3.8.0, XCUITest 12.19.1 and WebDriverAgent 16.16.3. It does not select an existing
-phone or Simulator, require an Apple/Expo account, or accept SDK licenses.
+creates one new nonce-named Simulator in the runner's existing standard device set
+so Xcode can find it, and uses pinned Appium 3.8.0, XCUITest 12.19.1 and
+WebDriverAgent 16.16.3. Device commands name that exact UUID; the controller checks
+the other devices' stable inventory before and after the run and refuses cleanup
+success if it changes. It never deletes or repairs another device or the device-set
+directory. Appium's home and derived data remain private, and process cleanup
+requires retained owned process identities. Headless Appium can terminate Simulator
+UI clients, which further limits this experiment to an ephemeral host. It does not
+require an Apple/Expo account or accept SDK licenses.
 
 Generated sandbox credentials pass through the real installed CLI and an explicitly
 selected temporary macOS keychain. A private file in the owned app container delivers

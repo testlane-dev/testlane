@@ -6,6 +6,11 @@ import { runNativeCases } from '../runner.mjs';
 import { IOS_NATIVE_RUNNER, NATIVE_RUNNER, NATIVE_LIMITS, NATIVE_PLAN_SCHEMA, nativeLimits, nativeDiagnostic,
   validateNativePlan, nativeFailureReport, appendNativeRunFailure, sanitizeNativeReport } from '../contracts.mjs';
 import { runNativeWorker } from '../worker-host.mjs';
+import { IOS_DEVICE_SCOPE } from '../../ios-verification/device-scope.mjs';
+
+const binding = () => ({ schemaVersion: 1, scope: IOS_DEVICE_SCOPE, nativeHome: '/Users/runner',
+  deviceSetPath: '/Users/runner/Library/Developer/CoreSimulator/Devices', privateRoot: '/private/tmp/tld-ios-abc123',
+  udid: 'FA001122-3344-5566-7788-9900AABBCCDD', nonce: 'a'.repeat(24) });
 
 const plan = () => ({ schemaVersion: 1, runner: IOS_NATIVE_RUNNER, status: 'reviewed', title: 'Synthetic native approval',
   target: { baseUrl: 'http://127.0.0.1:4555', environment: 'testing' }, app: { bundleId: 'dev.testlane.iosproof', buildSha256: 'b'.repeat(64) },
@@ -67,8 +72,8 @@ test('fixed shared worker chooses iOS driver and refuses configuration before pa
     identities: { editor: { email: 'editor@example.test', role: 'Editor' }, reviewer: { email: 'reviewer@example.test', role: 'Reviewer' } },
     cookies: { editor: 'owned=' + secret, reviewer: 'owned=other-generated-value' }, onRequest: async () => { calls++; return true; }, timeoutMs: 10_000 });
   assert.equal(calls, 0); assert.equal(result.captured, ''); assert.equal(result.report.runner, IOS_NATIVE_RUNNER);
-  assert.deepEqual(result.report.reasonCodes, ['NATIVE_DRIVER_CONFIGURATION_INVALID']);
-  assert.ok(result.report.diagnostics[0].remedy.includes('Simulator')); assert.equal(JSON.stringify(result.report).includes(secret), false);
+  assert.deepEqual(result.report.reasonCodes, ['NATIVE_CONFIGURATION_INVALID']);
+  assert.equal(JSON.stringify(result.report).includes(secret), false);
   assert.deepEqual(sanitizeNativeReport(result.report, input), result.report);
 });
 
@@ -78,12 +83,12 @@ test('shared worker preserves explicit parent ownership ACKs and recognizes only
     response.end(JSON.stringify({ value: { error: 'unknown error', message: secret } })); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const capabilities = { platformName: 'iOS', 'appium:automationName': 'XCUITest', 'appium:udid': 'FA001122-3344-5566-7788-9900AABBCCDD',
-    'appium:bundleId': input.app.bundleId, 'appium:simulatorDevicesSetPath': '/private/tmp/tld-ios-abc123/devices',
+    'appium:bundleId': input.app.bundleId, 'appium:simulatorDevicesSetPath': binding().deviceSetPath,
     'appium:derivedDataPath': '/private/tmp/tld-ios-abc123/derived-data', 'appium:wdaLocalPort': 8211, 'appium:wdaRemotePort': 8211, 'appium:mjpegServerPort': 8212,
     'appium:wdaBindingIP': '127.0.0.1', 'appium:wdaBaseUrl': 'http://127.0.0.1', 'appium:skipLogCapture': true,
     'appium:showIOSLog': false, 'appium:showXcodeLog': false, 'appium:printPageSourceOnFindFailure': false,
     'appium:disableAutomaticScreenshots': true, 'appium:shutdownOtherSimulators': false, 'appium:resetLocationService': false, 'appium:noReset': true };
-  const options = { plan: input, origin: input.target.baseUrl, driverOptions: { url: 'http://127.0.0.1:' + server.address().port, capabilities },
+  const options = { plan: input, origin: input.target.baseUrl, driverOptions: { url: 'http://127.0.0.1:' + server.address().port, deviceBinding: binding(), capabilities },
     identities: { editor: { email: 'editor@example.test', role: 'Editor' }, reviewer: { email: 'reviewer@example.test', role: 'Reviewer' } },
     cookies: { editor: 'owned=' + secret, reviewer: 'owned=other-generated-value' }, timeoutMs: 10_000 };
   try {
@@ -96,5 +101,8 @@ test('shared worker preserves explicit parent ownership ACKs and recognizes only
     const mismatched = await runNativeWorker({ ...options, driverOptions: { ...options.driverOptions, capabilities: { ...capabilities, 'appium:bundleId': 'dev.testlane.other' } },
       onRequest: async () => { assert.fail('mismatched plan must be refused before ownership or network'); } });
     assert.deepEqual(mismatched.report.reasonCodes, ['NATIVE_DRIVER_CONFIGURATION_INVALID']); assert.equal(http, 1);
+    const unbound = await runNativeWorker({ ...options, driverOptions: { ...options.driverOptions, deviceBinding: { ...binding(), nonce: 'bad' } },
+      onRequest: async () => { assert.fail('invalid binding is refused before spawning/contact'); } });
+    assert.deepEqual(unbound.report.reasonCodes, ['NATIVE_CONFIGURATION_INVALID']); assert.equal(http, 1);
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });

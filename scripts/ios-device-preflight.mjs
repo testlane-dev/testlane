@@ -1,16 +1,17 @@
 #!/usr/bin/env node
-/** Pre-authentication only: own, boot, inspect and remove a new private Simulator. */
+/** Pre-authentication only: own, inspect and remove one hosted Simulator UUID. */
 import {randomBytes} from 'node:crypto';
 import {realpathSync} from 'node:fs';
 import {lstat,mkdir,readFile,realpath,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {startOwnedIos} from '../examples/ios-verification/device.mjs';
+import {startOwnedIos,requireIosHostedDevice} from '../examples/ios-verification/device.mjs';
 
 const MARKER='testlane-ios-device-preflight.json',CAPTURE_LIMIT=8*1024*1024;
 const STAGES=new Set(['starting','xcode-runtime-and-pinned-tools-validated','owned-simulator-created',
   'owned-simulator-boot-started','owned-simulator-booted','private-appium-ready','ownership-verified']);
 const CODES=new Set(['IOS_MACOS_REQUIRED','IOS_CANCELLED','IOS_CAPTURE_LIMIT','IOS_COMMAND_START_FAILED','IOS_COMMAND_TIMEOUT',
+  'IOS_HOSTED_CI_REQUIRED','IOS_STANDARD_DEVICE_SET_REFUSED','IOS_FOREIGN_INVENTORY_CHANGED','IOS_DEVICE_INVENTORY_INVALID','IOS_DEVICE_BINDING_REFUSED',
   'IOS_DEVICE_CLEANUP_UNCONFIRMED','IOS_DEVICE_INPUT_INVALID','IOS_DEVICE_ENV_INVALID','IOS_DEVICE_START_FAILED','IOS_DEVICE_TYPE_UNAVAILABLE',
   'IOS_APPIUM_READY_TIMEOUT','IOS_APPIUM_START_FAILED','IOS_APPIUM_STOPPED','IOS_LISTENER_BINDING_REFUSED',
   'IOS_LISTENER_STOP_UNCONFIRMED','IOS_OUTPUT_PATH_REFUSED','IOS_OWNERSHIP_REFUSED','IOS_PROCESS_OWNERSHIP_REFUSED',
@@ -47,7 +48,7 @@ function publicVersions(value) {
 export async function runIosDevicePreflight({toolsRoot,outputDir,signal,onStage=()=>{}}={}) {
   // These refusals deliberately precede output creation or native tool execution.
   if(signal?.aborted)throw fail('IOS_CANCELLED');
-  if(process.platform!=='darwin')throw fail('IOS_MACOS_REQUIRED');
+  requireIosHostedDevice();
   if(!absolute(toolsRoot))throw fail('IOS_DEVICE_PREFLIGHT_TOOLS_INVALID');
   try{if(!same(await realpath(toolsRoot),toolsRoot)||(await lstat(toolsRoot)).isSymbolicLink())throw Error();}
   catch{throw fail('IOS_DEVICE_PREFLIGHT_TOOLS_INVALID');}

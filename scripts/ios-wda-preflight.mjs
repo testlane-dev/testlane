@@ -8,6 +8,7 @@ import {fileURLToPath} from 'node:url';
 import {startOwnedIos} from '../examples/ios-verification/device.mjs';
 import {hashIosTree} from '../examples/mobile-approval-app/build-ios.mjs';
 import {withDriverSignal} from '../examples/android-verification/driver-phase.mjs';
+import {IOS_DEVICE_SCOPE,validateIosDeviceBinding} from '../examples/ios-verification/device-scope.mjs';
 import {fixedIosDevicePreflightCode,validateIosDevicePreflightOutput} from './ios-device-preflight.mjs';
 
 const APP_SOURCE=fileURLToPath(new URL('../examples/mobile-approval-app/',import.meta.url));
@@ -69,8 +70,9 @@ function capabilities(device) {
 }
 /** One fixed session attempt, one context read, one exact-session deletion. No app actions or credentials. */
 export async function probeOwnedWdaSession({device,signal,onStage=()=>{},onRawResponse=()=>{}}) {
-  let origin;
-  try{const url=new URL(device.serverUrl);if(url.protocol!=='http:'||url.hostname!=='127.0.0.1'||!url.port||url.username||url.password||url.search||url.hash||url.pathname!=='/'||typeof device.assertOwned!=='function')throw Error();origin=url.origin;}
+  let origin,caps;
+  try{const url=new URL(device.serverUrl);if(url.protocol!=='http:'||url.hostname!=='127.0.0.1'||!url.port||url.username||url.password||url.search||url.hash||url.pathname!=='/'||typeof device.assertOwned!=='function')throw Error();origin=url.origin;
+    caps=capabilities(device);validateIosDeviceBinding(device.deviceBinding,{capabilities:caps});}
   catch{throw fail('IOS_WDA_INPUT_INVALID');}
   let session,attempted=false,error,created=false,nativeContext=false,cleanup='not-created',sessionSetupMs=0;
   async function request(kind,{activeSignal=signal}={}) {
@@ -86,7 +88,7 @@ export async function probeOwnedWdaSession({device,signal,onStage=()=>{},onRawRe
       checkDeadline();
       const route=kind==='create'?'/session':'/session/'+encodeURIComponent(session)+(kind==='context'?'/context':'');
       const response=await withDriverSignal(()=>fetch(origin+route,{method:kind==='create'?'POST':kind==='context'?'GET':'DELETE',signal:combined,redirect:'error',
-        headers:{'Content-Type':'application/json'},...(kind==='create'?{body:JSON.stringify({capabilities:{alwaysMatch:capabilities(device),firstMatch:[{}]}})}:{})}),combined,()=>fail('IOS_WDA_CANCELLED'));
+        headers:{'Content-Type':'application/json'},...(kind==='create'?{body:JSON.stringify({capabilities:{alwaysMatch:caps,firstMatch:[{}]}})}:{})}),combined,()=>fail('IOS_WDA_CANCELLED'));
       const reader=response.body?.getReader();if(!reader)throw fail('IOS_WDA_RESPONSE_INVALID');
       let length=0;const chunks=[];
       for(;;){const {value,done}=await withDriverSignal(()=>reader.read(),combined,()=>fail('IOS_WDA_CANCELLED'));if(done)break;length+=value.byteLength;if(length>RESPONSE_LIMIT){await withDriverSignal(()=>reader.cancel(),combined,()=>fail('IOS_WDA_CANCELLED'));throw fail('IOS_WDA_RESPONSE_INVALID');}chunks.push(Buffer.from(value));}
@@ -119,7 +121,7 @@ export async function probeOwnedWdaSession({device,signal,onStage=()=>{},onRawRe
 }
 export function publicIosWdaStatus({stage,error,ownershipVerified=false,session={},deviceCleanup='not-started',elapsedMs=0,build}={}) {
   if(!error&&!(ownershipVerified===true&&session.sessionCreated===true&&session.nativeContextVerified===true&&session.sessionCleanup==='deleted'&&deviceCleanup==='completed'))error=fail('IOS_WDA_PREFLIGHT_FAILED');
-  return {schemaVersion:1,purpose:'credential-free-wda-readiness',status:error?'failed':'passed',
+  return {schemaVersion:1,purpose:'credential-free-wda-readiness',deviceScope:IOS_DEVICE_SCOPE,status:error?'failed':'passed',
     stage:STAGES.has(stage)?stage:'build-validation',code:error?fixedIosWdaCode(error):'IOS_WDA_READY',
     ownershipVerified:ownershipVerified===true,sessionCreated:session.sessionCreated===true,nativeContextVerified:session.nativeContextVerified===true,
     sessionCleanup:['not-created','deleted','unknown','not-addressable'].includes(session.sessionCleanup)?session.sessionCleanup:'not-created',

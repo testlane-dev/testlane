@@ -5,8 +5,13 @@ import {lstat,mkdtemp,realpath,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {requireIosWdaCi,publicIosWdaStatus,validateWdaBuildManifest,probeOwnedWdaSession,runIosWdaPreflight} from '../../../scripts/ios-wda-preflight.mjs';
+import {IOS_DEVICE_SCOPE} from '../device-scope.mjs';
 
 const ci={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',TESTLANE_IOS_PROOF_CI:'1'};
+const testDevice=()=>({serverUrl:'http://127.0.0.1:8210/',udid:'12345678-1234-1234-1234-123456789ABC',
+  deviceSetPath:'/Users/runner/Library/Developer/CoreSimulator/Devices',derivedDataPath:'/private/tmp/tld-ios-Abc123/derived-data',
+  wdaPort:8211,mjpegPort:8212,assertOwned:async()=>true,deviceBinding:{schemaVersion:1,scope:IOS_DEVICE_SCOPE,nativeHome:'/Users/runner',
+    deviceSetPath:'/Users/runner/Library/Developer/CoreSimulator/Devices',privateRoot:'/private/tmp/tld-ios-Abc123',udid:'12345678-1234-1234-1234-123456789ABC',nonce:'a'.repeat(24)}});
 async function promptly(promise){let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('UNIT_WDA_DID_NOT_SETTLE')),2000);})]);}finally{clearTimeout(timer);}}
 async function fixture(t){
   const parent=await realpath(os.tmpdir()),root=await mkdtemp(path.join(parent,'tld-ios-wda-test-'));
@@ -46,8 +51,7 @@ async function serverFixture({context='NATIVE_APP',failure=false,hang=false,dele
     res.end(JSON.stringify({value:rejected?{error:'unknown error',message:privateText}:req.url==='/session'?{sessionId:'owned-session'}:req.url.endsWith('/context')?context:null}));
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-  const device={serverUrl:'http://127.0.0.1:'+server.address().port+'/',udid:'12345678-1234-1234-1234-123456789ABC',
-    deviceSetPath:'/private/tmp/tld-ios-Abc123/devices',derivedDataPath:'/private/tmp/tld-ios-Abc123/derived-data',wdaPort:8211,mjpegPort:8212,assertOwned:async()=>true};
+  const device={...testDevice(),serverUrl:'http://127.0.0.1:'+server.address().port+'/'};
   return {device,calls,entered:entered.promise,connectionClosed:connectionClosed.promise,privateText,
     close:async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}};
 }
@@ -60,7 +64,16 @@ test('credential-free probe creates once, checks native context and deletes only
     assert.equal(caps['appium:showXcodeLog'],true);assert.equal(caps['appium:skipLogCapture'],true);assert.equal(caps['appium:disableAutomaticScreenshots'],true);
     assert.equal(caps['appium:printPageSourceOnFindFailure'],false);assert.equal(caps['appium:bundleId'],'dev.testlane.iosproof');
     assert.equal(caps['appium:isHeadless'],true);
+    assert.equal(caps['appium:simulatorDevicesSetPath'],fixture.device.deviceBinding.deviceSetPath);
+    assert.equal(Object.hasOwn(caps,'deviceBinding'),false);
     assert.equal(Object.hasOwn(caps,'appium:processArguments'),false);
+  }finally{await fixture.close();}
+});
+test('pre-auth probe refuses a mismatched hosted descriptor before any native HTTP',async()=>{
+  const fixture=await serverFixture();
+  try{
+    await assert.rejects(probeOwnedWdaSession({device:{...fixture.device,deviceBinding:{...fixture.device.deviceBinding,scope:'foreign-set'}}}),/IOS_WDA_INPUT_INVALID/);
+    assert.equal(fixture.calls.length,0);
   }finally{await fixture.close();}
 });
 test('failed context still deletes the known session and raw native errors stay out of public errors',async()=>{
@@ -90,7 +103,7 @@ test('session setup preserves its 240-second bound and cancellation never prints
   const originalTimer=globalThis.setTimeout;let latest,budget;
   t.mock.method(globalThis,'setTimeout',(callback,milliseconds,...args)=>{latest=callback;budget=milliseconds;return originalTimer(callback,milliseconds,...args);});
   t.mock.method(globalThis,'fetch',async(_url,options)=>new Promise((_,reject)=>{options.signal.addEventListener('abort',()=>reject(Error('untrusted-native-payload')),{once:true});queueMicrotask(latest);}));
-  const device={serverUrl:'http://127.0.0.1:8210/',assertOwned:async()=>true};
+  const device=testDevice();
   await assert.rejects(probeOwnedWdaSession({device}),error=>error.message==='IOS_WDA_SESSION_TIMEOUT'&&!String(error.stack).includes('untrusted-native-payload'));
   assert.equal(budget,240000);
 });
@@ -99,7 +112,7 @@ test('credential-free diagnostic refuses a successful response that arrives afte
   let now=0;const routes=[];
   t.mock.method(performance,'now',()=>now);
   t.mock.method(globalThis,'fetch',async url=>{routes.push(new URL(url).pathname);now=240001;return new Response(JSON.stringify({value:{sessionId:'late-owned-session'}}));});
-  await assert.rejects(probeOwnedWdaSession({device:{serverUrl:'http://127.0.0.1:8210/',assertOwned:async()=>true}}),error=>
+  await assert.rejects(probeOwnedWdaSession({device:testDevice()}),error=>
     error.message==='IOS_WDA_SESSION_TIMEOUT'&&error.sessionCleanup==='not-addressable'&&error.sessionCreated===false);
   assert.deepEqual(routes,['/session']);
 });
@@ -107,7 +120,7 @@ test('credential-free diagnostic refuses a successful response that arrives afte
 test('credential-free request cancellation settles without relying on HTTP abort-drain behavior',async t=>{
   const entered=Promise.withResolvers(),controller=new AbortController();
   t.mock.method(globalThis,'fetch',async()=>{entered.resolve();return new Promise(()=>{});});
-  const pending=assert.rejects(probeOwnedWdaSession({device:{serverUrl:'http://127.0.0.1:8210/',assertOwned:async()=>true},signal:controller.signal}),
+  const pending=assert.rejects(probeOwnedWdaSession({device:testDevice(),signal:controller.signal}),
     error=>error.message==='IOS_WDA_CANCELLED'&&error.sessionCleanup==='not-addressable');
   await promptly(entered.promise);controller.abort();await promptly(pending);
 });

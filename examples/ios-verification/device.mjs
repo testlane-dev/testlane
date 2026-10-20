@@ -1,13 +1,15 @@
-/** Own one new Simulator in a private device set and one private Appium server. */
+/** Own one nonce-bound Simulator in an ephemeral hosted Mac's standard device set. */
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createIosDeviceEnvironment } from './environment.mjs';
+import { IOS_DEVICE_SCOPE, validateIosDeviceBinding, normalizeIosDeviceInventory,
+  snapshotIosForeignDevices, assertIosForeignSnapshot } from './device-scope.mjs';
 
 const UUID = /^[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}$/;
 const BUNDLE = 'dev.testlane.iosproof', MARKER = 'testlane-owned-simulator.json';
@@ -16,6 +18,26 @@ const fail = code => new Error(code);
 const safePath = value => typeof value === 'string' && path.isAbsolute(value) && !/[\r\n\0]/.test(value);
 const inside = (root, file) => { const rel = path.relative(root, file); return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel); };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+export function requireIosHostedDevice({ platform = process.platform, env = process.env } = {}) {
+  if (platform !== 'darwin') throw fail('IOS_MACOS_REQUIRED');
+  if (!env || env.GITHUB_ACTIONS !== 'true' || env.RUNNER_ENVIRONMENT !== 'github-hosted' || env.TESTLANE_IOS_PROOF_CI !== '1') throw fail('IOS_HOSTED_CI_REQUIRED');
+}
+
+// Neither an environment override nor an arbitrary caller path can select the
+// shared set. Refuse aliases and missing components instead of creating them.
+export async function canonicalIosStandardSet(nativeHome) {
+  if (!safePath(nativeHome) || path.resolve(nativeHome) !== nativeHome) throw fail('IOS_STANDARD_DEVICE_SET_REFUSED');
+  const deviceSetPath = path.join(nativeHome, 'Library', 'Developer', 'CoreSimulator', 'Devices');
+  let cursor = path.parse(nativeHome).root;
+  for (const part of deviceSetPath.slice(cursor.length).split(path.sep)) {
+    cursor = path.join(cursor, part);
+    try { const info = await lstat(cursor); if (!info.isDirectory() || info.isSymbolicLink() || await realpath(cursor) !== cursor) throw Error(); }
+    catch { throw fail('IOS_STANDARD_DEVICE_SET_REFUSED'); }
+  }
+  return deviceSetPath;
+}
 
 // Fixed diagnostic labels only: never retain command arguments or environment.
 function commandKind(executable, args) {
@@ -53,15 +75,22 @@ export function ownedSimctlArguments({ deviceSetPath, udid }, command, args = []
   return ['simctl', '--set', deviceSetPath, command, udid, ...args];
 }
 
-export function verifyOwnedSimulator({ expected, marker, devices, requireBooted = true }) {
+export function acknowledgedIosCreate(result) {
+  if (!result || result.code !== 0 || typeof result.stdout !== 'string' || !UUID.test(result.stdout.trim())) throw fail('IOS_SIMULATOR_CREATE_FAILED');
+  return result.stdout.trim();
+}
+
+export function verifyOwnedSimulator({ expected, marker, devices, baseline, requireBooted = true, verifyForeign = true }) {
   if (!expected || !/^[a-f0-9]{24}$/.test(expected.nonce ?? '') || expected.name !== 'testlane_ios_' + expected.nonce ||
       !UUID.test(expected.udid ?? '') || !Number.isSafeInteger(expected.ownerPid) || expected.ownerPid < 1 ||
-      !marker || marker.schemaVersion !== 1 || ['nonce', 'name', 'udid', 'ownerPid', 'runtimeId', 'deviceType', 'deviceSetPath'].some(key => marker[key] !== expected[key]) ||
-      !devices || typeof devices !== 'object' || Object.values(devices).some(list => !Array.isArray(list))) throw fail('IOS_OWNERSHIP_REFUSED');
-  const rows = Object.entries(devices).flatMap(([runtimeId, list]) => Array.isArray(list) ? list.map(row => ({ ...row, runtimeId })) : []);
-  if (rows.length !== 1 || rows[0].udid !== expected.udid || rows[0].name !== expected.name || rows[0].runtimeId !== expected.runtimeId ||
-      rows[0].isAvailable === false || (requireBooted && rows[0].state !== 'Booted')) throw fail('IOS_OWNERSHIP_REFUSED');
-  return rows[0];
+      !marker || marker.schemaVersion !== 2 || marker.scope !== IOS_DEVICE_SCOPE || ['nonce', 'name', 'udid', 'ownerPid', 'runtimeId', 'deviceType', 'deviceSetPath', 'nativeHome', 'privateRoot', 'baselineSHA256'].some(key => marker[key] !== expected[key])) throw fail('IOS_OWNERSHIP_REFUSED');
+  let rows; try { rows = normalizeIosDeviceInventory(devices); } catch { throw fail('IOS_OWNERSHIP_REFUSED'); }
+  const owned = rows.filter(row => row.udid === expected.udid);
+  if (owned.length !== 1 || owned[0].name !== expected.name || owned[0].runtimeId !== expected.runtimeId ||
+      owned[0].deviceTypeIdentifier !== expected.deviceType || owned[0].isAvailable !== true ||
+      (requireBooted && owned[0].state !== 'Booted')) throw fail('IOS_OWNERSHIP_REFUSED');
+  if (verifyForeign) assertIosForeignSnapshot(devices, baseline, expected.udid);
+  return owned[0];
 }
 
 export function validateIosContainer({ deviceSetPath, udid, containerPath }) {
@@ -108,10 +137,12 @@ async function stop(state) {
 
 /** Requires installed Xcode/runtime and explicit pinned tooling; downloads nothing. */
 export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = () => {}, runtimeId, deviceType, diagnostics = false } = {}) {
-  if (process.platform !== 'darwin') throw fail('IOS_MACOS_REQUIRED');
+  requireIosHostedDevice();
   if (typeof diagnostics !== 'boolean') throw fail('IOS_DEVICE_INPUT_INVALID');
   if (![toolsRoot, outputDir].every(safePath)) throw fail('IOS_DEVICE_INPUT_INVALID');
   if (signal?.aborted) throw fail('IOS_CANCELLED');
+  const nativeHome = os.userInfo().homedir;
+  const deviceSetPath = await canonicalIosStandardSet(nativeHome);
   let tools;
   try { tools = await realpath(toolsRoot); } catch { throw fail('IOS_TOOLS_MISSING'); }
   const appiumRoot = path.join(tools, 'node_modules', 'appium'), driverRoot = path.join(tools, 'node_modules', 'appium-xcuitest-driver');
@@ -128,11 +159,11 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   while (ports.size < 3) ports.add(await freePort());
   const [appiumPort, wdaPort, mjpegPort] = ports;
   const parent = await realpath(os.tmpdir()), root = await mkdtemp(path.join(parent, 'tld-ios-'));
-  const deviceSetPath = path.join(root, 'devices'), derivedDataPath = path.join(root, 'derived-data'), home = path.join(root, 'home'), appiumHome = path.join(root, 'appium');
-  const marker = { schemaVersion: 1, nonce: randomBytes(12).toString('hex'), ownerPid: process.pid, name: '', udid: null, deviceSetPath, runtimeId: null, deviceType: null, appiumPid: null };
+  const derivedDataPath = path.join(root, 'derived-data'), home = path.join(root, 'home'), appiumHome = path.join(root, 'appium');
+  const marker = { schemaVersion: 2, scope: IOS_DEVICE_SCOPE, nativeHome, privateRoot: root, nonce: randomBytes(12).toString('hex'), ownerPid: process.pid, name: '', udid: null, deviceSetPath, runtimeId: null, deviceType: null, appiumPid: null, baselineSHA256: null };
   marker.name = 'testlane_ios_' + marker.nonce;
   const commands = new Set(); let appium, closing, closed = false, ready = false, createAttempted = false, createSettled = false, captured = '', captureBytes = 0, captureFailed = false, target, xcodeVersion;
-  let env;
+  let env, baseline;
   const capture = text => { const bytes = Buffer.byteLength(text); if (captureBytes + bytes > LIMIT) { captureFailed = true; return; } captured += text; captureBytes += bytes; };
   const writeMarker = () => writeFile(path.join(root, MARKER), JSON.stringify(marker) + '\n', { mode: 0o600 });
   const live = (allowClosing = false) => { if (closed || (closing && !allowClosing) || signal?.aborted) throw fail('IOS_CANCELLED'); if (captureFailed) throw fail('IOS_CAPTURE_LIMIT'); if (ready && (!appium?.spawned || appium.closed)) throw fail('IOS_APPIUM_STOPPED'); };
@@ -167,9 +198,16 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   const simctl = (args, options) => run('/usr/bin/xcrun', ['simctl', '--set', deviceSetPath, ...args], options);
   async function assertRoot() {
     if (await realpath(root) !== root || path.dirname(root) !== parent || !/^tld-ios-[a-zA-Z0-9]+$/.test(path.basename(root)) || (await lstat(root)).isSymbolicLink()) throw fail('IOS_OWNERSHIP_REFUSED');
-    const current = JSON.parse(await readFile(path.join(root, MARKER), 'utf8'));
-    if (Object.keys(marker).some(key => marker[key] !== current[key])) throw fail('IOS_OWNERSHIP_REFUSED');
-    if (await realpath(deviceSetPath) !== deviceSetPath || (await lstat(deviceSetPath)).isSymbolicLink()) throw fail('IOS_OWNERSHIP_REFUSED');
+    const markerFile = path.join(root, MARKER), markerInfo = await lstat(markerFile);
+    if (!markerInfo.isFile() || markerInfo.isSymbolicLink() || (markerInfo.mode & 0o077) !== 0) throw fail('IOS_OWNERSHIP_REFUSED');
+    const current = JSON.parse(await readFile(markerFile, 'utf8'));
+    if (Object.keys(current).length !== Object.keys(marker).length || Object.keys(marker).some(key => marker[key] !== current[key])) throw fail('IOS_OWNERSHIP_REFUSED');
+    if (await canonicalIosStandardSet(nativeHome) !== deviceSetPath) throw fail('IOS_OWNERSHIP_REFUSED');
+    if (baseline) {
+      const file = path.join(root, 'foreign-inventory.json'), info = await lstat(file);
+      if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0 ||
+        digest(JSON.parse(await readFile(file, 'utf8'))) !== marker.baselineSHA256 || digest(baseline) !== marker.baselineSHA256) throw fail('IOS_OWNERSHIP_REFUSED');
+    } else if (marker.baselineSHA256 !== null) throw fail('IOS_OWNERSHIP_REFUSED');
     return current;
   }
   async function listOwned(ignoreSignal = false, timeoutMs = 30000) {
@@ -179,7 +217,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   }
   async function assertOwned(queryTimeoutMs = 30000) {
     live(); const current = await assertRoot(); const devices = await listOwned(false, queryTimeoutMs);
-    verifyOwnedSimulator({ expected: marker, marker: current, devices });
+    verifyOwnedSimulator({ expected: marker, marker: current, devices, baseline });
     const ownDevice = path.join(deviceSetPath, marker.udid);
     if (await realpath(ownDevice) !== ownDevice || (await lstat(ownDevice)).isSymbolicLink()) throw fail('IOS_OWNERSHIP_REFUSED');
     if (ready) await assertListeners();
@@ -271,7 +309,8 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   }
   const recover = async (reason, failures = []) => {
     try { await writeFile(path.join(output, 'ios-device-recovery.json'), JSON.stringify({ schemaVersion: 1, status: 'manual-inspection-required', reason,
-      ownedRoot: root, deviceSetPath, udid: marker.udid, name: marker.name, processes: failures }) + '\n', { flag: 'wx', mode: 0o600 }); } catch {}
+      scope: IOS_DEVICE_SCOPE, ownedRoot: root, deviceSetPath, udid: marker.udid, name: marker.name, baselineSHA256: marker.baselineSHA256,
+      processes: failures }) + '\n', { flag: 'wx', mode: 0o600 }); } catch {}
   };
   async function close() {
     if (closing) return closing;
@@ -284,26 +323,43 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       try { await stopAppiumGroups(); } catch { failures.push({ kind: 'appium-or-detached-build', pid: appium?.pid, exited: appium?.exited, closed: appium?.closed }); }
       if (failures.length) { await recover('process-stop-unconfirmed', failures); throw fail('IOS_DEVICE_CLEANUP_UNCONFIRMED'); }
       try {
-        const current = await assertRoot(), devices = createAttempted ? await listOwned(true) : {};
-        const rows = Object.entries(devices).flatMap(([runtime, list]) => list.map(row => ({ ...row, runtime })));
-        if (rows.length) {
-          if (!marker.udid && rows.length === 1 && rows[0].name === marker.name && rows[0].runtime === marker.runtimeId && UUID.test(rows[0].udid)) { marker.udid = rows[0].udid; await writeMarker(); }
-          verifyOwnedSimulator({ expected: marker, marker: marker.udid === current.udid ? current : marker, devices, requireBooted: false });
-          if (rows[0].state !== 'Shutdown') {
+        await assertRoot();
+        let devices = baseline ? await listOwned(true) : null;
+        let rows = devices ? normalizeIosDeviceInventory(devices) : [], foreignChanged = false;
+        if (!marker.udid && createAttempted) {
+          // The owned command has been stopped/closed above. Only one new row
+          // with our unguessable nonce and exact target may be reconciled.
+          const known = new Set(baseline.map(row => row.udid));
+          const candidates = rows.filter(row => !known.has(row.udid) && row.name === marker.name && row.runtimeId === marker.runtimeId && row.deviceTypeIdentifier === marker.deviceType);
+          if (candidates.length > 1) throw fail('IOS_OWNERSHIP_REFUSED');
+          if (candidates.length === 1) { marker.udid = candidates[0].udid; await writeMarker(); }
+        }
+        const observeForeign = inventory => { try { assertIosForeignSnapshot(inventory, baseline, marker.udid ?? undefined); } catch { foreignChanged = true; } };
+        if (baseline) observeForeign(devices);
+        const ownedRow = marker.udid ? rows.find(row => row.udid === marker.udid) : null;
+        if (ownedRow) {
+          const verified = verifyOwnedSimulator({ expected: marker, marker: await assertRoot(), devices, baseline, requireBooted: false, verifyForeign: false });
+          if (verified.state !== 'Shutdown') {
             const result = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'shutdown'), { ignoreSignal: true });
             if (result.code !== 0) throw fail('IOS_SIMULATOR_SHUTDOWN_UNCONFIRMED');
           }
           const shutdownDeadline = Date.now() + 30000;
           for (;;) {
-            const row = verifyOwnedSimulator({ expected: marker, marker, devices: await listOwned(true), requireBooted: false });
+            devices = await listOwned(true); observeForeign(devices);
+            const row = verifyOwnedSimulator({ expected: marker, marker: await assertRoot(), devices, baseline, requireBooted: false, verifyForeign: false });
             if (row.state === 'Shutdown') break;
             if (Date.now() > shutdownDeadline) throw fail('IOS_SIMULATOR_SHUTDOWN_UNCONFIRMED'); await sleep(200);
           }
+          // Recheck the nonce-bound marker and target immediately before this
+          // exact UUID deletion. Foreign drift is recorded, never repaired.
+          verifyOwnedSimulator({ expected: marker, marker: await assertRoot(), devices: await listOwned(true), baseline, requireBooted: false, verifyForeign: false });
           const deleted = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'delete'), { ignoreSignal: true });
-          if (deleted.code !== 0 || Object.values(await listOwned(true)).some(list => list.length)) throw fail('IOS_SIMULATOR_DELETE_UNCONFIRMED');
-          try { await lstat(path.join(deviceSetPath, marker.udid)); throw fail('IOS_SIMULATOR_DELETE_UNCONFIRMED'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+          devices = await listOwned(true); observeForeign(devices);
+          if (deleted.code !== 0 || normalizeIosDeviceInventory(devices).some(row => row.udid === marker.udid)) throw fail('IOS_SIMULATOR_DELETE_UNCONFIRMED');
         }
+        if (marker.udid) try { await lstat(path.join(deviceSetPath, marker.udid)); throw fail('IOS_SIMULATOR_DELETE_UNCONFIRMED'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
         if (createAttempted && !createSettled) throw fail('IOS_SIMULATOR_CREATE_UNSETTLED');
+        if (foreignChanged) throw fail('IOS_FOREIGN_INVENTORY_CHANGED');
         if (ready) await assertListeners({ absent: true });
         await assertRoot(); await rm(root, { recursive: true, force: false, maxRetries: 5, retryDelay: 100 }); closed = true;
       } catch { await recover('simulator-or-path-cleanup-unconfirmed'); throw fail('IOS_DEVICE_CLEANUP_UNCONFIRMED'); }
@@ -314,7 +370,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   const abortLifecycle = () => { void close().catch(() => {}); };
   try {
     await writeMarker();
-    await Promise.all([deviceSetPath, derivedDataPath, home, appiumHome, path.join(root, 'tmp'), path.join(root, 'cache')].map(dir => mkdir(dir, { recursive: true, mode: 0o700 })));
+    await Promise.all([derivedDataPath, home, appiumHome, path.join(root, 'tmp'), path.join(root, 'cache')].map(dir => mkdir(dir, { recursive: true, mode: 0o700 })));
     env = createIosDeviceEnvironment({ HOME: home, CFFIXED_USER_HOME: home, APPIUM_HOME: appiumHome,
       TMPDIR: path.join(root, 'tmp') + '/', XDG_CACHE_HOME: path.join(root, 'cache') });
     const version = await run('/usr/bin/xcodebuild', ['-version']);
@@ -325,12 +381,19 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     if (runtimes.code !== 0 || types.code !== 0) throw fail('IOS_XCODE_PREREQUISITE_FAILED');
     try { target = selectIosTarget({ ...JSON.parse(runtimes.stdout), ...JSON.parse(types.stdout) }, { runtimeId, deviceType }); } catch (error) { throw /^IOS_/.test(error.message) ? error : fail('IOS_RUNTIME_METADATA_INVALID'); }
     marker.runtimeId = target.runtimeId; marker.deviceType = target.deviceType; await writeMarker(); onStage('xcode-runtime-and-pinned-tools-validated');
+    baseline = snapshotIosForeignDevices(await listOwned());
+    marker.baselineSHA256 = digest(baseline);
+    await writeFile(path.join(root, 'foreign-inventory.json'), JSON.stringify(baseline) + '\n', { flag: 'wx', mode: 0o600 });
+    await writeMarker(); await assertRoot(); assertIosForeignSnapshot(await listOwned(), baseline);
     createAttempted = true;
     const created = await simctl(['create', marker.name, marker.deviceType, marker.runtimeId]);
-    if (created.code !== 0 || !UUID.test(created.stdout.trim())) throw fail('IOS_SIMULATOR_CREATE_FAILED');
-    createSettled = true; marker.udid = created.stdout.trim(); await writeMarker();
+    const acknowledgedUdid = acknowledgedIosCreate(created);
+    // A closed client with a nonzero/malformed response is not a completion
+    // fence for the CoreSimulator service. Reconciliation may clean its row,
+    // but createSettled remains false and cleanup cannot claim completion.
+    createSettled = true; marker.udid = acknowledgedUdid; await writeMarker();
     onStage('owned-simulator-created');
-    const current = await assertRoot(); verifyOwnedSimulator({ expected: marker, marker: current, devices: await listOwned(), requireBooted: false });
+    const current = await assertRoot(); verifyOwnedSimulator({ expected: marker, marker: current, devices: await listOwned(), baseline, requireBooted: false });
     const boot = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'boot'));
     if (boot.code !== 0) throw fail('IOS_SIMULATOR_BOOT_FAILED');
     onStage('owned-simulator-boot-started');
@@ -356,7 +419,8 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     }
     if (!ready) throw fail('IOS_APPIUM_READY_TIMEOUT');
     await assertOwned(); onStage('private-appium-ready');
-    return Object.freeze({ udid: marker.udid, serverUrl, deviceSetPath, derivedDataPath, wdaPort, mjpegPort,
+    const deviceBinding = validateIosDeviceBinding({ schemaVersion: 1, scope: IOS_DEVICE_SCOPE, nativeHome, deviceSetPath, privateRoot: root, udid: marker.udid, nonce: marker.nonce });
+    return Object.freeze({ udid: marker.udid, serverUrl, deviceSetPath, derivedDataPath, deviceBinding, wdaPort, mjpegPort,
       versions: Object.freeze({ appium: '3.8.0', xcuitest: '12.19.1', webdriveragent: '16.16.3', xcode: xcodeVersion, ios: target.platformVersion, runtimeId: target.runtimeId, deviceType: target.deviceType }),
       assertOwned: () => assertOwned(), capturedText: () => captured,
       async installApp(appPath) {

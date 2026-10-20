@@ -3,6 +3,7 @@ import { runNativeCases } from './runner.mjs';
 import { createApprovalCases } from './proof-cases.mjs';
 import { NATIVE_PROOF_BUDGETS } from './budgets.mjs';
 import { loopbackOrigin, validateNativePlan, nativeFailureReport, appendNativeRunFailure, NATIVE_DRIVER_FAILURE_CODES, IOS_NATIVE_RUNNER } from './contracts.mjs';
+import { validateIosDeviceBinding } from '../ios-verification/device-scope.mjs';
 
 const controller = new AbortController(), pending = new Map();
 let started = false, sequence = 0;
@@ -46,6 +47,10 @@ async function main(payload) {
     const appCapability = plan.runner === IOS_NATIVE_RUNNER ? 'appium:bundleId' : 'appium:appPackage';
     const plannedApp = plan.runner === IOS_NATIVE_RUNNER ? plan.app.bundleId : plan.app.package;
     if (payload.driverOptions?.capabilities?.[appCapability] !== plannedApp) throw new DriverError('NATIVE_DRIVER_CONFIGURATION_INVALID');
+    if (plan.runner === IOS_NATIVE_RUNNER) {
+      try { validateIosDeviceBinding(payload.driverOptions?.deviceBinding, { capabilities: payload.driverOptions?.capabilities }); }
+      catch { throw new DriverError('NATIVE_DRIVER_CONFIGURATION_INVALID'); }
+    }
     driver = await createNativeDriver({ ...payload.driverOptions, signal: controller.signal,
       assertOwned: async () => { await rpc({ type: 'assert-owned' }); return true; } });
     // Appium session creation precedes React Native's initial view mount. Wait

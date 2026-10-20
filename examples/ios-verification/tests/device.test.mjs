@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
-import { selectIosTarget, ownedSimctlArguments, verifyOwnedSimulator, validateIosContainer, validateIosListener, startOwnedIos } from '../device.mjs';
+import { lstat, mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
+import { selectIosTarget, ownedSimctlArguments, acknowledgedIosCreate, verifyOwnedSimulator, validateIosContainer, validateIosListener, startOwnedIos, requireIosHostedDevice, canonicalIosStandardSet } from '../device.mjs';
+import { IOS_DEVICE_SCOPE, snapshotIosForeignDevices } from '../device-scope.mjs';
 
 const udid = '12345678-1234-1234-1234-123456789ABC', other = '87654321-1234-1234-1234-123456789ABC';
 const runtimeId = 'com.apple.CoreSimulator.SimRuntime.iOS-26-4', deviceType = 'com.apple.CoreSimulator.SimDeviceType.iPhone-17';
@@ -28,18 +30,55 @@ test('simctl commands always select the owned device set and exact UUID', () => 
   assert.throws(() => ownedSimctlArguments({ deviceSetPath, udid }, 'get_app_container', ['another.bundle', 'data']), /IOS_SIMCTL_SCOPE_REFUSED/);
 });
 
-test('Simulator ownership binds one booted device to marker, nonce, runtime and owner', () => {
-  const expected = { nonce: 'a'.repeat(24), name: 'testlane_ios_' + 'a'.repeat(24), udid, ownerPid: 123, runtimeId, deviceType, deviceSetPath };
-  const marker = { schemaVersion: 1, ...expected };
-  const row = { udid, name: expected.name, state: 'Booted', isAvailable: true }, devices = { [runtimeId]: [row] };
-  assert.equal(verifyOwnedSimulator({ expected, marker, devices }).udid, udid);
+test('only a successful UUID acknowledgement settles an attempted external Simulator create', () => {
+  assert.equal(acknowledgedIosCreate({ code: 0, stdout: udid + '\n' }), udid);
+  for (const result of [{ code: 1, stdout: udid }, { code: null, stdout: udid }, { code: 0, stdout: '' },
+    { code: 0, stdout: udid + '\n' + other }, { code: 0, stdout: 'malformed' }, { code: 0 }]) {
+    assert.throws(() => acknowledgedIosCreate(result), /IOS_SIMULATOR_CREATE_FAILED/);
+  }
+});
+
+test('Simulator ownership binds exact nonce/runtime/type while preserving foreign devices', () => {
+  const expected = { nonce: 'a'.repeat(24), name: 'testlane_ios_' + 'a'.repeat(24), udid, ownerPid: 123, runtimeId, deviceType, deviceSetPath,
+    nativeHome: '/Users/runner', privateRoot: '/private/tmp/tld-ios-abc123', baselineSHA256: 'b'.repeat(64) };
+  const marker = { schemaVersion: 2, scope: IOS_DEVICE_SCOPE, ...expected };
+  const row = { udid, name: expected.name, state: 'Booted', isAvailable: true, deviceTypeIdentifier: deviceType };
+  const foreign = { ...row, udid: other, name: 'Hosted default phone', state: 'Shutdown' };
+  const baseline = snapshotIosForeignDevices({ [runtimeId]: [foreign] }), devices = { [runtimeId]: [foreign, row] };
+  assert.equal(verifyOwnedSimulator({ expected, marker, devices, baseline }).udid, udid);
   for (const changes of [{ marker: { ...marker, ownerPid: 999 } }, { marker: { ...marker, nonce: 'b'.repeat(24) } },
     { devices: { [runtimeId]: [{ ...row, udid: other }] } }, { devices: { [runtimeId]: [{ ...row, name: 'personal' }] } },
-    { devices: { [runtimeId]: [{ ...row, state: 'Shutdown' }] } }, { devices: { [runtimeId]: [row, { ...row, udid: other }] } },
+    { devices: { [runtimeId]: [{ ...row, state: 'Shutdown' }] } }, { devices: { [runtimeId]: [{ ...row, deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-16' }] } },
     { devices: { foreignRuntime: [row] } }, { devices: { [runtimeId]: [row], malformed: {} } }]) {
-    assert.throws(() => verifyOwnedSimulator({ expected, marker, devices, ...changes }), /IOS_OWNERSHIP_REFUSED/);
+    assert.throws(() => verifyOwnedSimulator({ expected, marker, devices, baseline, ...changes }), /IOS_OWNERSHIP_REFUSED/);
   }
-  assert.equal(verifyOwnedSimulator({ expected, marker, devices: { [runtimeId]: [{ ...row, state: 'Shutdown' }] }, requireBooted: false }).udid, udid);
+  const drift = { [runtimeId]: [row, { ...foreign, state: 'Booted' }] };
+  assert.throws(() => verifyOwnedSimulator({ expected, marker, devices: drift, baseline }), /IOS_FOREIGN_INVENTORY_CHANGED/);
+  assert.throws(() => verifyOwnedSimulator({ expected, marker, devices: { [runtimeId]: [row] }, baseline }), /IOS_FOREIGN_INVENTORY_CHANGED/);
+  // Drift never authorizes another UUID. Cleanup may still prove only its own
+  // target before deleting it, while retaining the failed preservation result.
+  assert.equal(verifyOwnedSimulator({ expected, marker, devices: drift, baseline, verifyForeign: false }).udid, udid);
+  assert.equal(verifyOwnedSimulator({ expected, marker, devices: { [runtimeId]: [foreign, { ...row, state: 'Shutdown' }] }, baseline, requireBooted: false }).udid, udid);
+});
+
+test('hosted-only factory guard cannot be satisfied by a self-hosted or ordinary local Mac', () => {
+  const env = { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', TESTLANE_IOS_PROOF_CI: '1' };
+  assert.doesNotThrow(() => requireIosHostedDevice({ platform: 'darwin', env }));
+  for (const value of [{}, { ...env, RUNNER_ENVIRONMENT: 'self-hosted' }, { ...env, TESTLANE_IOS_PROOF_CI: '0' }]) {
+    assert.throws(() => requireIosHostedDevice({ platform: 'darwin', env: value }), /IOS_HOSTED_CI_REQUIRED/);
+  }
+  assert.throws(() => requireIosHostedDevice({ platform: 'win32', env }), /IOS_MACOS_REQUIRED/);
+});
+
+test('standard device set must already exist beneath a canonical native home without aliases', async t => {
+  const parent = await realpath(os.tmpdir()), root = await mkdtemp(path.join(parent, 'tld-ios-standard-test-'));
+  t.after(async () => { assert.equal(path.dirname(root), parent); assert.equal(await realpath(root), root); await rm(root, { recursive: true }); });
+  const home = path.join(root, 'native-home'), devices = path.join(home, 'Library', 'Developer', 'CoreSimulator', 'Devices');
+  await mkdir(home); await assert.rejects(canonicalIosStandardSet(home), /IOS_STANDARD_DEVICE_SET_REFUSED/);
+  await assert.rejects(lstat(path.join(home, 'Library')), { code: 'ENOENT' });
+  await mkdir(devices, { recursive: true }); assert.equal(await canonicalIosStandardSet(home), devices);
+  const alias = path.join(root, 'alias'); await symlink(home, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(canonicalIosStandardSet(alias), /IOS_STANDARD_DEVICE_SET_REFUSED/);
 });
 
 test('bootstrap container must be the exact app data container under the owned UUID', () => {
@@ -58,5 +97,5 @@ test('Appium, WDA and MJPEG listeners must bind exact IPv4 loopback', () => {
 test('unsupported host or pre-cancellation refuses without creating a Simulator', async () => {
   const controller = new AbortController(); controller.abort();
   await assert.rejects(startOwnedIos({ toolsRoot: path.join(os.tmpdir(), 'not-installed'), outputDir: path.join(os.tmpdir(), 'not-created'), signal: controller.signal }),
-    process.platform === 'darwin' ? /IOS_CANCELLED/ : /IOS_MACOS_REQUIRED/);
+    process.platform === 'darwin' ? /IOS_CANCELLED|IOS_HOSTED_CI_REQUIRED/ : /IOS_MACOS_REQUIRED/);
 });

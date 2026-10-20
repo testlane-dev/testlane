@@ -17,7 +17,8 @@ export const NATIVE_LIMITS = Object.freeze([
   'Reports omit callback returns, expected/actual values, descriptions, exception messages, stacks, native view contents and driver payloads.',
 ]);
 const IOS_LIMITS = Object.freeze([
-  'Experimental local iOS Simulator execution; no general Expo, real-device or coding-agent certification is claimed.',
+  'Experimental iOS Simulator execution on an explicitly opted-in ephemeral GitHub-hosted Mac; no general Expo, real-device or coding-agent certification is claimed.',
+  'Device scope is ephemeral-hosted-standard-device-set: one nonce-bound Simulator is created and deleted by exact UUID, with unchanged foreign inventory required for cleanup completion.',
   ...NATIVE_LIMITS.slice(1),
 ]);
 export const nativeLimits = plan => plan?.runner === IOS_NATIVE_RUNNER ? IOS_LIMITS : NATIVE_LIMITS;

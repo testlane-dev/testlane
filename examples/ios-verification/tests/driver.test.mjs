@@ -3,9 +3,14 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { createNativeDriver, NativeDriverError } from '../driver.mjs';
+import { IOS_DEVICE_SCOPE } from '../device-scope.mjs';
+
+const binding = () => ({ schemaVersion: 1, scope: IOS_DEVICE_SCOPE, nativeHome: '/Users/runner',
+  deviceSetPath: '/Users/runner/Library/Developer/CoreSimulator/Devices', privateRoot: '/private/tmp/tld-ios-abc123',
+  udid: 'FA001122-3344-5566-7788-9900AABBCCDD', nonce: 'a'.repeat(24) });
 
 const caps = () => ({ platformName: 'iOS', 'appium:automationName': 'XCUITest', 'appium:udid': 'FA001122-3344-5566-7788-9900AABBCCDD',
-  'appium:bundleId': 'dev.testlane.iosproof', 'appium:simulatorDevicesSetPath': '/private/tmp/tld-ios-abc123/devices',
+  'appium:bundleId': 'dev.testlane.iosproof', 'appium:simulatorDevicesSetPath': '/Users/runner/Library/Developer/CoreSimulator/Devices',
   'appium:derivedDataPath': '/private/tmp/tld-ios-abc123/derived-data', 'appium:wdaLocalPort': 8211, 'appium:wdaRemotePort': 8211, 'appium:mjpegServerPort': 8212,
   'appium:wdaBindingIP': '127.0.0.1', 'appium:wdaBaseUrl': 'http://127.0.0.1', 'appium:skipLogCapture': true,
   'appium:showIOSLog': false, 'appium:showXcodeLog': false, 'appium:printPageSourceOnFindFailure': false,
@@ -56,8 +61,10 @@ async function fixture() {
 test('iOS driver uses exact owned Simulator caps, value observations and bounded W3C touch actions only', async () => {
   const appium = await fixture(); let checks = 0;
   try {
-    const requested = caps(), driver = await createNativeDriver({ url: appium.url, capabilities: requested, assertOwned: () => { checks++; return true; } });
+    const requested = caps(), driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: requested, assertOwned: () => { checks++; return true; } });
     assert.equal(appium.calls[0].body.capabilities.alwaysMatch['appium:isHeadless'], true);
+    assert.equal(appium.calls[0].body.capabilities.alwaysMatch['appium:simulatorDevicesSetPath'], binding().deviceSetPath);
+    assert.equal(JSON.stringify(appium.calls[0].body).includes('deviceBinding'), false, 'descriptor is never forwarded as an Appium capability');
     assert.equal(Object.hasOwn(requested, 'appium:isHeadless'), false, 'headless mode does not mutate caller capabilities');
     assert.equal(driver.context, 'NATIVE_APP'); assert.equal(driver.sessionId, undefined);
     assert.equal(await driver.text('request-total'), appium.secret);
@@ -76,7 +83,7 @@ test('iOS driver uses exact owned Simulator caps, value observations and bounded
 test('configured app-owned keyboard dismissal clicks exactly once then observes hidden state without the WDA hide command', async () => {
   const appium = await fixture();
   try {
-    const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => true, keyboardDismissId: 'dismiss-keyboard' });
+    const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), assertOwned: () => true, keyboardDismissId: 'dismiss-keyboard' });
     await driver.hideKeyboard(); await driver.hideKeyboard();
     assert.equal(appium.calls.filter(call => call.path.endsWith('/element/owned-keyboard-dismiss/click')).length, 1);
     assert.deepEqual(appium.calls.filter(call => call.path.endsWith('/element')).map(call => call.body.value), ['dismiss-keyboard']);
@@ -89,7 +96,7 @@ test('configured app-owned keyboard dismissal clicks exactly once then observes 
 test('a keyboard that remains visible fails within its fixed observation budget without replaying the dismissal action', async () => {
   const appium = await fixture();
   try {
-    const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => true, keyboardDismissId: 'dismiss-keyboard' });
+    const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), assertOwned: () => true, keyboardDismissId: 'dismiss-keyboard' });
     appium.keepKeyboardShown(); const started = Date.now();
     await assert.rejects(driver.hideKeyboard(), { code: 'NATIVE_DRIVER_TIMEOUT' });
     assert.ok(Date.now() - started < 6500);
@@ -102,7 +109,7 @@ test('a keyboard that remains visible fails within its fixed observation budget 
 test('keyboard dismissal honors cancellation before any action and during its read-only confirmation', async () => {
   const appium = await fixture(), run = new AbortController(), body = new AbortController(), alreadyStopped = new AbortController();
   try {
-    const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => true,
+    const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), assertOwned: () => true,
       signal: run.signal, keyboardDismissId: 'dismiss-keyboard' });
     alreadyStopped.abort(); const before = appium.calls.length;
     await assert.rejects(driver.withSignal(alreadyStopped.signal).hideKeyboard(), { code: 'NATIVE_DRIVER_CANCELLED' });
@@ -120,7 +127,7 @@ test('invalid app-owned keyboard control identifiers are refused before HTTP', a
   const appium = await fixture();
   try {
     for (const keyboardDismissId of ['', 'x'.repeat(161), 'bad\nidentifier', null, {}, 1]) {
-      await assert.rejects(createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => true, keyboardDismissId }),
+      await assert.rejects(createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), assertOwned: () => true, keyboardDismissId }),
         { code: 'NATIVE_DRIVER_CONFIGURATION_INVALID' });
     }
     assert.equal(appium.calls.length, 0);
@@ -140,10 +147,23 @@ test('real devices, global paths/lifecycle, signing, WebViews and missing privac
       c => { c['appium:webDriverAgentUrl'] = 'http://example.test'; }, c => { c['appium:keychainPath'] = '/private/keychain'; },
       c => { c['appium:processArguments'] = { args: ['private'] }; }, c => { c['appium:app'] = '/arbitrary.app'; }]) {
       const capabilities = caps(); mutate(capabilities);
-      await assert.rejects(createNativeDriver({ url: appium.url, capabilities, assertOwned: () => true }), { code: 'NATIVE_DRIVER_CONFIGURATION_INVALID' });
+      await assert.rejects(createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities, assertOwned: () => true }), { code: 'NATIVE_DRIVER_CONFIGURATION_INVALID' });
     }
-    await assert.rejects(createNativeDriver({ url: appium.url, capabilities: caps() }), { code: 'NATIVE_DRIVER_CONFIGURATION_INVALID' });
-    await assert.rejects(createNativeDriver({ url: 'https://example.test', capabilities: caps(), assertOwned: () => true }), { code: 'NATIVE_DRIVER_CONFIGURATION_INVALID' });
+    await assert.rejects(createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps() }), { code: 'NATIVE_DRIVER_CONFIGURATION_INVALID' });
+    await assert.rejects(createNativeDriver({ deviceBinding: binding(), url: 'https://example.test', capabilities: caps(), assertOwned: () => true }), { code: 'NATIVE_DRIVER_CONFIGURATION_INVALID' });
+    assert.equal(appium.calls.length, 0);
+  } finally { await appium.close(); }
+});
+
+test('a hosted-set descriptor must match every scoped capability and cannot replace live parent authority', async () => {
+  const appium = await fixture();
+  try {
+    for (const deviceBinding of [undefined, { ...binding(), scope: 'arbitrary-external-set' }, { ...binding(), nonce: 'z'.repeat(24) },
+      { ...binding(), udid: '12345678-1234-1234-1234-123456789ABC' }, { ...binding(), privateRoot: '/private/tmp/tld-ios-elsewhere' },
+      { ...binding(), deviceSetPath: '/Users/runner/elsewhere' }, { ...binding(), extra: true }]) {
+      await assert.rejects(createNativeDriver({ deviceBinding, url: appium.url, capabilities: caps(), assertOwned: () => true }), { code: 'NATIVE_DRIVER_CONFIGURATION_INVALID' });
+    }
+    await assert.rejects(createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), assertOwned: () => false }), { code: 'NATIVE_DRIVER_OWNERSHIP_REFUSED' });
     assert.equal(appium.calls.length, 0);
   } finally { await appium.close(); }
 });
@@ -152,9 +172,9 @@ test('iOS requires actual NATIVE_APP at creation/actions and still closes a refu
   const appium = await fixture();
   try {
     appium.setContext('WEBVIEW-private');
-    await assert.rejects(createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => true }), { code: 'NATIVE_DRIVER_CONTEXT_REFUSED' });
+    await assert.rejects(createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), assertOwned: () => true }), { code: 'NATIVE_DRIVER_CONTEXT_REFUSED' });
     assert.equal(appium.calls.filter(call => call.method === 'DELETE').length, 1);
-    appium.setContext('NATIVE_APP'); const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => true });
+    appium.setContext('NATIVE_APP'); const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), assertOwned: () => true });
     appium.setContext('WEBVIEW-private'); await assert.rejects(driver.click('save'), { code: 'NATIVE_DRIVER_CONTEXT_REFUSED' });
     assert.equal(appium.calls.some(call => call.path.endsWith('/click')), false); await driver.close();
   } finally { await appium.close(); }
@@ -163,7 +183,7 @@ test('iOS requires actual NATIVE_APP at creation/actions and still closes a refu
 test('iOS setup readiness polls read-only presence while cancellation leaves independently bounded close available', async () => {
   const appium = await fixture(), controller = new AbortController();
   try {
-    const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), signal: controller.signal, assertOwned: () => true });
+    const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), signal: controller.signal, assertOwned: () => true });
     appium.missing(2); await driver.waitFor('session-status');
     assert.equal(appium.calls.filter(call => call.path.endsWith('/element')).length, 3);
     assert.equal(appium.calls.some(call => call.path.endsWith('/click') || call.path.endsWith('/actions')), false);
@@ -181,7 +201,7 @@ async function promptly(promise) {
 test('an iOS body abort cancels an in-flight request and its next action while fresh cleanup and close remain usable', async () => {
   const appium = await fixture(), run = new AbortController(), body = new AbortController(), cleanup = new AbortController();
   try {
-    const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), signal: run.signal, assertOwned: () => true });
+    const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), signal: run.signal, assertOwned: () => true });
     const active = driver.withSignal(body.signal), blocked = appium.hangClear();
     const operation = (async () => { await active.type('quantity', '3'); await active.click('create-request'); })();
     const refused = assert.rejects(operation, { code: 'NATIVE_DRIVER_CANCELLED' });
@@ -201,7 +221,7 @@ test('iOS phase cancellation interrupts ownership inspection before it can send 
   const appium = await fixture(), run = new AbortController(), body = new AbortController(), owner = Promise.withResolvers(), entered = Promise.withResolvers();
   let blocked = false;
   try {
-    const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), signal: run.signal,
+    const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), signal: run.signal,
       assertOwned: () => { if (!blocked) return true; entered.resolve(); return owner.promise; } });
     blocked = true;
     const count = appium.calls.length, refused = assert.rejects(driver.withSignal(body.signal).click('save'), { code: 'NATIVE_DRIVER_CANCELLED' });
@@ -215,8 +235,8 @@ test('iOS phase cancellation interrupts ownership inspection before it can send 
 test('iOS raw server and parent failures never enter fixed driver errors', async () => {
   const appium = await fixture();
   try {
-    await assert.rejects(createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => { throw new Error(appium.secret); } }), { code: 'NATIVE_DRIVER_OWNERSHIP_REFUSED' });
-    const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => true }); appium.failClick();
+    await assert.rejects(createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), assertOwned: () => { throw new Error(appium.secret); } }), { code: 'NATIVE_DRIVER_OWNERSHIP_REFUSED' });
+    const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), assertOwned: () => true }); appium.failClick();
     await assert.rejects(driver.click('save'), error => {
       assert.ok(error instanceof NativeDriverError); assert.equal(error.code, 'NATIVE_DRIVER_COMMAND_FAILED');
       for (const value of [appium.secret, encodeURIComponent(appium.secret), Buffer.from(appium.secret).toString('base64')]) assert.equal(String(error.stack).includes(value), false);
@@ -229,7 +249,7 @@ test('iOS rejects oversized and malformed native responses', async () => {
   for (const mode of ['oversized', 'malformed']) {
     const appium = await fixture();
     try {
-      const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => true }); appium[mode]();
+      const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), assertOwned: () => true }); appium[mode]();
       await assert.rejects(driver.click('save'), { code: 'NATIVE_DRIVER_RESPONSE_INVALID' }); await driver.close();
     } finally { await appium.close(); }
   }
@@ -238,7 +258,7 @@ test('iOS rejects oversized and malformed native responses', async () => {
 test('iOS pre-cancelled setup does not contact Appium or the parent controller', async () => {
   const appium = await fixture(), controller = new AbortController(); controller.abort(); let calls = 0;
   try {
-    await assert.rejects(createNativeDriver({ url: appium.url, capabilities: caps(), signal: controller.signal,
+    await assert.rejects(createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), signal: controller.signal,
       assertOwned: () => { calls++; return true; } }), { code: 'NATIVE_DRIVER_CANCELLED' });
     assert.equal(appium.calls.length, 0); assert.equal(calls, 0);
   } finally { await appium.close(); }
@@ -251,14 +271,14 @@ test('iOS rejects a successful session response delivered after its monotonic de
     routes.push(new URL(url).pathname); now = 240_001;
     return new Response(JSON.stringify({ value: { sessionId: 'late-owned-session' } }));
   });
-  await assert.rejects(createNativeDriver({ url: 'http://127.0.0.1:4723', capabilities: caps(), assertOwned: () => true }), { code: 'NATIVE_DRIVER_SESSION_TIMEOUT' });
+  await assert.rejects(createNativeDriver({ deviceBinding: binding(), url: 'http://127.0.0.1:4723', capabilities: caps(), assertOwned: () => true }), { code: 'NATIVE_DRIVER_SESSION_TIMEOUT' });
   assert.deepEqual(routes, ['/session'], 'a late response cannot start native actions or invent an addressable session');
 });
 
 test('iOS cancellation settles even if an underlying HTTP promise ignores abort', async t => {
   const entered = Promise.withResolvers(), controller = new AbortController();
   t.mock.method(globalThis, 'fetch', async () => { entered.resolve(); return new Promise(() => {}); });
-  const rejected = assert.rejects(createNativeDriver({ url: 'http://127.0.0.1:4723', capabilities: caps(), signal: controller.signal, assertOwned: () => true }), { code: 'NATIVE_DRIVER_CANCELLED' });
+  const rejected = assert.rejects(createNativeDriver({ deviceBinding: binding(), url: 'http://127.0.0.1:4723', capabilities: caps(), signal: controller.signal, assertOwned: () => true }), { code: 'NATIVE_DRIVER_CANCELLED' });
   await promptly(entered.promise); controller.abort(); await promptly(rejected);
 });
 
@@ -285,7 +305,7 @@ test('iOS cold WDA setup alone gets 240 seconds and fixed session/context/readin
     ['/element', 'NATIVE_DRIVER_READINESS_TIMEOUT'], ['/click', 'NATIVE_DRIVER_TIMEOUT']]) {
     let driver; hangAt = stage;
     const operation = async () => {
-      driver = await createNativeDriver({ url: 'http://127.0.0.1:4723', capabilities: caps(), assertOwned: () => true });
+      driver = await createNativeDriver({ deviceBinding: binding(), url: 'http://127.0.0.1:4723', capabilities: caps(), assertOwned: () => true });
       if (stage === '/element') await driver.waitFor('session-status'); else if (stage === '/click') await driver.click('save');
     };
     try {

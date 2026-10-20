@@ -1,7 +1,7 @@
 /** Narrow XCUITest W3C client for an already-owned local Simulator. */
-import path from 'node:path';
 import { loopbackOrigin } from '../android-verification/contracts.mjs';
 import { combineDriverSignals, withDriverSignal, waitDriverSignal } from '../android-verification/driver-phase.mjs';
+import { validateIosDeviceBinding } from './device-scope.mjs';
 
 const ELEMENT = 'element-6066-11e4-a52e-4f735466cecf';
 export class NativeDriverError extends Error {
@@ -17,22 +17,18 @@ const requiredCaps = ['platformName', 'appium:automationName', 'appium:udid', 'a
   'appium:derivedDataPath', 'appium:wdaLocalPort', 'appium:wdaRemotePort', 'appium:wdaBindingIP', 'appium:wdaBaseUrl', 'appium:mjpegServerPort',
   'appium:skipLogCapture', 'appium:showIOSLog', 'appium:showXcodeLog', 'appium:printPageSourceOnFindFailure',
   'appium:disableAutomaticScreenshots', 'appium:shutdownOtherSimulators', 'appium:resetLocationService', 'appium:noReset'];
-function ownedPaths(caps) {
-  const devices = caps['appium:simulatorDevicesSetPath'], derived = caps['appium:derivedDataPath'];
-  if (![devices, derived].every(value => typeof value === 'string' && value.length <= 1024 && path.posix.isAbsolute(value) &&
-    path.posix.resolve(value) === value && !/[\u0000-\u001f\u007f\\]/.test(value))) return false;
-  const root = path.posix.dirname(devices);
-  return path.posix.basename(devices) === 'devices' && derived === path.posix.join(root, 'derived-data') &&
-    /^tld-ios-[A-Za-z0-9]+$/.test(path.posix.basename(root));
-}
-export async function createNativeDriver({ url, capabilities: supplied, signal, assertOwned, keyboardDismissId } = {}) {
+export async function createNativeDriver({ url, capabilities: supplied, deviceBinding, signal, assertOwned, keyboardDismissId } = {}) {
   let origin, capabilities;
   try {
     origin = loopbackOrigin(url);
+    // This strict binding describes an exceptional hosted device-set location.
+    // It grants no authority: every request still asks the parent to inspect
+    // its live marker, canonical paths and unchanged foreign inventory.
+    validateIosDeviceBinding(deviceBinding, { capabilities: supplied });
     if (!supplied || typeof supplied !== 'object' || Array.isArray(supplied) ||
       supplied.platformName?.toLowerCase() !== 'ios' || supplied['appium:automationName']?.toLowerCase() !== 'xcuitest' ||
       !uuid(supplied['appium:udid']) || !identifier(supplied['appium:bundleId']) || !/^[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z][A-Za-z0-9-]*)+$/.test(supplied['appium:bundleId']) ||
-      !ownedPaths(supplied) || !port(supplied['appium:wdaLocalPort']) || supplied['appium:wdaRemotePort'] !== supplied['appium:wdaLocalPort'] ||
+      !port(supplied['appium:wdaLocalPort']) || supplied['appium:wdaRemotePort'] !== supplied['appium:wdaLocalPort'] ||
       !port(supplied['appium:mjpegServerPort']) || supplied['appium:mjpegServerPort'] === supplied['appium:wdaLocalPort'] ||
       supplied['appium:wdaBindingIP'] !== '127.0.0.1' || supplied['appium:wdaBaseUrl'] !== 'http://127.0.0.1' ||
       !['appium:skipLogCapture', 'appium:disableAutomaticScreenshots', 'appium:noReset'].every(key => supplied[key] === true) ||
