@@ -218,6 +218,50 @@ export function validateIosListener(text, port) {
   return true;
 }
 
+export function iosListenerQuery(ports) {
+  if (!Array.isArray(ports) || ports.length !== 3 || new Set(ports).size !== 3 ||
+    ports.some(port => !Number.isInteger(port) || port < 1024 || port > 65535)) throw fail('IOS_LISTENER_BINDING_REFUSED');
+  // One comma-list is one lsof search argument: any matching derivation makes
+  // that argument found, allowing absent optional ports without a partial-error
+  // exit. Separate -i arguments have different missing-argument exit semantics.
+  // Do not filter by loopback: wildcard/foreign binds must remain visible.
+  return ['-nP', '-a', '-iTCP:' + ports.join(','), '-sTCP:LISTEN', '-Fpn'];
+}
+
+export function validateIosListenerSnapshot(result, ports, { absent = false } = {}) {
+  iosListenerQuery(ports);
+  if (typeof absent !== 'boolean') throw fail('IOS_LISTENER_BINDING_REFUSED');
+  if (typeof result?.stdout !== 'string' || typeof result?.stderr !== 'string' || result.stderr !== '') {
+    throw fail(absent ? 'IOS_LISTENER_STOP_UNCONFIRMED' : 'IOS_LISTENER_BINDING_REFUSED');
+  }
+  if (result.code === 1 && !result.stdout.trim()) {
+    if (absent) return true;
+    throw fail('IOS_APPIUM_STOPPED');
+  }
+  if (absent) throw fail('IOS_LISTENER_STOP_UNCONFIRMED');
+  if (result.code !== 0) throw fail('IOS_LISTENER_BINDING_REFUSED');
+  const selected = new Map(ports.map(port => ['127.0.0.1:' + port, []]));
+  const addresses = result.stdout.split(/\r?\n/).filter(line => line.startsWith('n')).map(line => line.slice(1));
+  if (!addresses.length) throw fail('IOS_LISTENER_BINDING_REFUSED');
+  for (const address of addresses) {
+    if (!selected.has(address)) throw fail('IOS_LISTENER_BINDING_REFUSED');
+    selected.get(address).push('n' + address);
+  }
+  // Appium must exist; WDA/MJPEG can legitimately be absent before a session.
+  if (!selected.get('127.0.0.1:' + ports[0]).length) throw fail('IOS_APPIUM_STOPPED');
+  for (const port of ports) {
+    const lines = selected.get('127.0.0.1:' + port);
+    if (lines.length) validateIosListener(lines.join('\n'), port);
+  }
+  return true;
+}
+
+export async function queryIosListeners(run, ports, { absent = false } = {}) {
+  if (typeof run !== 'function' || typeof absent !== 'boolean') throw fail('IOS_LISTENER_BINDING_REFUSED');
+  const result = await run('/usr/sbin/lsof', iosListenerQuery(ports), { ignoreSignal: absent });
+  return validateIosListenerSnapshot(result, ports, { absent });
+}
+
 async function freePort() {
   return new Promise((resolve, reject) => {
     const server = createServer(); server.once('error', reject);
@@ -378,12 +422,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     live(); return true;
   }
   async function assertListeners({ absent = false } = {}) {
-    for (const port of [appiumPort, wdaPort, mjpegPort]) {
-      const result = await run('/usr/sbin/lsof', ['-nP', '-a', '-iTCP:' + port, '-sTCP:LISTEN', '-Fpn'], { ignoreSignal: absent });
-      if (result.code === 1 && !result.stdout.trim()) { if (!absent && port === appiumPort) throw fail('IOS_APPIUM_STOPPED'); continue; }
-      if (result.code !== 0 || absent) throw fail(absent ? 'IOS_LISTENER_STOP_UNCONFIRMED' : 'IOS_LISTENER_BINDING_REFUSED');
-      validateIosListener(result.stdout, port);
-    }
+    await queryIosListeners(run, [appiumPort, wdaPort, mjpegPort], { absent });
   }
   async function wdaSourceBinding() {
     const project = path.join(wdaRoot, 'WebDriverAgent.xcodeproj'), projectFile = path.join(project, 'project.pbxproj'), packageFile = path.join(wdaRoot, 'package.json');

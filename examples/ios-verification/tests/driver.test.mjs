@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { createNativeDriver, NativeDriverError } from '../driver.mjs';
+import { createNativeDriver, NativeDriverError, readIosRequestFailure } from '../driver.mjs';
 import { IOS_DEVICE_SCOPE } from '../device-scope.mjs';
 
 const binding = () => ({ schemaVersion: 1, scope: IOS_DEVICE_SCOPE, nativeHome: '/Users/runner',
@@ -15,6 +15,51 @@ const caps = () => ({ platformName: 'iOS', 'appium:automationName': 'XCUITest', 
   'appium:wdaBindingIP': '127.0.0.1', 'appium:wdaBaseUrl': 'http://127.0.0.1', 'appium:skipLogCapture': true,
   'appium:showIOSLog': false, 'appium:showXcodeLog': false, 'appium:printPageSourceOnFindFailure': false,
   'appium:disableAutomaticScreenshots': true, 'appium:shutdownOtherSimulators': false, 'appium:resetLocationService': false, 'appium:noReset': true });
+
+test('fixed request facts distinguish slow ownership, HTTP, response and command failure without extending budgets or late HTTP', async t => {
+  const originalTimer=globalThis.setTimeout,originalClear=globalThis.clearTimeout,active=new Map();
+  let now=0,mode,testing=false,owners=0,entered,gate;const routes=[];
+  const secret=randomBytes(32).toString('base64url'),session='session-'+randomBytes(16).toString('hex');
+  t.mock.method(performance,'now',()=>now);
+  t.mock.method(globalThis,'setTimeout',(callback,milliseconds,...args)=>{const handle=originalTimer(callback,milliseconds,...args);active.set(handle,{callback,milliseconds});return handle;});
+  t.mock.method(globalThis,'clearTimeout',handle=>{active.delete(handle);originalClear(handle);});
+  t.mock.method(globalThis,'fetch',async(url)=>{
+    const route=new URL(url).pathname;routes.push(route);
+    if(testing&&route.endsWith('/element')){
+      if(mode==='http'){entered.resolve();return gate.promise;}
+      if(mode==='response')return {ok:true,status:200,body:{getReader(){entered.resolve();return {read(){return gate.promise;}};}}};
+      if(mode==='command-error')return new Response(JSON.stringify({value:{error:secret,message:secret}}),{status:500});
+    }
+    return new Response(JSON.stringify({value:route==='/session'?{sessionId:session}:route.endsWith('/context')?'NATIVE_APP':null}));
+  });
+  for(mode of ['ownership','http','response','command-error','cancelled']){
+    now=0;testing=false;owners=0;routes.length=0;entered=Promise.withResolvers();gate=Promise.withResolvers();
+    const phase=new AbortController();
+    const driver=await createNativeDriver({deviceBinding:binding(),url:'http://127.0.0.1:4723',capabilities:caps(),assertOwned:()=>{
+      if(testing&&++owners===2&&['ownership','cancelled'].includes(mode)){entered.resolve();return gate.promise;}return true;
+    }});
+    testing=true;let failure;
+    const rejected=assert.rejects(driver.withSignal(phase.signal).click('anonymous-check'),error=>{failure=error;return true;});
+    if(mode!=='command-error'){
+      await entered.promise;
+      if(mode==='cancelled')phase.abort();
+      else {const deadline=[...active.values()][0];assert.equal(deadline.milliseconds,5000);now+=5001;deadline.callback();}
+    }
+    await rejected;
+    assert.equal(failure.code,mode==='command-error'?'NATIVE_DRIVER_COMMAND_FAILED':mode==='cancelled'?'NATIVE_DRIVER_CANCELLED':'NATIVE_DRIVER_TIMEOUT');
+    const fact=readIosRequestFailure(failure);
+    assert.deepEqual(fact,{operation:'element-find',phase:['ownership','cancelled'].includes(mode)?'ownership':mode==='http'?'http':'response'});
+    assert.equal(Object.isFrozen(fact),true);
+    for(const value of [secret,encodeURIComponent(secret),Buffer.from(secret).toString('base64'),session])assert.equal(JSON.stringify(fact).includes(value),false);
+    if(['ownership','cancelled'].includes(mode))assert.equal(routes.some(route=>route.endsWith('/element')),false,'failed ownership cannot send the element request');
+    const beforeClose=routes.length;testing=false;await driver.close();await driver.close();
+    assert.equal(routes.length,beforeClose+1);assert.equal(routes.at(-1),'/session/'+session);
+    gate.resolve(mode==='http'?new Response(JSON.stringify({value:secret})):mode==='response'?{done:false,value:Buffer.from(secret)}:true);
+    await Promise.resolve();await Promise.resolve();
+    assert.equal(routes.length,beforeClose+1,'a late callback/HTTP response cannot revive the failed operation');
+    assert.equal(active.size,0,'all request and owner timers are cleared after independent exact-session close');
+  }
+});
 async function fixture() {
   const calls = [], secret = randomBytes(32).toString('base64url');
   let context = 'NATIVE_APP', keyboard = true, shown = true, failClick = false, oversized = false, malformed = false, missing = 0, clearGate;

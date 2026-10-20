@@ -43,6 +43,23 @@ test('a failed control stops immediately and keeps only its trusted fixed code',
   assert.deepEqual(f.rows[1], { controlId: 'quantity', step: 'visibility', completed: false, code: 'NATIVE_DRIVER_ELEMENT_TIMEOUT' });
 });
 
+test('failed pre-auth rows retain only genuine fixed request operation/phase data', async () => {
+  const secret=randomBytes(32).toString('base64url');let reads=0;
+  const genuine=new NativeDriverError('NATIVE_DRIVER_TIMEOUT',{operation:'element-find',phase:'ownership'});
+  const getter=new NativeDriverError('NATIVE_DRIVER_TIMEOUT');Object.defineProperty(getter,'requestFailure',{get(){reads++;throw Error(secret);}});
+  const malformed=new NativeDriverError('NATIVE_DRIVER_TIMEOUT');Object.defineProperty(malformed,'requestFailure',{value:{operation:'element-find',phase:'ownership',route:secret}});
+  const forged=Object.assign(Error(secret),{code:'NATIVE_DRIVER_TIMEOUT',requestFailure:{operation:'element-find',phase:'http'}});
+  const proxy=new Proxy(genuine,{get(){reads++;throw Error(secret);},getPrototypeOf(){reads++;throw Error(secret);}});
+  for(const failure of [genuine,getter,malformed,forged,proxy]){
+    const f=fixture({failure});await assert.rejects(probeIosPreauthControls({driver:f.driver,onStep:row=>f.rows.push(row)}));
+    const row=f.rows.at(-1);
+    if(failure===genuine){assert.deepEqual(row.request,{operation:'element-find',phase:'ownership'});assert.equal(Object.isFrozen(row.request),true);}
+    else assert.equal(Object.hasOwn(row,'request'),false);
+    for(const value of [secret,encodeURIComponent(secret),Buffer.from(secret).toString('base64')])assert.equal(JSON.stringify(f.rows).includes(value),false);
+  }
+  assert.equal(reads,0);
+});
+
 test('unknown errors, forged codes, getters and proxies cannot leak into fixed records', async () => {
   const secret = randomBytes(32).toString('base64url'); let reads = 0;
   const getter = new NativeDriverError('NATIVE_DRIVER_ELEMENT_TIMEOUT');

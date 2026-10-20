@@ -1,6 +1,6 @@
 /** Optional fixed synthetic-control discriminator before any account or backend. */
 import { types } from 'node:util';
-import { NativeDriverError } from './driver.mjs';
+import { NativeDriverError, readIosRequestFailure } from './driver.mjs';
 import { NATIVE_DRIVER_FAILURE_CODES } from '../android-verification/contracts.mjs';
 
 const codes = new Set([...NATIVE_DRIVER_FAILURE_CODES, 'NATIVE_DRIVER_CANCELLED']);
@@ -26,7 +26,8 @@ export async function probeIosPreauthControls({ driver, signal, onStep = () => {
       if (signal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
     } catch (error) {
       const code = signal?.aborted ? 'NATIVE_DRIVER_CANCELLED' : fixedCode(error);
-      onStep(Object.freeze({ controlId, step: kind, completed: false, code }));
+      const request = readIosRequestFailure(error);
+      onStep(Object.freeze({ controlId, step: kind, completed: false, code, ...(request ? { request } : {}) }));
       throw fail(code);
     }
     onStep(Object.freeze({ controlId, step: kind, completed: true }));
