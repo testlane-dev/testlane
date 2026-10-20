@@ -22,7 +22,7 @@ From this checkout, with Node 22 and npm 10+:
 npm.cmd ci
 npm.cmd run build
 node --test examples/account-provisioning/tests/*.test.mjs
-npm.cmd run proof:account-provisioning -- --output-dir C:/temp/testlane-provision-proof-1
+npm.cmd run proof:account-provisioning -- --output-dir "$env:LOCALAPPDATA/TestlaneProvisionProof-1"
 ```
 
 Use a **new absolute output directory** whose parent exists. Omit `.cmd` on systems
@@ -32,7 +32,7 @@ Secret Service session. This baseline's proof refuses macOS rather than using th
 login keychain. Unit tests need no provider, keychain or browser.
 
 The proof packs and installs the built broker into a fresh consumer. The experiment
-itself runs from these source files; a receipt binds their hashes, the three reused
+itself runs from these source files; a receipt binds their hashes and the reused
 source support helpers, and the installed broker tree before/after execution. The
 imported native child helper must match the installed package's exact bytes. Tree
 digests use canonical JSON tuples of normalized relative paths and file SHA-256
@@ -49,6 +49,17 @@ A foreign control account remains unchanged and usable. The proof then deletes e
 attempted native entry, verifies absence, removes session files, confirms owned
 children stopped, and scans raw/URI/base64/base64url credential canaries before
 writing a passing receipt.
+
+The output, session files and temporary consumer/broker trees use the provider
+experiment's existing permission helper. It requires a protected current-user-only
+Windows DACL or verified POSIX 0700 directory before broker setup, and refuses an
+unsafe immediate parent without changing that parent's permissions. On Windows,
+use a new child of your private Local AppData directory; a broadly writable
+C:/temp or checkout output parent can be refused. All temporary directory
+environment variables remain leased until owned children and scratch trees settle.
+Run one proof at a time in each Node process. The proof disables Node's optional
+compile cache and removes only verified empty session/scratch directories. Parent
+directories and other processes running as your OS user remain trusted boundaries.
 
 ## Bounds and recovery
 

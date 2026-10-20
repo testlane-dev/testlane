@@ -4,6 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { exact, fail, TTL_MS, UUID } from '../contracts.mjs';
 import { createSupabaseAuthority, requireSupabaseTarget, supabaseIdentity } from './authority.mjs';
 import { isNextAuthSupabaseApp } from './nextauth-app.mjs';
+import { createRequestDrain } from './request-drain.mjs';
 
 const instances = new WeakSet(), COOKIE = 'tlp_supabase_session';
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -11,7 +12,7 @@ export const isSupabaseApp = app => instances.has(app) || isNextAuthSupabaseApp(
 
 export async function startSupabaseProvisioningApp({ runtime, releaseId } = {}) {
   requireSupabaseTarget(runtime, releaseId);
-  const sessions = new Map(), issued = new Set(); let origin, closed = false;
+  const sessions = new Map(), issued = new Set(), requests = createRequestDrain(); let origin, closed = false, closePromise;
   const live = () => { if (closed) throw fail('PROVISION_APP_CLOSED'); };
   const authority = createSupabaseAuthority({ runtime, releaseId, assertLive: live });
   async function currentUser(request) {
@@ -56,9 +57,13 @@ export async function startSupabaseProvisioningApp({ runtime, releaseId } = {}) 
     const allowed = url.pathname === '/api/editor-only' ? 'Editor' : 'Reviewer';
     return send(response, user.role === allowed ? 200 : 403, user.role === allowed ? { ok: true } : { error: 'ROLE_REFUSED' });
   }
-  const server = createServer((request, response) => { void handle(request, response).catch(() => {
-    if (!response.headersSent) send(response, 400, { error: 'REQUEST_INVALID' }); else response.destroy();
-  }); });
+  const server = createServer((request, response) => {
+    if (closed) return send(response, 403, { error: 'ORIGIN_REFUSED' });
+    void requests.run(async () => {
+      try { await handle(request, response); }
+      catch { if (!response.headersSent) send(response, 400, { error: 'REQUEST_INVALID' }); else response.destroy(); }
+    }).catch(() => response.destroy());
+  });
   server.requestTimeout = 10_000; server.headersTimeout = 10_000; server.keepAliveTimeout = 1000;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   origin = 'http://127.0.0.1:' + server.address().port;
@@ -67,10 +72,13 @@ export async function startSupabaseProvisioningApp({ runtime, releaseId } = {}) 
     authentication: Object.freeze({ kind: 'form-post' }),
     ...authority,
     issuedSessionTokens() { return [...issued]; },
-    async close() {
-      if (closed) return; closed = true;
-      await new Promise((resolve, reject) => { server.close(error => error ? reject(fail('PROVISION_CLEANUP_INCOMPLETE')) : resolve()); server.closeAllConnections(); });
-      sessions.clear(); issued.clear();
+    close() {
+      if (closePromise) return closePromise;
+      closed = true;
+      closePromise = requests.close(async () => {
+        await new Promise((resolve, reject) => { server.close(error => error ? reject(fail('PROVISION_CLEANUP_INCOMPLETE')) : resolve()); server.closeAllConnections(); });
+      }).then(() => { sessions.clear(); issued.clear(); });
+      return closePromise;
     },
   });
   instances.add(app); return app;

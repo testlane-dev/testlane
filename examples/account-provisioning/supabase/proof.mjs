@@ -12,6 +12,7 @@ import { runDemoChild } from '../../verification-demo/native.mjs';
 import { createProvisioner } from '../controller.mjs';
 import { canonical, emailFor, reviewedSupabasePolicy, TTL_MS } from '../contracts.mjs';
 import { installedTreeHash } from '../proof.mjs';
+import { finalizeProvisioningProof } from '../proof-finalization.mjs';
 import { startSupabaseProvisioningApp } from './app.mjs';
 import { startNextAuthSupabaseApp } from './nextauth-app.mjs';
 import { startOwnedSupabase } from './runtime.mjs';
@@ -20,8 +21,9 @@ import { assertPrivateRuntimeDirectory, createPrivateRuntimeDirectory } from './
 const HERE = path.dirname(fileURLToPath(import.meta.url)), REPO = path.resolve(HERE, '..', '..', '..');
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const FILES = ['examples/account-provisioning/contracts.mjs', 'examples/account-provisioning/controller.mjs',
-  'examples/account-provisioning/app.mjs', 'examples/account-provisioning/proof.mjs',
+  'examples/account-provisioning/app.mjs', 'examples/account-provisioning/proof.mjs', 'examples/account-provisioning/proof-finalization.mjs',
   'examples/account-provisioning/supabase/app.mjs', 'examples/account-provisioning/supabase/runtime.mjs',
+  'examples/account-provisioning/supabase/request-drain.mjs',
   'examples/account-provisioning/supabase/authority.mjs', 'examples/account-provisioning/supabase/nextauth-app.mjs',
   'examples/account-provisioning/supabase/ledger.sql', 'examples/account-provisioning/supabase/proof.mjs',
   'examples/account-provisioning/supabase/tools/package.json', 'examples/account-provisioning/supabase/tools/package-lock.json',
@@ -311,7 +313,7 @@ export async function runSupabaseProvisioningProof({ toolsRoot, outputDir, authM
   }
   if (failure) throw Error('SUPABASE_PROOF_FAILED');
   receipt.cleanupVerified = true; receipt.credentialLeakScanPassed = true;
-  await writeFile(path.join(output, 'receipt.json'), canonical(receipt) + '\n', { flag: 'wx', mode: 0o600 }); return receipt;
+  return finalizeProvisioningProof({ outputDir: output, receipt, kind: 'supabase', signal });
 }
 
 async function main() {
