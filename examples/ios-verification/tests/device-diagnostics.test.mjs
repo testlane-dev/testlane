@@ -7,12 +7,12 @@ const info = () => ({ pid: 2345, ppid: 1234, pgid: 2345, zombie: false, started:
 
 test('sampler-only policy retains error-level Appium while standalone diagnostics preserves debug verbosity', () => {
   const normal = createIosDiagnosticPolicy(), sampler = createIosDiagnosticPolicy({ prewarmDiagnostics: true });
-  assert.equal(normal.appiumLogLevel, 'error'); assert.equal(normal.beginPrewarm(), false);
-  assert.equal(sampler.appiumLogLevel, 'error'); assert.equal(sampler.beginPrewarm(), true);
+  assert.equal(normal.appiumLogLevel, 'error'); assert.equal(normal.beginPrewarm().canSample('owned-proof-app-prewarm'), false);
+  assert.equal(sampler.appiumLogLevel, 'error'); assert.equal(sampler.beginPrewarm().canSample('owned-proof-app-prewarm'), true);
   assert.equal(iosPrewarmDiagnosticDue({ diagnostics: true, kind: 'owned-proof-app-prewarm', elapsedMs: 15000, state: state() }), true);
   for (const options of [{ diagnostics: true }, { diagnostics: true, prewarmDiagnostics: true }]) {
     const standalone = createIosDiagnosticPolicy(options);
-    assert.equal(standalone.appiumLogLevel, 'debug'); assert.equal(standalone.beginPrewarm(), true);
+    assert.equal(standalone.appiumLogLevel, 'debug'); assert.equal(standalone.beginPrewarm().canSample('owned-device-list'), true);
   }
   for (const value of ['true', null, 1, {}, []]) {
     assert.throws(() => createIosDiagnosticPolicy({ prewarmDiagnostics: value }), /IOS_DEVICE_INPUT_INVALID/);
@@ -24,26 +24,52 @@ test('the prewarm diagnostic lease excludes concurrent use and stays consumed af
   for (const outcome of ['success', 'guard-failure', 'launch-failure', 'cancelled']) {
     const policy = createIosDiagnosticPolicy({ prewarmDiagnostics: true });
     const entered = Promise.withResolvers(), settle = Promise.withResolvers();
+    let lease;
     const first = (async () => {
-      const allowed = policy.beginPrewarm(); assert.equal(allowed, true); entered.resolve();
+      lease = policy.beginPrewarm(); assert.equal(lease.canSample('owned-device-list'), true); entered.resolve();
       try {
         await settle.promise;
         if (outcome !== 'success') throw Error(outcome);
-      } finally { policy.finishPrewarm(); }
+      } finally { policy.finishPrewarm(lease); }
     })();
     const result = outcome === 'success' ? first : assert.rejects(first, error => error.message === outcome);
     await entered.promise;
-    assert.equal(policy.beginPrewarm(), false, 'a pending first prewarm cannot grant a second sampler');
+    const concurrent = policy.beginPrewarm();
+    assert.equal(concurrent, undefined, 'a pending first prewarm cannot grant a second sampler');
+    policy.finishPrewarm(concurrent);
+    assert.equal(lease.canSample('owned-device-list'), true, 'a concurrent invocation cannot revoke the first lease');
     settle.resolve(); await result;
-    assert.equal(policy.beginPrewarm(), false, 'success, refusal and cancellation never renew the permission');
-    policy.finishPrewarm(); assert.equal(policy.beginPrewarm(), false);
+    assert.equal(policy.beginPrewarm(), undefined, 'success, refusal and cancellation never renew the permission');
+    assert.equal(lease.claimSample('owned-device-list'), false, 'a retained token is revoked on every settlement path');
+    assert.equal(lease.claimSample('owned-proof-app-prewarm'), false);
+    policy.finishPrewarm(lease); assert.equal(policy.beginPrewarm(), undefined);
     assert.equal(policy.appiumLogLevel, 'error');
+  }
+});
+
+test('only the first prewarm inventory and fixed launch can share one actual sample claim', async () => {
+  for (const selected of ['owned-device-list', 'owned-proof-app-prewarm']) {
+    const policy = createIosDiagnosticPolicy({ prewarmDiagnostics: true }), lease = policy.beginPrewarm();
+    for (const kind of ['owned-device-list', 'owned-proof-app-prewarm']) {
+      assert.equal(lease.canSample(kind), true, 'eligibility probes do not consume the actual sample claim');
+    }
+    for (const kind of ['runtime-list', 'owned-device-create', 'owned-device-boot', 'owned-app-install', 'loopback-listeners',
+      'process-identity', 'owned-descendants', 'owned-process-group', 'owned-prewarm-stack-sample', 'other', undefined]) {
+      assert.equal(lease.canSample(kind), false); assert.equal(lease.claimSample(kind), false);
+    }
+    const claims = await Promise.all([selected, selected === 'owned-device-list' ? 'owned-proof-app-prewarm' : 'owned-device-list']
+      .map(kind => Promise.resolve().then(() => lease.claimSample(kind))));
+    assert.deepEqual(claims, [true, false], 'inventory and launch cannot both cause actual sampling');
+    assert.equal(lease.canSample('owned-device-list'), false); assert.equal(lease.canSample('owned-proof-app-prewarm'), false);
+    assert.equal(lease.claimSample(selected), false, 'an unavailable/failed sample cannot be retried');
+    policy.finishPrewarm(lease); assert.equal(policy.beginPrewarm(), undefined);
   }
 });
 
 test('sampling is due only for a still-live explicit pre-auth prewarm diagnostic after fifteen seconds', () => {
   const value = { diagnostics: true, kind: 'owned-proof-app-prewarm', elapsedMs: 15000, state: state() };
   assert.equal(iosPrewarmDiagnosticDue(value), true);
+  assert.equal(iosPrewarmDiagnosticDue({ ...value, kind: 'owned-device-list' }), true);
   for (const change of [{ diagnostics: false }, { diagnostics: 'true' }, { kind: 'owned-device-boot' },
     { kind: 'owned-prewarm-stack-sample' }, { kind: 'other' }, { elapsedMs: 14999 }, { elapsedMs: NaN },
     { state: { ...state(), exited: true } }, { state: { ...state(), closed: true } },

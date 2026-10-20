@@ -249,13 +249,16 @@ readiness check establishes that authenticated cases pass. The workflow does not
 post-authentication driver logs, keychain homes or recovery directories. Hashes bind reviewed inputs;
 they do not authenticate arbitrary reports or establish assertion quality.
 
-The first fixed proof-app launch can sample its exact retained launch process if
-it remains pending after 15 seconds. Sampling lasts one second, with a five-second
-helper bound, identity rechecks and a bounded pre-auth capture. The helper must join
-before the launch or cleanup completes. Permission is consumed at the first prewarm
-invocation, including ownership failure or cancellation; later calls cannot sample.
-The launch retains its 30-second limit. The installed proof enables this setup-only
-sampler before generating credentials while Appium logging stays at error level.
+The first prewarm invocation can sample its exact retained inventory-query or
+fixed app-launch process if it remains pending after 15 seconds. Both commands share
+one sample claim; an attempted sample cannot be repeated. Ordinary ownership checks,
+worker RPCs and cleanup queries receive no sampling permission. Sampling lasts one
+second, with a five-second helper bound, identity rechecks and a bounded pre-auth
+capture. The helper must join before its command or cleanup completes. Permission
+is revoked when the first prewarm settles, including ownership failure or
+cancellation; later calls cannot sample. Inventory and launch retain their
+30-second limits. The installed proof enables this setup-only sampler before
+generating credentials while Appium logging stays at error level.
 The optional standalone diagnostic separately enables verbose startup logging; it
 never generates application credentials.
 
