@@ -116,10 +116,17 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import {mkdir,writeFile} from 'node:fs/promises';
+          import path from 'node:path';
+          import {readAndroidBuildFailure} from './examples/mobile-approval-app/build-diagnostics.mjs';
           const stages=[['sdk','SDK_OUTCOME'],['tools','TOOLS_OUTCOME'],['build','BUILD_OUTCOME'],['proof','PROOF_OUTCOME'],['evidence','EVIDENCE_OUTCOME']];
           const stage=stages.find(([,key])=>process.env[key]==='failure')?.[0]??'prerequisites';
+          let buildDiagnostic;
+          if(stage==='build' && process.env.ANDROID_PROOF_ROOT) {
+            try { buildDiagnostic=await readAndroidBuildFailure(path.join(process.env.ANDROID_PROOF_ROOT,'build','build-failure.json')); } catch {}
+          }
           await mkdir('output',{recursive:true});
-          await writeFile('output/android-hosted-failure.json',JSON.stringify({schemaVersion:1,status:'failed',stage,code:'ANDROID_HOSTED_EXPERIMENT_FAILED'})+'\n',{flag:'wx',mode:0o600});
+          await writeFile('output/android-hosted-failure.json',JSON.stringify({schemaVersion:1,status:'failed',stage,code:'ANDROID_HOSTED_EXPERIMENT_FAILED',
+            ...(buildDiagnostic?{buildDiagnostic}:stage==='build'?{buildDiagnosticStatus:'unavailable'}:{})})+'\n',{flag:'wx',mode:0o600});
           NODE
       - name: Retain only the fixed failure stage
         if: failure()

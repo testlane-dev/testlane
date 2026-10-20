@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -77,6 +78,25 @@ test('an absolute npm_execpath outside the Node directory is used without a shel
   const recovery = JSON.parse(await readFile(path.join(f.outputDir, 'recovery.json'), 'utf8'));
   assert.equal(path.dirname(recovery.buildRoot), await realpath(f.temporary));
   assert.equal((await lstat(recovery.buildRoot)).isDirectory(), true);
+  const diagnostic = JSON.parse(await readFile(path.join(f.outputDir, 'build-failure.json'), 'utf8'));
+  assert.equal(diagnostic.stage, 'npm-ci'); assert.equal(diagnostic.exitCode, 73); assert.equal(diagnostic.signal, null);
+  assert.deepEqual(diagnostic.categories, ['BUILD_UNCLASSIFIED']);
+});
+
+test('failed child output survives only as a fixed diagnostic alongside private recovery', async t => {
+  const f = await fixture(t); await completeTools(f);
+  const previous = process.env.npm_execpath;
+  t.after(() => { if (previous === undefined) delete process.env.npm_execpath; else process.env.npm_execpath = previous; });
+  const secret = randomBytes(32).toString('base64url'), relative = 'separate-node-distribution/npm-cli.js';
+  await f.file(f.root, relative, 'process.stderr.write(' + JSON.stringify('No space left on device\n' + secret + '\n' + Buffer.from(secret).toString('base64')) + ');process.exit(19);\n');
+  process.env.npm_execpath = path.join(f.root, relative);
+  await assert.rejects(buildAndroidProof({ outputDir: f.outputDir, sdkRoot: f.sdk, javaHome: f.jdk }), error =>
+    error.message === 'ANDROID_BUILD_STAGE_FAILED' && error.stage === 'npm-ci');
+  const json = await readFile(path.join(f.outputDir, 'build-failure.json'), 'utf8'), diagnostic = JSON.parse(json);
+  assert.deepEqual(diagnostic.categories, ['BUILD_DISK_CAPACITY']); assert.equal(diagnostic.exitCode, 19);
+  for (const value of [secret, encodeURIComponent(secret), Buffer.from(secret).toString('base64')]) assert.equal(json.includes(value), false);
+  assert.equal((await readFile(path.join(f.outputDir, 'npm-ci.log'), 'utf8')).includes(secret), true, 'raw child output remains in the private build log only');
+  assert.equal((await lstat(path.join(f.outputDir, 'recovery.json'))).isFile(), true);
 });
 
 test('a pre-aborted build refuses before allocating output or a temporary root', async t => {
