@@ -2,6 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createApprovalCases } from '../proof-cases.mjs';
+import { NativeVerificationError } from '../contracts.mjs';
+import { NativeDriverError } from '../driver.mjs';
 
 function context({ brokenTotal = false, mutateDenial = false } = {}) {
   const identities = { editor: { email: 'editor@example.test', role: 'Editor' }, reviewer: { email: 'reviewer@example.test', role: 'Reviewer' } };
@@ -109,4 +111,34 @@ test('body and cleanup scope the shared driver to their distinct phase signals e
   await item.cleanup({ ...fixture.ctx, signal: cleanup.signal });
   assert.deepEqual(fixture.scopes, [body.signal, cleanup.signal]);
   assert.equal(fixture.rows.size, 0); assert.equal(fixture.journals.size, 0);
+});
+
+test('UI polling propagates ownership, transport and cancellation failures after one read without replaying an action', async () => {
+  for (const code of ['NATIVE_DRIVER_OWNERSHIP_REFUSED', 'NATIVE_DRIVER_COMMAND_FAILED', 'NATIVE_DRIVER_CANCELLED']) {
+    const fixture = context(), item = createApprovalCases().find(value => value.id === 'anonymous-denied');
+    const read = fixture.ctx.driver.text, error = new NativeDriverError(code); let reads = 0;
+    fixture.ctx.driver.text = async id => {
+      if (id === 'operation-status') { reads++; throw error; }
+      return read(id);
+    };
+    await assert.rejects(item.run(fixture.ctx), actual => actual === error);
+    assert.equal(reads, 1); assert.deepEqual(fixture.clicks, ['anonymous-check']);
+    assert.equal(fixture.rows.size, 0); assert.equal(fixture.journals.size, 0);
+  }
+});
+
+test('a value that never settles yields the fixed platform-neutral cause after the unchanged eight-second observation budget', async t => {
+  let now = 0; t.mock.method(Date, 'now', () => now);
+  const fixture = context(), item = createApprovalCases().find(value => value.id === 'anonymous-denied');
+  const read = fixture.ctx.driver.text; let reads = 0;
+  fixture.ctx.driver.text = async id => {
+    if (id === 'operation-status') { reads++; now += 8001; return 'private-unsettled-native-value'; }
+    return read(id);
+  };
+  await assert.rejects(item.run(fixture.ctx), error => {
+    assert.equal(Object.getPrototypeOf(error), NativeVerificationError.prototype);
+    assert.equal(error.code, 'NATIVE_UI_SETTLEMENT_TIMEOUT'); assert.equal(String(error.stack).includes('private-unsettled-native-value'), false);
+    return true;
+  });
+  assert.equal(reads, 1); assert.deepEqual(fixture.clicks, ['anonymous-check']); assert.equal(fixture.rows.size, 0);
 });

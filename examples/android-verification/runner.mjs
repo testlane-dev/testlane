@@ -1,6 +1,22 @@
 /** Bounded cooperative native cases. An external owner must bound the worker process. */
-import { isDeepStrictEqual } from 'node:util';
-import { NATIVE_RUNNER, nativeLimits, NativeVerificationError, validateNativePlan, nativeDiagnostic } from './contracts.mjs';
+import { isDeepStrictEqual, types } from 'node:util';
+import { NATIVE_RUNNER, IOS_NATIVE_RUNNER, NATIVE_DRIVER_FAILURE_CODES, nativeLimits, NativeVerificationError, validateNativePlan, nativeDiagnostic } from './contracts.mjs';
+import { NativeDriverError as AndroidDriverError } from './driver.mjs';
+import { NativeDriverError as IosDriverError } from '../ios-verification/driver.mjs';
+
+const DRIVER_CAUSES = new Set([...NATIVE_DRIVER_FAILURE_CODES, 'NATIVE_DRIVER_CANCELLED']);
+function failureCause(error, runner) {
+  // Proxy checks are intrinsic and run before any property/prototype operation.
+  // Never invoke callback-owned getters, inspect messages/stacks, or stringify
+  // the thrown value. Only our exact classes and own primitive codes qualify.
+  if (error === null || typeof error !== 'object' || types.isProxy(error) || !types.isNativeError(error)) return;
+  try {
+    const prototype = Object.getPrototypeOf(error), descriptor = Object.getOwnPropertyDescriptor(error, 'code');
+    if (!descriptor || !Object.hasOwn(descriptor, 'value') || typeof descriptor.value !== 'string') return;
+    if (prototype === NativeVerificationError.prototype && descriptor.value === 'NATIVE_UI_SETTLEMENT_TIMEOUT') return descriptor.value;
+    if (prototype === (runner === IOS_NATIVE_RUNNER ? IosDriverError.prototype : AndroidDriverError.prototype) && DRIVER_CAUSES.has(descriptor.value)) return descriptor.value;
+  } catch { /* An unrecognized thrown value contributes no public metadata. */ }
+}
 
 function wait(promise, milliseconds, signal) {
   return new Promise(resolve => {
@@ -10,7 +26,7 @@ function wait(promise, milliseconds, signal) {
       done = true; clearTimeout(timer); signal?.removeEventListener('abort', cancel); resolve(outcome);
     };
     const cancel = () => finish({ kind: 'cancelled' });
-    promise.then(value => finish({ kind: 'settled', ok: value }), () => finish({ kind: 'settled', ok: false }));
+    promise.then(value => finish({ kind: 'settled', ok: value.ok, ...(value.cause ? { cause: value.cause } : {}) }), () => finish({ kind: 'settled', ok: false }));
     timer = setTimeout(() => finish({ kind: 'timeout' }), milliseconds);
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted) cancel();
@@ -26,12 +42,15 @@ function checking(state) {
     if (!equal) { state.failed = true; throw new NativeVerificationError('NATIVE_ASSERTION_FAILED'); }
   };
 }
-async function phase(callback, context, state, timeoutMs, settleTimeoutMs, signal) {
+async function phase(callback, context, state, timeoutMs, settleTimeoutMs, signal, runner) {
   if (signal?.aborted) { state.open = false; return { kind: 'cancelled', unsettled: false }; }
   const controller = new AbortController();
   const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   const pending = Promise.resolve().then(() => callback(Object.freeze({ ...context, check: checking(state), signal: combined })))
-    .then(() => true, () => false); // Never retain the thrown value or callback return.
+    .then(() => ({ ok: true }), error => {
+      const cause = failureCause(error, runner);
+      return { ok: false, ...(cause ? { cause } : {}) };
+    }); // Never retain the thrown value or callback return.
   const outcome = await wait(pending, timeoutMs, signal);
   if (outcome.kind === 'settled') { state.open = false; return { ...outcome, unsettled: false }; }
   controller.abort();
@@ -81,19 +100,19 @@ export async function runNativeCases({ plan: input, cases, context = {}, signal,
     }
     row.attempts = 1;
     const body = counter(), cleanup = counter();
-    const bodyResult = await phase(authored.run, context, body, timeoutMs, settleTimeoutMs, signal);
+    const bodyResult = await phase(authored.run, context, body, timeoutMs, settleTimeoutMs, signal, plan.runner);
     const failures = [];
     if (bodyResult.unsettled) { failures.push('NATIVE_BODY_UNSETTLED'); stop = true; row.status = 'blocked'; }
     else if (bodyResult.kind === 'cancelled') { failures.push('NATIVE_RUN_CANCELLED'); row.status = 'cancelled'; stop = true; }
     else if (bodyResult.kind === 'timeout') { failures.push('NATIVE_BODY_TIMEOUT'); row.status = 'failed'; }
     else if (body.failed) { failures.push('NATIVE_ASSERTION_FAILED'); row.status = 'failed'; }
-    else if (!bodyResult.ok) { failures.push('NATIVE_BODY_FAILED'); row.status = 'failed'; }
+    else if (!bodyResult.ok) { failures.push('NATIVE_BODY_FAILED'); if (bodyResult.cause) failures.push(bodyResult.cause); row.status = 'failed'; }
     else if (body.observed === 0) { failures.push('NATIVE_NO_BODY_CHECKS'); row.status = 'blocked'; }
     else row.status = 'passed';
     if (bodyResult.unsettled) row.cleanup.status = 'unknown';
     else if (authored.cleanup) {
       // Cleanup gets its own fresh cooperative signal, even after run cancellation.
-      const cleaned = await phase(authored.cleanup, context, cleanup, cleanupTimeoutMs, settleTimeoutMs);
+      const cleaned = await phase(authored.cleanup, context, cleanup, cleanupTimeoutMs, settleTimeoutMs, undefined, plan.runner);
       let cleanupFailure;
       if (cleaned.unsettled) { cleanupFailure = 'NATIVE_CLEANUP_UNSETTLED'; row.cleanup.status = 'unknown'; stop = true; row.status = 'blocked'; }
       else if (cleaned.kind === 'timeout') cleanupFailure = 'NATIVE_CLEANUP_TIMEOUT';
@@ -101,6 +120,7 @@ export async function runNativeCases({ plan: input, cases, context = {}, signal,
       else if (cleanup.observed === 0) cleanupFailure = 'NATIVE_NO_CLEANUP_CHECKS';
       if (cleanupFailure) {
         failures.push(cleanupFailure);
+        if (cleanupFailure === 'NATIVE_CLEANUP_FAILED' && !cleanup.failed && cleaned.cause) failures.push(cleaned.cause);
         if (row.cleanup.status !== 'unknown' || !cleaned.unsettled) row.cleanup.status = 'failed';
         if (!['blocked', 'cancelled'].includes(row.status)) row.status = 'failed';
       } else row.cleanup.status = 'completed';
@@ -108,7 +128,7 @@ export async function runNativeCases({ plan: input, cases, context = {}, signal,
     row.bodyAssertionsObserved = body.observed; row.cleanupAssertionsObserved = cleanup.observed;
     row.assertionsObserved = body.observed + cleanup.observed;
     row.reason = failures[0] ?? 'NATIVE_CASE_PASSED';
-    row.diagnostics = failures.map(diagnosis);
+    row.diagnostics = [...new Set(failures)].map(diagnosis);
     if (failures.includes('NATIVE_RUN_CANCELLED')) report.reasonCodes.push('NATIVE_RUN_CANCELLED');
     if (bodyResult.unsettled || failures.includes('NATIVE_CLEANUP_UNSETTLED')) report.reasonCodes.push('NATIVE_BODY_UNSETTLED' === row.reason ? row.reason : 'NATIVE_CLEANUP_UNSETTLED');
   }

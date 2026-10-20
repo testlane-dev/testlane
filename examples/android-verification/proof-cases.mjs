@@ -1,6 +1,7 @@
 /** App-owned native examples. These are prewritten cases, not agent-authorship evidence. */
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
+import {NativeVerificationError} from './contracts.mjs';
 
 export const APPROVAL_REQUIREMENTS = [
   {id:'editor-native-total',title:'Editor creates the exact total in the native app',expected:['Native creation saves three items at 1400 cents for exactly 4200 cents','Fresh backend state matches every saved field']},
@@ -17,11 +18,10 @@ async function wait(ctx,id,value) {
   const deadline=Date.now()+8000;
   while(Date.now()<deadline) {
     ctx.signal?.throwIfAborted();
-    try { if(await ctx.driver.text(id)===value)return; }
-    catch { ctx.signal?.throwIfAborted(); }
+    if(await ctx.driver.text(id)===value)return;
     await delay(Math.min(75,Math.max(1,deadline-Date.now())),undefined,{signal:ctx.signal});
   }
-  throw new Error('ANDROID_UI_SETTLEMENT_TIMEOUT');
+  throw new NativeVerificationError('NATIVE_UI_SETTLEMENT_TIMEOUT');
 }
 function expected(owned,editor,reviewer,{approved=false,totalCents=4200}={}) {
   return {id:owned.id,marker:owned.marker,ownerEmail:editor.email,quantity:3,unitPriceCents:1400,totalCents,

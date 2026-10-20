@@ -152,7 +152,7 @@ cannot be confirmed.
 Setup launches only the fixed proof bundle on the owned Simulator before the
 application backend, broker or bootstrap credentials exist. WDA attaches to that
 running app with forced relaunch disabled and one startup attempt. This separates
-cold app startup from the five-second ordinary command transport; it does not test
+cold app startup from the five-second ordinary request budget; it does not test
 cold-start performance or prove the app is ready merely because launch was
 acknowledged. Role loading, identity checks and all business assertions still run
 through the native controls.
@@ -198,8 +198,8 @@ shared `budgets.mjs` declares these bounds and the 600-second outer worker ceili
 cases run once without retries. Appium/WebDriverAgent session creation has
 its own 240-second ceiling within that outer limit. After receiving a valid session
 ID, setup performs one live ownership check within the remaining startup budget,
-capped at 20 seconds. Ordinary ownership and command checks retain their
-five-second limits. An unconfirmed setup check prevents subsequent native actions;
+capped at 20 seconds. Each ordinary driver request shares one five-second ceiling
+between its live ownership check and HTTP operation. An unconfirmed setup check prevents subsequent native actions;
 session deletion is reported unknown if the prior operation cannot be confirmed
 settled, and the controller fences it through owned-device teardown.
 The separate 300-second WDA
@@ -226,6 +226,15 @@ baseline or owned device identifiers. Reports omit raw exceptions, response bodi
 logs. Temporary driver text stays bounded in memory and is checked for generated
 credential variants. Uncertain teardown fails the proof and retains private recovery
 metadata; failure output must be reviewed before sharing.
+
+Case failures keep their lifecycle diagnosis, such as `NATIVE_BODY_FAILED`, first.
+They can add a fixed cause for the selected platform's own driver error class or
+the shared UI-settlement error. Unknown thrown values, wrong-platform classes,
+getters and proxies contribute no cause. The report never copies an exception's
+message, stack or payload. UI polling propagates driver failures; a value that
+does not settle has a separate fixed diagnosis, without replaying actions. The
+eight- and ten-second polling windows remain subject to the surrounding driver
+and case budgets; a single text read can involve several driver requests.
 
 Repeated device inventory, listener and process-query responses remain bounded
 transient inputs to the live validators. The cumulative diagnostic log omits their

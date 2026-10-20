@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { runNativeCases } from '../runner.mjs';
-import { validateNativePlan, sanitizeNativeReport, NATIVE_RUNNER } from '../contracts.mjs';
+import { validateNativePlan, sanitizeNativeReport, NATIVE_RUNNER, IOS_NATIVE_RUNNER, NativeVerificationError } from '../contracts.mjs';
+import { NativeDriverError as AndroidDriverError } from '../driver.mjs';
+import { NativeDriverError as IosDriverError } from '../../ios-verification/driver.mjs';
 
 const plan = (ids = ['create-request'], required = true) => ({ schemaVersion: 1, runner: NATIVE_RUNNER, status: 'reviewed',
   title: 'Disposable native request workflow', target: { baseUrl: 'http://127.0.0.1:4555', environment: 'testing' },
@@ -192,4 +194,93 @@ test('worker sanitization refuses extra payloads, inconsistent counts and passin
     const value = structuredClone(original); mutate(value);
     assert.throws(() => sanitizeNativeReport(value, input), { message: 'NATIVE_REPORT_INVALID' });
   }
+});
+
+const platformPlan = runner => {
+  const input = plan();
+  if (runner === IOS_NATIVE_RUNNER) { input.runner = runner; input.app = { bundleId: 'dev.testlane.iosproof', buildSha256: 'a'.repeat(64) }; }
+  return input;
+};
+
+test('settled driver failures add only a chosen-platform fixed cause while keeping primary body and cleanup outcomes', async () => {
+  for (const [runner, DriverError] of [[NATIVE_RUNNER, AndroidDriverError], [IOS_NATIVE_RUNNER, IosDriverError]]) {
+    for (const code of ['NATIVE_DRIVER_OWNERSHIP_REFUSED', 'NATIVE_DRIVER_COMMAND_FAILED', 'NATIVE_DRIVER_CANCELLED']) {
+      const input = platformPlan(runner), item = passing('create-request');
+      item.run = ({ check }) => { check(true, true); throw new DriverError(code); };
+      const result = await runNativeCases({ plan: input, cases: [item] });
+      assert.equal(result.verdict, 'failed'); assert.equal(result.cases[0].reason, 'NATIVE_BODY_FAILED');
+      assert.equal(result.cases[0].cleanup.status, 'completed');
+      assert.deepEqual(result.cases[0].diagnostics.map(value => value.code), ['NATIVE_BODY_FAILED', code]);
+      assert.deepEqual(sanitizeNativeReport(result, input), result);
+    }
+    const input = platformPlan(runner), item = passing('create-request');
+    item.cleanup = () => { throw new DriverError('NATIVE_DRIVER_COMMAND_FAILED'); };
+    const result = await runNativeCases({ plan: input, cases: [item] });
+    assert.equal(result.cases[0].reason, 'NATIVE_CLEANUP_FAILED'); assert.equal(result.cases[0].cleanup.status, 'failed');
+    assert.deepEqual(result.cases[0].diagnostics.map(value => value.code), ['NATIVE_CLEANUP_FAILED', 'NATIVE_DRIVER_COMMAND_FAILED']);
+    assert.deepEqual(sanitizeNativeReport(result, input), result);
+  }
+});
+
+test('UI mismatch has a fixed supplemental diagnosis and cannot be confused with a driver failure or successful return', async () => {
+  const input = plan(), item = passing('create-request');
+  item.run = () => { throw new NativeVerificationError('NATIVE_UI_SETTLEMENT_TIMEOUT'); };
+  const result = await runNativeCases({ plan: input, cases: [item] });
+  assert.equal(result.verdict, 'failed'); assert.equal(result.cases[0].reason, 'NATIVE_BODY_FAILED');
+  assert.deepEqual(result.cases[0].diagnostics.map(value => value.code), ['NATIVE_BODY_FAILED', 'NATIVE_UI_SETTLEMENT_TIMEOUT']);
+  assert.equal(result.cases[0].diagnostics[1].summary, 'The expected native UI value was not observed before polling ended.');
+  assert.deepEqual(sanitizeNativeReport(result, input), result);
+  item.run = ({ check }) => { check(true, true); return new AndroidDriverError('NATIVE_DRIVER_COMMAND_FAILED'); };
+  const returned = await runNativeCases({ plan: input, cases: [item] });
+  assert.equal(returned.verdict, 'passed'); assert.deepEqual(returned.cases[0].diagnostics, []);
+});
+
+test('arbitrary errors, forged/wrong-platform codes, getters and proxies contribute no cause or private metadata', async () => {
+  const secret = randomBytes(24).toString('base64url'), input = plan(); let inspected = 0;
+  const getter = new AndroidDriverError('NATIVE_DRIVER_COMMAND_FAILED');
+  Object.defineProperty(getter, 'code', { get() { inspected++; throw Error(secret); } });
+  const privateCode = new AndroidDriverError(secret);
+  const objectCode = new AndroidDriverError('NATIVE_DRIVER_COMMAND_FAILED'); objectCode.code = { toString() { inspected++; return secret; } };
+  const proxy = new Proxy(new AndroidDriverError('NATIVE_DRIVER_COMMAND_FAILED'), {
+    get() { inspected++; throw Error(secret); }, getPrototypeOf() { inspected++; throw Error(secret); },
+    getOwnPropertyDescriptor() { inspected++; throw Error(secret); },
+  });
+  const revoked = Proxy.revocable(new AndroidDriverError('NATIVE_DRIVER_COMMAND_FAILED'), {}); revoked.revoke();
+  const values = [undefined, null, secret, Error(secret), { code: 'NATIVE_DRIVER_COMMAND_FAILED' },
+    Object.assign(Error(secret), { code: 'NATIVE_DRIVER_COMMAND_FAILED' }), new IosDriverError('NATIVE_DRIVER_COMMAND_FAILED'),
+    new NativeVerificationError('NATIVE_DRIVER_COMMAND_FAILED'), new AndroidDriverError('NATIVE_UI_SETTLEMENT_TIMEOUT'),
+    Object.create(AndroidDriverError.prototype), privateCode, objectCode, getter, proxy, revoked.proxy];
+  for (const thrown of values) {
+    const item = passing('create-request'); item.run = () => { throw thrown; };
+    const result = await runNativeCases({ plan: input, cases: [item] });
+    assert.equal(result.verdict, 'failed'); assert.equal(result.cases[0].cleanup.status, 'completed');
+    assert.deepEqual(result.cases[0].diagnostics.map(value => value.code), ['NATIVE_BODY_FAILED']);
+    for (const value of [secret, encodeURIComponent(secret), Buffer.from(secret).toString('base64')]) assert.equal(JSON.stringify(result).includes(value), false);
+    assert.deepEqual(sanitizeNativeReport(result, input), result);
+  }
+  assert.equal(inspected, 0, 'code getters, proxy traps and coercion hooks must never execute');
+});
+
+test('assertion, cancellation, timeout and unsettled precedence cannot be replaced by a supplemental cause', async () => {
+  const input = plan();
+  const assertion = passing('create-request'); assertion.run = ({ check }) => {
+    try { check(4199, 4200); } catch {} throw new AndroidDriverError('NATIVE_DRIVER_COMMAND_FAILED');
+  };
+  const failed = await runNativeCases({ plan: input, cases: [assertion] });
+  assert.deepEqual(failed.cases[0].diagnostics.map(value => value.code), ['NATIVE_ASSERTION_FAILED']);
+  const controller = new AbortController(), cancelled = passing('create-request');
+  cancelled.run = () => { controller.abort(); throw new AndroidDriverError('NATIVE_DRIVER_CANCELLED'); };
+  const stopped = await runNativeCases({ plan: input, cases: [cancelled], signal: controller.signal });
+  assert.deepEqual(stopped.cases[0].diagnostics.map(value => value.code), ['NATIVE_RUN_CANCELLED']);
+  const timeout = passing('create-request'); timeout.run = async ({ signal }) => { await aborted(signal); throw new AndroidDriverError('NATIVE_DRIVER_CANCELLED'); };
+  const expired = await runNativeCases({ plan: input, cases: [timeout], ...budget });
+  assert.deepEqual(expired.cases[0].diagnostics.map(value => value.code), ['NATIVE_BODY_TIMEOUT']);
+  assert.equal(expired.cases[0].cleanup.status, 'completed');
+  let release;
+  const unsettled = passing('create-request'); unsettled.run = async () => { await new Promise(resolve => { release = resolve; }); throw new AndroidDriverError('NATIVE_DRIVER_COMMAND_FAILED'); };
+  const pending = await runNativeCases({ plan: input, cases: [unsettled], ...budget });
+  assert.deepEqual(pending.cases[0].diagnostics.map(value => value.code), ['NATIVE_BODY_UNSETTLED']);
+  const bytes = JSON.stringify(pending); release(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(JSON.stringify(pending), bytes);
+  for (const report of [failed, stopped, expired, pending]) assert.deepEqual(sanitizeNativeReport(report, input), report);
 });

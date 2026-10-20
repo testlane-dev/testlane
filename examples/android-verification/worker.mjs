@@ -2,7 +2,7 @@
 import { runNativeCases } from './runner.mjs';
 import { createApprovalCases } from './proof-cases.mjs';
 import { NATIVE_PROOF_BUDGETS } from './budgets.mjs';
-import { loopbackOrigin, validateNativePlan, nativeFailureReport, appendNativeRunFailure, NATIVE_DRIVER_FAILURE_CODES, IOS_NATIVE_RUNNER } from './contracts.mjs';
+import { loopbackOrigin, validateNativePlan, nativeFailureReport, appendNativeRunFailure, NATIVE_DRIVER_FAILURE_CODES, IOS_NATIVE_RUNNER, NativeVerificationError } from './contracts.mjs';
 import { validateIosDeviceBinding } from '../ios-verification/device-scope.mjs';
 
 const controller = new AbortController(), pending = new Map();
@@ -65,7 +65,7 @@ async function main(payload) {
         if (value === expected) return value;
         await delay(Math.min(200, Math.max(1, until - Date.now())), signal);
       }
-      throw fixed();
+      throw new NativeVerificationError('NATIVE_UI_SETTLEMENT_TIMEOUT');
     };
     const api = async (role, method, route, body, signal) => {
       if (![null, 'editor', 'reviewer'].includes(role) || !['GET', 'POST', 'DELETE'].includes(method) ||
