@@ -88,6 +88,12 @@ limits. Repeated inventory responses are validated in full without retaining the
 raw payloads in the bounded diagnostic log. The proof checks authenticated workflows after that setup;
 it does not establish cold app-start performance.
 
+Before generating credentials, the installed driver must create a session, verify
+the native context and delete that exact session. The proof then uses the same
+owned Simulator for all three business phases. Its intermediate readiness record
+establishes session cleanup; final teardown separately establishes device cleanup.
+The standalone WDA diagnostic remains available for credential-free troubleshooting.
+
 Generated sandbox credentials pass through the real installed CLI and an explicitly
 selected temporary macOS keychain. A private file in the owned app container delivers
 the resulting session; the app deletes it before parsing, and the controller checks

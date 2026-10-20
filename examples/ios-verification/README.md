@@ -44,11 +44,13 @@ certificate, provisioning profile, Expo account or human test account is needed.
 
 Use the repository's [iOS Simulator workflow](../../.github/workflows/ios-simulator-proof.yml).
 It inspects prerequisites, runs the policy tests and builds the Simulator app without
-Apple signing credentials. A credential-free diagnostic then creates a new owned
+Apple signing credentials. The installed-package proof then creates one owned
 Simulator, prebuilds the pinned WebDriverAgent runner for that exact destination,
-installs and launches the unauthenticated app, opens one WebDriverAgent session, verifies `NATIVE_APP`
-and removes that session and Simulator. Only after that passes does the
-installed-package proof create credentials and use another new Simulator. Ordinary
+and installs and launches the unauthenticated app. Before generating credentials,
+it uses the installed native driver to open one WebDriverAgent session, verify
+`NATIVE_APP` and delete that session. It rechecks the prepared artifacts, then uses
+the same owned Simulator for the authenticated cases. Final teardown removes the
+Simulator. Ordinary
 `npm run test:mobile` executes unit/control tests without starting a device.
 
 The equivalent commands below belong in that opted-in ephemeral hosted job, from
@@ -65,8 +67,15 @@ proof_root="$(cd "$RUNNER_TEMP" && pwd -P)/testlane-ios-$$"
 mkdir "$proof_root"
 npm --prefix examples/ios-verification/tools run setup -- --output-dir "$proof_root/tools"
 npm run build:ios-proof -- --output-dir "$proof_root/build"
-TESTLANE_IOS_PROOF_CI=1 node scripts/ios-wda-preflight.mjs --app "$proof_root/build/TestlaneIOSProof.app" --tools-root "$proof_root/tools" --output-dir "$GITHUB_WORKSPACE/output/ios-wda-preflight"
 TESTLANE_IOS_PROOF_CI=1 npm run proof:ios -- --app "$proof_root/build/TestlaneIOSProof.app" --tools-root "$proof_root/tools" --output-dir "$GITHUB_WORKSPACE/output/ios-proof"
+```
+
+For a separate credential-free diagnostic, run the command below instead of the
+full proof. It creates and removes its own Simulator; it is not an additional
+required device setup before the installed-package run:
+
+```sh
+TESTLANE_IOS_PROOF_CI=1 node scripts/ios-wda-preflight.mjs --app "$proof_root/build/TestlaneIOSProof.app" --tools-root "$proof_root/tools" --output-dir "$GITHUB_WORKSPACE/output/ios-wda-preflight"
 ```
 
 Set `TESTLANE_PACKAGE_TARBALL` to the absolute reviewed candidate tarball to verify
@@ -207,8 +216,12 @@ receipt with source, app-tree, build-manifest, plan, case and installed-package
 hashes, resolved tool versions, declared bounds, timings and cleanup/leak-scan
 outcomes. Its WDA preparation record contains the fixed build budget, compile
 elapsed time, pinned WDA version and project/package/runner/`.xctestrun` hashes;
-it omits local paths and device identifiers. The receipt and WDA status identify the fixed
-`ephemeral-hosted-standard-device-set` scope; neither includes the foreign-device
+it omits local paths and device identifiers. `readiness.json` records only successful
+session creation, native context and exact-session deletion through the installed
+driver, plus setup time and fixed scope. It does not claim device teardown while
+the Simulator is still in use. The final receipt establishes the separate cleanup
+gates. The receipt, readiness record and standalone WDA status identify the fixed
+`ephemeral-hosted-standard-device-set` scope; none includes the foreign-device
 baseline or owned device identifiers. Reports omit raw exceptions, response bodies, UI hierarchies, screenshots, recordings and device
 logs. Temporary driver text stays bounded in memory and is checked for generated
 credential variants. Uncertain teardown fails the proof and retains private recovery
@@ -220,21 +233,23 @@ raw payloads and records fixed command kinds, status and timing instead. This ke
 repeated ownership checks from filling the unchanged eight-MiB log cap; it does not
 cache ownership decisions or omit response validation.
 
-The workflow uploads selected sanitized evidence after success. Credential-backed
-proof failures retain only
-fixed stages/error codes and native reports that pass schema validation again.
-Compilation and credential-free WDA diagnostics may be retained only before an
-application backend, broker, credential or application session exists. The WDA
-diagnostic checks the compiled app against its manifest and seven public source
-inputs; it opens a native automation session without signing in or exercising the
-business workflow. On failure, its bounded `preauth-wda.log` can include Appium and
-Xcode startup details. Only `status.json` and that log are uploaded; uncertain
-cleanup recovery paths stay private. This readiness check does not establish that
-the authenticated cases pass. The workflow does not upload
-post-authentication driver logs, keychain homes or failure directories. Hashes bind reviewed inputs;
+The workflow uploads selected sanitized evidence after success. Proof failures
+retain fixed stages/error codes, any successful readiness record and native reports
+that pass schema validation again. Bounded `preauth-device.log` is retained only
+when setup fails before an application backend, broker, credential or application
+session exists. The installed readiness session uses the same strict logging and
+privacy capabilities as the workers.
+
+The optional standalone WDA diagnostic checks the compiled app against its manifest
+and seven public source inputs. It opens a native automation session without
+signing in or exercising the business workflow. On failure, its bounded
+`preauth-wda.log` can include Appium and Xcode startup details; review it before
+sharing. Its private recovery paths are excluded from the fixed status. Neither
+readiness check establishes that authenticated cases pass. The workflow does not upload
+post-authentication driver logs, keychain homes or recovery directories. Hashes bind reviewed inputs;
 they do not authenticate arbitrary reports or establish assertion quality.
 
-For a launch still pending after 15 seconds, the credential-free diagnostic can
+For a launch still pending after 15 seconds, the optional standalone diagnostic can
 sample the exact retained launch process for one second, with a five-second helper
 bound. It rechecks process identity, captures only to the bounded pre-auth log and
 joins the helper before returning or completing cleanup. The app launch still has

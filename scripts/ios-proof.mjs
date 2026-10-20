@@ -19,6 +19,8 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
   const recovery=path.join(output,'recovery');await mkdir(recovery,{mode:0o700});
   const {startDemoApp}=await load('examples/verification-demo/app.mjs');
   const {startOwnedIos}=await load('examples/ios-verification/device.mjs');
+  const {createNativeDriver}=await load('examples/ios-verification/driver.mjs');
+  const {iosProofDriverOptions,verifyInstalledIosReadiness}=await load('examples/ios-verification/readiness.mjs');
   const {runNativeWorker}=await load('examples/android-verification/worker-host.mjs');
   const {validateNativePlan,sanitizeNativeReport}=await load('examples/android-verification/contracts.mjs');
   const {APPROVAL_REQUIREMENTS}=await load('examples/android-verification/proof-cases.mjs');
@@ -38,7 +40,7 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
   for(const file of publicFiles)assert.equal(build.publicSourceSHA256[file],sha(await readFile(path.join(consumer.packageRoot,'examples/mobile-approval-app',file))),'installed app source matches the compiled build inputs');
   const namespace='ios-'+randomBytes(8).toString('hex');
   let accounts={},identities;
-  let app,device,broker,receipt,captured='',audit='',stage='setup',workerUnconfirmed=false,brokerRecovery;
+  let app,device,broker,receipt,wdaReadiness,captured='',audit='',stage='setup',workerUnconfirmed=false,brokerRecovery;
   const at=name=>{stage=name;onStage(name);};const attempted=new Set();
   try {
     at('owned-simulator-start');
@@ -49,6 +51,12 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
     signal?.throwIfAborted();await device.installApp(appRoot);
     at('app-prewarm');assert.deepEqual(await device.prewarmProofApp(),{appPrewarmed:true});
     await device.assertWdaPrepared();
+    const driverOptions=iosProofDriverOptions(device);
+    at('wda-readiness');
+    wdaReadiness=await verifyInstalledIosReadiness({createNativeDriver,driverOptions,assertOwned:()=>device.assertOwned(),signal,appPrewarmed:true});
+    await device.assertWdaPrepared();
+    signal?.throwIfAborted();
+    await writeFile(path.join(output,'readiness.json'),JSON.stringify(wdaReadiness,null,2)+'\n',{flag:'wx',mode:0o600});
     signal?.throwIfAborted();
     accounts=Object.fromEntries(['editor','reviewer'].map(role=>[role,{email:namespace+'-'+role+'@example.test',role:role==='editor'?'Editor':'Reviewer',password:randomBytes(32).toString('base64url')}]));
     identities=Object.fromEntries(Object.entries(accounts).map(([role,{email,role:label}])=>[role,{email,role:label}]));
@@ -73,23 +81,17 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
       runWorker:async options=>{await device.assertWdaPrepared();return runNativeWorker(options);},sanitize:sanitizeNativeReport,signal,
       workerTimeoutMs:NATIVE_PROOF_BUDGETS.workerMs,onStage:at,onCaptured:value=>{captured+=value;},onWorkerRisk:()=>{workerUnconfirmed=true;},
       assertBuildUnchanged:async()=>{assert.equal((await hashIosTree(appRoot)).sha256,appTree.sha256);assert.equal(sha(await readFile(manifestFile)),sha(manifestBytes));await device.assertWdaPrepared();},
-      driverOptions:{url:device.serverUrl,deviceBinding:device.deviceBinding,keyboardDismissId:'dismiss-keyboard',capabilities:{platformName:'iOS','appium:automationName':'XCUITest','appium:udid':device.udid,'appium:bundleId':BUNDLE,
-        'appium:simulatorDevicesSetPath':device.deviceSetPath,'appium:derivedDataPath':device.derivedDataPath,'appium:wdaLocalPort':device.wdaPort,
-        'appium:wdaRemotePort':device.wdaPort,'appium:wdaBindingIP':'127.0.0.1','appium:wdaBaseUrl':'http://127.0.0.1','appium:mjpegServerPort':device.mjpegPort,
-        'appium:skipLogCapture':true,'appium:showIOSLog':false,'appium:showXcodeLog':false,'appium:printPageSourceOnFindFailure':false,
-        'appium:disableAutomaticScreenshots':true,'appium:shutdownOtherSimulators':false,'appium:resetLocationService':false,'appium:noReset':true,
-        'appium:newCommandTimeout':90,'appium:waitForIdleTimeout':1,'appium:wdaLaunchTimeout':120000,'appium:wdaConnectionTimeout':5000,
-        'appium:wdaStartupRetries':1,'appium:forceAppLaunch':false,'appium:shouldTerminateApp':false,'appium:usePrebuiltWDA':true}}});
+      driverOptions});
     receipt={schemaVersion:1,passed:true,runner:'ios-xcuitest',context:'NATIVE_APP',proofOnly:true,deviceScope:device.deviceBinding.scope,appPrewarmed:true,nativeStore:'keychain-macos',
-      wdaPreparation:device.wdaPreparation,
+      wdaPreparation:device.wdaPreparation,wdaReadiness,
       brokerEntry:'installed runCli with explicit temporary KeychainMacosStore',packageTreeSha256:before,appSha256:appTree.sha256,
       buildManifestSha256:sha(manifestBytes),publicAppSourceSha256:build.publicSourceSHA256,versions:device.versions,budgets:NATIVE_PROOF_BUDGETS,...result};
     if(/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA??'')&&/^[1-9][0-9]*$/.test(process.env.GITHUB_RUN_ID??''))
       receipt.ci={sourceCommit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID};
   }catch(error){
     if(typeof error?.capturedText==='function')captured+=error.capturedText();
-    // Startup has not launched the backend, keychain, broker or any session. No
-    // credential has been supplied to native tools. Retain only this pre-auth log.
+    // The backend, keychain and broker have not started. A credential-free
+    // readiness session may exist; no credential reached native tools.
     if(!app&&!broker){
       const startupText=captured+(device?.capturedText()??'');
       scanIosCredentials(startupText,Object.values(accounts).map(item=>item.password));
