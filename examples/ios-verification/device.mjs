@@ -12,6 +12,7 @@ import { IOS_DEVICE_SCOPE, validateIosDeviceBinding, normalizeIosDeviceInventory
   snapshotIosForeignDevices, assertIosForeignSnapshot } from './device-scope.mjs';
 import { hashIosTree } from '../mobile-approval-app/build-ios.mjs';
 import { verifyPinnedWdaStartupPatch } from './tools/wda-startup-patch.mjs';
+import { createIosStartupFailure, fixedIosDeviceFailureCode, retainIosStartupFailure, tagIosCommandFailure } from './failure-facts.mjs';
 
 const UUID = /^[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}$/;
 const BUNDLE = 'dev.testlane.iosproof', MARKER = 'testlane-owned-simulator.json';
@@ -296,7 +297,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     for (const name of ['stdout', 'stderr']) state.child[name].on('data', chunk => { const text = captureIosCommandOutput(capture, kind, chunk.toString('utf8')); bytes += chunk.length;
       if (bytes > LIMIT) { overflow = true; return; } if (name === 'stdout') stdout += text; else stderr += text; });
     commands.add(state);
-    if (!await state.started) { diagnostic('start-failed'); commands.delete(state); throw fail('IOS_COMMAND_START_FAILED'); }
+    if (!await state.started) { diagnostic('start-failed'); commands.delete(state); throw tagIosCommandFailure(fail('IOS_COMMAND_START_FAILED'), kind); }
     state.child.stdin.end(); const deadline = Date.now() + timeoutMs;
     let diagnosticTask;
     if (prewarmDiagnostic?.canSample(kind) === true) {
@@ -340,7 +341,8 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       if (overflow || captured.overflowed()) throw fail('IOS_CAPTURE_LIMIT');
       completed = true;
       return { code: state.code, stdout, stderr };
-    } finally { if (diagnosticTask) await diagnosticTask; diagnostic(completed ? 'end' : 'error'); if (state.closed) commands.delete(state); }
+    } catch (error) { throw tagIosCommandFailure(error, kind); }
+    finally { if (diagnosticTask) await diagnosticTask; diagnostic(completed ? 'end' : 'error'); if (state.closed) commands.delete(state); }
   }
   const simctl = (args, options) => run('/usr/bin/xcrun', ['simctl', '--set', deviceSetPath, ...args], options);
   async function assertRoot() {
@@ -593,6 +595,8 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     return closing;
   }
   const abortLifecycle = () => { void close().catch(() => {}); };
+  let startupStage = 'owned-simulator-start';
+  const startupAt = name => { startupStage = 'device-' + name; onStage(name); };
   try {
     await writeMarker();
     await Promise.all([derivedDataPath, appiumHome, path.join(root, 'tmp'), path.join(root, 'cache')].map(dir => mkdir(dir, { recursive: true, mode: 0o700 })));
@@ -607,7 +611,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     const types = await run('/usr/bin/xcrun', ['simctl', 'list', 'devicetypes', '--json'], { timeoutMs: 120000 });
     if (runtimes.code !== 0 || types.code !== 0) throw fail('IOS_XCODE_PREREQUISITE_FAILED');
     try { target = selectIosTarget({ ...JSON.parse(runtimes.stdout), ...JSON.parse(types.stdout) }, { runtimeId, deviceType }); } catch (error) { throw /^IOS_/.test(error.message) ? error : fail('IOS_RUNTIME_METADATA_INVALID'); }
-    marker.runtimeId = target.runtimeId; marker.deviceType = target.deviceType; await writeMarker(); onStage('xcode-runtime-and-pinned-tools-validated');
+    marker.runtimeId = target.runtimeId; marker.deviceType = target.deviceType; await writeMarker(); startupAt('xcode-runtime-and-pinned-tools-validated');
     baseline = snapshotIosForeignDevices(await listOwned());
     marker.baselineSHA256 = digest(baseline);
     await writeFile(path.join(root, 'foreign-inventory.json'), JSON.stringify(baseline) + '\n', { flag: 'wx', mode: 0o600 });
@@ -619,19 +623,19 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     // fence for the CoreSimulator service. Reconciliation may clean its row,
     // but createSettled remains false and cleanup cannot claim completion.
     createSettled = true; marker.udid = acknowledgedUdid; await writeMarker();
-    onStage('owned-simulator-created');
+    startupAt('owned-simulator-created');
     const current = await assertRoot(); verifyOwnedSimulator({ expected: marker, marker: current, devices: await listOwned(), baseline, requireBooted: false });
     const boot = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'boot'));
     if (boot.code !== 0) throw fail('IOS_SIMULATOR_BOOT_FAILED');
-    onStage('owned-simulator-boot-started');
+    startupAt('owned-simulator-boot-started');
     signal?.addEventListener('abort', abortLifecycle, { once: true });
     const bootStatus = await simctl(['bootstatus', marker.udid, '-b'], { timeoutMs: 180000 });
     if (bootStatus.code !== 0) throw fail('IOS_SIMULATOR_BOOT_TIMEOUT');
     // Hosted cold boot can finish before CoreSimulator answers its first device
     // inventory query promptly. Allow that single read-only startup query more
     // time; steady-state ownership checks and all mutation budgets stay fixed.
-    await assertOwned(90000); onStage('owned-simulator-booted');
-    onStage('wda-build-for-testing'); await prepareWda(); onStage('wda-prepared');
+    await assertOwned(90000); startupAt('owned-simulator-booted');
+    startupAt('wda-build-for-testing'); await prepareWda(); startupAt('wda-prepared');
     const { Manifest } = await import(pathToFileURL(path.join(appiumRoot, 'build', 'lib', 'extension', 'manifest.js')).href);
     const manifest = new Manifest(appiumHome); await manifest.read(); manifest.addExtensionFromPackage(driverPackage, path.join(driverRoot, 'package.json'), 'local'); await manifest.write();
     live();
@@ -646,7 +650,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       if (ready) break; await sleep(300);
     }
     if (!ready) throw fail('IOS_APPIUM_READY_TIMEOUT');
-    await assertOwned(); onStage('private-appium-ready');
+    await assertOwned(); startupAt('private-appium-ready');
     const deviceBinding = validateIosDeviceBinding({ schemaVersion: 1, scope: IOS_DEVICE_SCOPE, nativeHome, deviceSetPath, privateRoot: root, udid: marker.udid, nonce: marker.nonce });
     return Object.freeze({ udid: marker.udid, serverUrl, deviceSetPath, derivedDataPath, deviceBinding, wdaPreparation, wdaPort, mjpegPort,
       versions: Object.freeze({ appium: '3.8.0', xcuitest: '12.19.1', webdriveragent: '16.16.3', xcode: xcodeVersion, ios: target.platformVersion, runtimeId: target.runtimeId, deviceType: target.deviceType }), wdaStartupPatch,
@@ -680,8 +684,10 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       close,
     });
   } catch (error) {
-    let code = /^IOS_[A-Z_]+$/.test(error.message) ? error.message : 'IOS_DEVICE_START_FAILED';
+    const startupFailure = createIosStartupFailure({ stage: startupStage, error });
+    let code = fixedIosDeviceFailureCode(error);
     try { await close(); } catch { code = 'IOS_DEVICE_CLEANUP_UNCONFIRMED'; }
-    const result = fail(code); Object.defineProperty(result, 'capturedText', { value: captured.text }); throw result;
+    const result = retainIosStartupFailure(fail(code), startupFailure);
+    Object.defineProperty(result, 'capturedText', { value: captured.text }); throw result;
   }
 }

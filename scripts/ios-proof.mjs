@@ -9,6 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {consumerProject} from '../examples/playwright/tests/consumer.mjs';
 import {sha,tree,digestTree,installedModule,proofProfiles,runProofPhases} from './native-proof-support.mjs';
 import {publicIosFailure} from '../examples/ios-verification/failure.mjs';
+import {readIosStartupFailure,retainIosStartupFailure} from '../examples/ios-verification/failure-facts.mjs';
 
 const BUNDLE='dev.testlane.iosproof';
 export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,signal,onStage=()=>{},preauthControls=false}) {
@@ -41,7 +42,7 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
   for(const file of publicFiles)assert.equal(build.publicSourceSHA256[file],sha(await readFile(path.join(consumer.packageRoot,'examples/mobile-approval-app',file))),'installed app source matches the compiled build inputs');
   const namespace='ios-'+randomBytes(8).toString('hex');
   let accounts={},identities;
-  let app,device,broker,receipt,wdaReadiness,captured='',audit='',stage='setup',workerUnconfirmed=false,deviceStartUnconfirmed=false,brokerRecovery;
+  let app,device,broker,receipt,wdaReadiness,captured='',audit='',stage='setup',workerUnconfirmed=false,deviceStartUnconfirmed=false,brokerRecovery,startupFailure;
   const at=name=>{stage=name;onStage(name);};const attempted=new Set();
   try {
     at('owned-simulator-start');
@@ -94,6 +95,7 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
       receipt.ci={sourceCommit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID};
   }catch(error){
     if(!device&&error?.message==='IOS_DEVICE_CLEANUP_UNCONFIRMED')deviceStartUnconfirmed=true;
+    startupFailure=readIosStartupFailure(error);
     if(typeof error?.capturedText==='function')captured+=error.capturedText();
     // The backend, keychain and broker have not started. A credential-free
     // readiness session may exist; no credential reached native tools.
@@ -126,7 +128,7 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
     try{await app?.close();}catch{errors.push('backend-stop');}
     if(errors.length){
       const brokerRoot=broker?.root??brokerRecovery;
-      const error=Error('IOS_PROOF_CLEANUP_INCOMPLETE');error.preserveConsumer=true;
+      const error=retainIosStartupFailure(Error('IOS_PROOF_CLEANUP_INCOMPLETE'),startupFailure);error.preserveConsumer=true;
       try{await writeFile(path.join(output,'cleanup-status.json'),JSON.stringify({status:'incomplete',steps:[...new Set(errors)],consumerRoot:consumer.root,...(brokerRoot?{brokerRoot}:{})})+'\n',{mode:0o600});}catch{}
       throw error;
     }

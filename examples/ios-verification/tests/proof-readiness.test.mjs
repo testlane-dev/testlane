@@ -42,9 +42,12 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
       return {origin:'http://127.0.0.1:43111',records(){return [];},issuedSessionTokens(){return [state.cookie];},setDefect(){},async close(){state.events.push('backend-close');}};}
   `);
   await file('examples/ios-verification/device.mjs', stateImport + `
+    import {createIosStartupFailure,retainIosStartupFailure,tagIosCommandFailure} from './failure-facts.mjs';
     export async function startOwnedIos(options){state.events.push('device-start');
       if(state.mode==='factory-unknown'){const {mkdir,writeFile}=await import('node:fs/promises');await mkdir(options.outputDir);await writeFile(options.outputDir+'/recovery.json','{"status":"manual-inspection-required"}');
-        const error=Error('IOS_DEVICE_CLEANUP_UNCONFIRMED');error.capturedText=()=>{if(state.captureThrows)throw Error('FIXTURE_CAPTURE_UNAVAILABLE');return '';};throw error;}
+        const original=createIosStartupFailure({stage:'device-owned-simulator-boot-started',error:tagIosCommandFailure(Error('IOS_COMMAND_TIMEOUT'),'owned-device-list')});
+        const error=retainIosStartupFailure(Error('IOS_DEVICE_CLEANUP_UNCONFIRMED'),original);
+        error.capturedText=()=>{if(state.captureThrows)throw Error('FIXTURE_CAPTURE_UNAVAILABLE');return '';};throw error;}
       state.deviceDiagnostics={diagnostics:options.diagnostics??false,prewarmDiagnostics:options.prewarmDiagnostics??false};const binding={schemaVersion:1,scope:'ephemeral-hosted-standard-device-set',
       nativeHome:'/Users/runner',deviceSetPath:'/Users/runner/Library/Developer/CoreSimulator/Devices',privateRoot:'/private/tmp/tld-ios-abc123',
       udid:'FA001122-3344-5566-7788-9900AABBCCDD',nonce:'a'.repeat(24)};
@@ -69,7 +72,7 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
         async close(){state.events.push('installed-driver-close');
         if(state.mode==='close-failed')throw Object.assign(Error('private-fixture-native-message'),{code:'NATIVE_DRIVER_TIMEOUT'});}};}
   `);
-  for (const name of ['readiness.mjs', 'device-scope.mjs', 'preauth-controls.mjs']) await file('examples/ios-verification/' + name, await readFile(new URL('../' + name, import.meta.url)));
+  for (const name of ['readiness.mjs', 'device-scope.mjs', 'preauth-controls.mjs', 'failure-facts.mjs']) await file('examples/ios-verification/' + name, await readFile(new URL('../' + name, import.meta.url)));
   await file('examples/android-verification/worker-host.mjs', stateImport + `export function runNativeWorker(){
     if(!state.lateStartupFailure)throw Error('WORKER_NOT_EXPECTED');state.events.push('worker-start');
     return {report:{verdict:'blocked',reasonCodes:['NATIVE_DRIVER_SESSION_TIMEOUT'],cases:[]},captured:''};}`);
@@ -202,7 +205,11 @@ test('unconfirmed factory cleanup preserves recovery and consumer before any han
   for (const captureThrows of [false, true]) {
     const owned = await fixture('factory-unknown', { captureThrows });
     try {
-      await assert.rejects(runIosProof(owned.options), error => error.message === 'IOS_PROOF_CLEANUP_INCOMPLETE' && error.preserveConsumer === true);
+      let failure;
+      await assert.rejects(runIosProof(owned.options), error => { failure=error; return error.message === 'IOS_PROOF_CLEANUP_INCOMPLETE' && error.preserveConsumer === true; });
+      const summary=await publicIosFailure({output:owned.outputDir,stage:'cleanup',error:failure});
+      assert.equal(summary.code,'IOS_PROOF_CLEANUP_INCOMPLETE');
+      assert.deepEqual(summary.startupFailure,{stage:'device-owned-simulator-boot-started',code:'IOS_COMMAND_TIMEOUT',commandKind:'owned-device-list'});
       assert.equal(owned.state.accounts, 0); assert.equal(owned.state.broker, 0); assert.equal(owned.state.close, 0);
       const status = JSON.parse(await readFile(path.join(owned.outputDir, 'cleanup-status.json'), 'utf8'));
       assert.ok(status.steps.includes('device-start'));
