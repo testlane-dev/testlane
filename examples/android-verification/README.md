@@ -60,16 +60,21 @@ Playwright dependencies are installed, but native actions use only UiAutomator2.
 The proof then:
 
 1. Starts a new owned emulator, private ADB server and Appium home, and installs the
-   proof APK before touching the credential store.
-2. Starts the public synthetic backend and generates separate Editor and Reviewer
-   credentials. It seeds only unique scratch profiles through stdin.
-3. Uses the real broker to obtain live sessions, deletes its temporary session files,
-   and scopes a reverse loopback connection to that device.
-4. Runs all five cases with native controls and independent backend observations.
-5. Enables a one-cent total defect in the backend, reruns the unchanged cases, removes
+   proof APK before generating passwords or starting the backend and broker.
+2. Uses the installed Android driver with the same frozen options as the workers to
+   create one setup session, verify `NATIVE_APP`, run its existing
+   `waitFor('session-status')` check, and acknowledge deletion of that exact session.
+   Failure or cancellation blocks all credential creation and defers unknown native
+   outcomes to the owned-device teardown; session close is never retried.
+3. Generates separate Editor and Reviewer credentials, starts the public synthetic
+   backend and seeds only unique scratch profiles through stdin.
+4. Uses the real broker to obtain live sessions, deletes its temporary session files,
+   and scopes a reverse loopback connection to the same owned device.
+5. Runs all five cases with native controls and independent backend observations.
+6. Enables a one-cent total defect in the backend, reruns the unchanged cases, removes
    the defect, and reruns again. The APK, plan, case source and installed package must
    retain their hashes throughout.
-6. Confirms record absence independently, removes native-store entries and verifies
+7. Confirms record absence independently, removes native-store entries and verifies
    their absence, stops owned processes, and scans retained output for credentials.
 
 ## Cases and evidence
@@ -92,6 +97,19 @@ reports and a receipt with APK, plan, source and installed-package hashes. Repor
 retain case IDs, counts, fixed diagnostics and cleanup status. They omit actual and
 expected values, exception text, UI hierarchies, screenshots, video and logcat.
 Hashes bind inputs; they do not authenticate arbitrary reports or assess test quality.
+
+A fixed `readiness.json` is written only after the credential-free setup session
+observes the app-owned readiness element and its DELETE request succeeds. It records
+setup/readiness timings and acknowledged session deletion, not final device teardown
+or a business-test pass. This is a staging and privacy gate, not a proven fix for
+intermittent Appium startup failures or evidence of cold-start performance. Each
+worker must still establish its own session and satisfy all existing case assertions.
+
+Only a setup failure before any password, backend or broker exists may retain the
+factory's existing bounded error-level output as ignored `preauth-device.log`.
+The fixed `readiness-failure.json` contains only an allowlisted diagnosis. No raw
+native failure log is retained after credential creation, and Appium verbosity,
+logcat capture, retries and request/case budgets are unchanged.
 
 The [initial Android evidence](../../docs/mobile-evidence/android-emulator-2026-10-19.public.json)
 and the [shared iOS-change regression](../../docs/verification/native-2026-10-19/android-ios-regression.public.json)

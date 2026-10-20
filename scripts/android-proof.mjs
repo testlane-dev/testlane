@@ -21,6 +21,8 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
   const {startDemoApp}=await moduleFrom('examples/verification-demo/app.mjs');
   const {runDemoChild}=await moduleFrom('examples/verification-demo/native.mjs');
   const {startOwnedAndroid}=await moduleFrom('examples/android-verification/device.mjs');
+  const {createNativeDriver}=await moduleFrom('examples/android-verification/driver.mjs');
+  const {androidProofDriverOptions,verifyInstalledAndroidReadiness,androidReadinessFailure}=await moduleFrom('examples/android-verification/readiness.mjs');
   const {runNativeWorker}=await moduleFrom('examples/android-verification/worker-host.mjs');
   const {validateNativePlan,sanitizeNativeReport}=await moduleFrom('examples/android-verification/contracts.mjs');
   const {APPROVAL_REQUIREMENTS}=await moduleFrom('examples/android-verification/proof-cases.mjs');
@@ -34,9 +36,8 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
   assert.deepEqual(Object.keys(build.publicSourceSHA256).sort(),[...publicFiles].sort());
   for(const file of publicFiles)assert.equal(build.publicSourceSHA256[file],sha(await readFile(path.join(consumer.packageRoot,'examples/mobile-approval-app',file))),'APK build inputs match installed public app source');
   const namespace='android-'+randomBytes(8).toString('hex');
-  const accounts=Object.fromEntries(['editor','reviewer'].map(role=>[role,{email:namespace+'-'+role+'@example.test',role:role==='editor'?'Editor':'Reviewer',password:randomBytes(32).toString('base64url')}]));
-  const identities=Object.fromEntries(Object.entries(accounts).map(([role,{email,role:label}])=>[role,{email,role:label}]));
-  let app,harness,device,cli,captured='',receipt,cleanupOK=true,stage='setup',workerUnconfirmed=false;const attempted=new Set();
+  let accounts={},identities,preauthDiagnosticsAllowed=true;
+  let app,harness,device,cli,captured='',receipt,androidReadiness,cleanupOK=true,stage='setup',workerUnconfirmed=false,deviceStartUnconfirmed=false;const attempted=new Set();
   const at=name=>{stage=name;onStage(name);};
   try {
     at('owned-device-start');
@@ -47,6 +48,19 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
       onStage:name=>at('device-'+name)});}
     finally {signal?.removeEventListener('abort',cancelStartup);}
     signal?.throwIfAborted();await device.installApk(apkFile);
+    const driverOptions=androidProofDriverOptions(device);
+    at('android-readiness');
+    androidReadiness=await verifyInstalledAndroidReadiness({createNativeDriver,driverOptions,assertOwned:()=>device.assertOwned(),signal});
+    signal?.throwIfAborted();
+    assert.equal(await digestTree(consumer.packageRoot),before);
+    assert.equal(sha(await readFile(apkFile)),apkSha256);assert.equal(sha(await readFile(buildManifestFile)),sha(buildBytes));
+    await writeFile(path.join(output,'readiness.json'),JSON.stringify(androidReadiness,null,2)+'\n',{flag:'wx',mode:0o600});
+    signal?.throwIfAborted();
+    // Revoke before allocation starts: a partial allocation can throw while
+    // accounts is still empty, but native logs must never become eligible again.
+    preauthDiagnosticsAllowed=false;at('credential-allocation');
+    accounts=Object.fromEntries(['editor','reviewer'].map(role=>[role,{email:namespace+'-'+role+'@example.test',role:role==='editor'?'Editor':'Reviewer',password:randomBytes(32).toString('base64url')}]));
+    identities=Object.fromEntries(Object.entries(accounts).map(([role,{email,role:label}])=>[role,{email,role:label}]));
     at('broker-setup');app=await startDemoApp({accounts});
     harness=await createRealBrokerHarness({brokerCli:consumer.brokerCli,support,registry:proofProfiles(namespace,app.origin,accounts)});
     const env={...harness.env,DEBUG:'',NODE_DEBUG:'',NODE_OPTIONS:'',TMP:consumer.sessionTemp,TEMP:consumer.sessionTemp,TMPDIR:consumer.sessionTemp};
@@ -75,20 +89,30 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
     const result=await runProofPhases({consumer,app,device,plan,cookies,identities,output,before,runWorker:runNativeWorker,sanitize:sanitizeNativeReport,signal,
       workerTimeoutMs:NATIVE_PROOF_BUDGETS.workerMs,onStage:at,onCaptured:value=>{captured+=value;},onWorkerRisk:()=>{workerUnconfirmed=true;},
       assertBuildUnchanged:async()=>{assert.equal(sha(await readFile(apkFile)),apkSha256);assert.equal(sha(await readFile(buildManifestFile)),sha(buildBytes));},
-      driverOptions:{url:device.serverUrl,capabilities:{platformName:'Android','appium:automationName':'UiAutomator2','appium:udid':device.serial,
-        'appium:appPackage':PACKAGE,'appium:appActivity':'.MainActivity','appium:remoteAdbHost':'127.0.0.1','appium:adbPort':device.adbPort,
-        'appium:systemPort':device.systemPort,'appium:skipLogcatCapture':true,'appium:suppressKillServer':true,
-        'appium:printPageSourceOnFindFailure':false,'appium:noReset':true,'appium:newCommandTimeout':90}}});
+      driverOptions});
     receipt={schemaVersion:1,passed:true,runner:'android-uiautomator2',context:'NATIVE_APP',proofOnly:true,nativeStore:support.store,
       packageTreeSha256:before,apkSha256,buildManifestSha256:sha(buildBytes),publicAppSourceSha256:Object.fromEntries(publicFiles.map(file=>[file,build.publicSourceSHA256[file]])),
-      versions:device.versions,budgets:NATIVE_PROOF_BUDGETS,...result};
+      androidReadiness,versions:device.versions,budgets:NATIVE_PROOF_BUDGETS,...result};
   } catch(error) {
+    // A factory can fail its own teardown before returning a device handle.
+    // Arm preservation before diagnostic work, which may itself fail.
+    if(!device&&error?.message==='ANDROID_DEVICE_CLEANUP_UNCONFIRMED')deviceStartUnconfirmed=true;
     if(typeof error?.capturedText==='function')captured+=error.capturedText();
+    // Only setup before even generating passwords may retain existing bounded
+    // error-level native output. Authenticated failures never write this log.
+    if(preauthDiagnosticsAllowed&&Object.keys(accounts).length===0&&!app&&!harness){
+      const startupText=captured+(device?.capturedText()??'');
+      assert.ok(Buffer.byteLength(startupText)<=8*1024*1024,'existing native capture bound');
+      assertNoLeaks(startupText,Object.values(accounts).map(item=>item.password));
+      await writeFile(path.join(output,'preauth-device.log'),startupText,{flag:'wx',mode:0o600});
+      if(stage==='android-readiness')await writeFile(path.join(output,'readiness-failure.json'),JSON.stringify(androidReadinessFailure(error),null,2)+'\n',{flag:'wx',mode:0o600});
+    }
     if(/TERMINATION_UNCONFIRMED|STOP_UNCONFIRMED/.test(String(error?.code??error?.message??'')))workerUnconfirmed=true;
     throw error;
   } finally {
     const priorStage=stage;at('cleanup');
     const errors=workerUnconfirmed?['worker-stop']:[];
+    if(deviceStartUnconfirmed)errors.push('device-start');
     if(device) {try{await device.close();}catch{errors.push('device-stop');}captured+=device.capturedText();}
     if(harness) {
       for(const profile of attempted) {
@@ -105,8 +129,12 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
     if(app?.records().length)errors.push('owned-records');
     if((await readdir(recovery)).length)errors.push('recovery-journal');
     try{await app?.close();}catch{errors.push('backend-stop');}
-    if(errors.length) {await writeFile(path.join(output,'cleanup-status.json'),JSON.stringify({status:'incomplete',steps:errors,consumerRoot:consumer.root})+'\n',{mode:0o600});
-      const error=Error('ANDROID_PROOF_CLEANUP_INCOMPLETE');error.preserveConsumer=true;throw error;}
+    if(errors.length) {
+      const error=Error('ANDROID_PROOF_CLEANUP_INCOMPLETE');error.preserveConsumer=true;
+      try{await writeFile(path.join(output,'cleanup-status.json'),JSON.stringify({status:'incomplete',steps:errors,consumerRoot:consumer.root})+'\n',{mode:0o600});}
+      catch{/* Metadata failure cannot revoke preservation of uncertain owned state. */}
+      throw error;
+    }
     at(priorStage);
   }
   assert.equal((await readdir(consumer.sessionTemp)).length,0);
