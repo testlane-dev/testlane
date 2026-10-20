@@ -12,7 +12,7 @@ const identifier = value => typeof value === 'string' && value.length > 0 && val
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
 const port = value => Number.isSafeInteger(value) && value >= 1024 && value <= 65535;
 const optionalCaps = ['appium:deviceName', 'appium:platformVersion', 'appium:newCommandTimeout', 'appium:waitForIdleTimeout',
-  'appium:wdaLaunchTimeout', 'appium:wdaConnectionTimeout'];
+  'appium:wdaLaunchTimeout', 'appium:wdaConnectionTimeout', 'appium:isHeadless'];
 const requiredCaps = ['platformName', 'appium:automationName', 'appium:udid', 'appium:bundleId', 'appium:simulatorDevicesSetPath',
   'appium:derivedDataPath', 'appium:wdaLocalPort', 'appium:wdaRemotePort', 'appium:wdaBindingIP', 'appium:wdaBaseUrl', 'appium:mjpegServerPort',
   'appium:skipLogCapture', 'appium:showIOSLog', 'appium:showXcodeLog', 'appium:printPageSourceOnFindFailure',
@@ -38,18 +38,23 @@ export async function createNativeDriver({ url, capabilities: supplied, signal, 
       !['appium:skipLogCapture', 'appium:disableAutomaticScreenshots', 'appium:noReset'].every(key => supplied[key] === true) ||
       !['appium:showIOSLog', 'appium:showXcodeLog', 'appium:printPageSourceOnFindFailure', 'appium:shutdownOtherSimulators', 'appium:resetLocationService'].every(key => supplied[key] === false) ||
       Object.keys(supplied).some(key => !requiredCaps.includes(key) && !optionalCaps.includes(key)) || typeof assertOwned !== 'function' ||
-      (keyboardDismissId !== undefined && !identifier(keyboardDismissId))) throw new Error();
+      (keyboardDismissId !== undefined && !identifier(keyboardDismissId)) ||
+      (supplied['appium:isHeadless'] !== undefined && supplied['appium:isHeadless'] !== true)) throw new Error();
     for (const key of ['appium:deviceName', 'appium:platformVersion']) if (supplied[key] !== undefined && !identifier(supplied[key])) throw new Error();
     for (const key of ['appium:newCommandTimeout', 'appium:waitForIdleTimeout', 'appium:wdaLaunchTimeout', 'appium:wdaConnectionTimeout']) {
       if (supplied[key] !== undefined && (!Number.isFinite(supplied[key]) || supplied[key] < 0 || supplied[key] > 240_000)) throw new Error();
     }
-    capabilities = structuredClone(supplied);
+    // The owner has already booted this private Simulator without a UI client.
+    // Avoid Appium rebooting it just to make a Simulator window visible.
+    capabilities = { ...structuredClone(supplied), 'appium:isHeadless': true };
   } catch { throw fail('NATIVE_DRIVER_CONFIGURATION_INVALID'); }
   let session, closed = false;
   async function request(method, route, body, requestSignal = signal, timeoutMs = 5000) {
     if (requestSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
+    const deadline = performance.now() + timeoutMs;
     const timer = new AbortController(), timeout = setTimeout(() => timer.abort(), timeoutMs);
     const operationSignal = requestSignal ? AbortSignal.any([requestSignal, timer.signal]) : timer.signal;
+    const checkDeadline = () => { if (performance.now() >= deadline) { timer.abort(); throw fail('NATIVE_DRIVER_TIMEOUT'); } };
     let ownerTimer;
     try {
       const allowed = await withDriverSignal(() => Promise.race([Promise.resolve().then(assertOwned), new Promise((_, reject) => {
@@ -59,17 +64,19 @@ export async function createNativeDriver({ url, capabilities: supplied, signal, 
       if (allowed !== true) throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED');
       if (requestSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
       if (timer.signal.aborted) throw fail('NATIVE_DRIVER_TIMEOUT');
-      const response = await fetch(origin + route, { method, redirect: 'error', signal: operationSignal,
-        headers: { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      checkDeadline();
+      const response = await withDriverSignal(() => fetch(origin + route, { method, redirect: 'error', signal: operationSignal,
+        headers: { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), operationSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
       const reader = response.body?.getReader(); if (!reader) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
       let length = 0; const chunks = [];
       for (;;) {
-        const { value, done } = await reader.read(); if (done) break;
+        const { value, done } = await withDriverSignal(() => reader.read(), operationSignal, () => fail('NATIVE_DRIVER_CANCELLED')); if (done) break;
         length += value.byteLength;
-        if (length > 64 * 1024) { await reader.cancel(); throw fail('NATIVE_DRIVER_RESPONSE_INVALID'); }
+        if (length > 64 * 1024) { await withDriverSignal(() => reader.cancel(), operationSignal, () => fail('NATIVE_DRIVER_CANCELLED')); throw fail('NATIVE_DRIVER_RESPONSE_INVALID'); }
         chunks.push(Buffer.from(value));
       }
       let decoded; try { decoded = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw fail('NATIVE_DRIVER_RESPONSE_INVALID'); }
+      checkDeadline();
       if (!decoded || typeof decoded !== 'object' || !Object.hasOwn(decoded, 'value')) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
       if (!response.ok || decoded.value?.error !== undefined) {
         if (response.status === 404 && decoded.value?.error === 'no such element') return { missing: true };

@@ -56,7 +56,9 @@ async function fixture() {
 test('iOS driver uses exact owned Simulator caps, value observations and bounded W3C touch actions only', async () => {
   const appium = await fixture(); let checks = 0;
   try {
-    const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), assertOwned: () => { checks++; return true; } });
+    const requested = caps(), driver = await createNativeDriver({ url: appium.url, capabilities: requested, assertOwned: () => { checks++; return true; } });
+    assert.equal(appium.calls[0].body.capabilities.alwaysMatch['appium:isHeadless'], true);
+    assert.equal(Object.hasOwn(requested, 'appium:isHeadless'), false, 'headless mode does not mutate caller capabilities');
     assert.equal(driver.context, 'NATIVE_APP'); assert.equal(driver.sessionId, undefined);
     assert.equal(await driver.text('request-total'), appium.secret);
     assert.equal(appium.calls.some(call => call.path.endsWith('/text')), false, 'explicit accessibility value precedes an identifier label');
@@ -134,7 +136,7 @@ test('real devices, global paths/lifecycle, signing, WebViews and missing privac
       c => { c['appium:showXcodeLog'] = true; }, c => { c['appium:skipLogCapture'] = false; }, c => { c['appium:disableAutomaticScreenshots'] = false; },
       c => { c['appium:printPageSourceOnFindFailure'] = true; }, c => { c['appium:wdaBindingIP'] = '0.0.0.0'; },
       c => { c['appium:wdaRemotePort']++; }, c => { c.browserName = 'Safari'; }, c => { c['appium:autoWebview'] = true; },
-      c => { c['appium:mjpegServerPort'] = c['appium:wdaLocalPort']; },
+      c => { c['appium:mjpegServerPort'] = c['appium:wdaLocalPort']; }, c => { c['appium:isHeadless'] = false; },
       c => { c['appium:webDriverAgentUrl'] = 'http://example.test'; }, c => { c['appium:keychainPath'] = '/private/keychain'; },
       c => { c['appium:processArguments'] = { args: ['private'] }; }, c => { c['appium:app'] = '/arbitrary.app'; }]) {
       const capabilities = caps(); mutate(capabilities);
@@ -240,6 +242,24 @@ test('iOS pre-cancelled setup does not contact Appium or the parent controller',
       assertOwned: () => { calls++; return true; } }), { code: 'NATIVE_DRIVER_CANCELLED' });
     assert.equal(appium.calls.length, 0); assert.equal(calls, 0);
   } finally { await appium.close(); }
+});
+
+test('iOS rejects a successful session response delivered after its monotonic deadline', async t => {
+  let now = 0; const routes = [];
+  t.mock.method(performance, 'now', () => now);
+  t.mock.method(globalThis, 'fetch', async url => {
+    routes.push(new URL(url).pathname); now = 240_001;
+    return new Response(JSON.stringify({ value: { sessionId: 'late-owned-session' } }));
+  });
+  await assert.rejects(createNativeDriver({ url: 'http://127.0.0.1:4723', capabilities: caps(), assertOwned: () => true }), { code: 'NATIVE_DRIVER_SESSION_TIMEOUT' });
+  assert.deepEqual(routes, ['/session'], 'a late response cannot start native actions or invent an addressable session');
+});
+
+test('iOS cancellation settles even if an underlying HTTP promise ignores abort', async t => {
+  const entered = Promise.withResolvers(), controller = new AbortController();
+  t.mock.method(globalThis, 'fetch', async () => { entered.resolve(); return new Promise(() => {}); });
+  const rejected = assert.rejects(createNativeDriver({ url: 'http://127.0.0.1:4723', capabilities: caps(), signal: controller.signal, assertOwned: () => true }), { code: 'NATIVE_DRIVER_CANCELLED' });
+  await promptly(entered.promise); controller.abort(); await promptly(rejected);
 });
 
 test('iOS cold WDA setup alone gets 240 seconds and fixed session/context/readiness timeouts retain no payload', async t => {

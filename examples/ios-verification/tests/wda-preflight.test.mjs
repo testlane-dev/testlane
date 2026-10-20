@@ -59,6 +59,7 @@ test('credential-free probe creates once, checks native context and deletes only
     const caps=fixture.calls[0].body.capabilities.alwaysMatch;
     assert.equal(caps['appium:showXcodeLog'],true);assert.equal(caps['appium:skipLogCapture'],true);assert.equal(caps['appium:disableAutomaticScreenshots'],true);
     assert.equal(caps['appium:printPageSourceOnFindFailure'],false);assert.equal(caps['appium:bundleId'],'dev.testlane.iosproof');
+    assert.equal(caps['appium:isHeadless'],true);
     assert.equal(Object.hasOwn(caps,'appium:processArguments'),false);
   }finally{await fixture.close();}
 });
@@ -92,4 +93,21 @@ test('session setup preserves its 240-second bound and cancellation never prints
   const device={serverUrl:'http://127.0.0.1:8210/',assertOwned:async()=>true};
   await assert.rejects(probeOwnedWdaSession({device}),error=>error.message==='IOS_WDA_SESSION_TIMEOUT'&&!String(error.stack).includes('untrusted-native-payload'));
   assert.equal(budget,240000);
+});
+
+test('credential-free diagnostic refuses a successful response that arrives after its monotonic deadline',async t=>{
+  let now=0;const routes=[];
+  t.mock.method(performance,'now',()=>now);
+  t.mock.method(globalThis,'fetch',async url=>{routes.push(new URL(url).pathname);now=240001;return new Response(JSON.stringify({value:{sessionId:'late-owned-session'}}));});
+  await assert.rejects(probeOwnedWdaSession({device:{serverUrl:'http://127.0.0.1:8210/',assertOwned:async()=>true}}),error=>
+    error.message==='IOS_WDA_SESSION_TIMEOUT'&&error.sessionCleanup==='not-addressable'&&error.sessionCreated===false);
+  assert.deepEqual(routes,['/session']);
+});
+
+test('credential-free request cancellation settles without relying on HTTP abort-drain behavior',async t=>{
+  const entered=Promise.withResolvers(),controller=new AbortController();
+  t.mock.method(globalThis,'fetch',async()=>{entered.resolve();return new Promise(()=>{});});
+  const pending=assert.rejects(probeOwnedWdaSession({device:{serverUrl:'http://127.0.0.1:8210/',assertOwned:async()=>true},signal:controller.signal}),
+    error=>error.message==='IOS_WDA_CANCELLED'&&error.sessionCleanup==='not-addressable');
+  await promptly(entered.promise);controller.abort();await promptly(pending);
 });

@@ -64,7 +64,7 @@ function capabilities(device) {
     'appium:wdaBaseUrl':'http://127.0.0.1','appium:mjpegServerPort':device.mjpegPort,'appium:skipLogCapture':true,
     'appium:showIOSLog':false,'appium:showXcodeLog':true,'appium:printPageSourceOnFindFailure':false,
     'appium:disableAutomaticScreenshots':true,'appium:shutdownOtherSimulators':false,'appium:resetLocationService':false,
-    'appium:noReset':true,'appium:newCommandTimeout':90,'appium:waitForIdleTimeout':1,
+    'appium:noReset':true,'appium:isHeadless':true,'appium:newCommandTimeout':90,'appium:waitForIdleTimeout':1,
     'appium:wdaLaunchTimeout':120000,'appium:wdaConnectionTimeout':5000};
 }
 /** One fixed session attempt, one context read, one exact-session deletion. No app actions or credentials. */
@@ -76,19 +76,23 @@ export async function probeOwnedWdaSession({device,signal,onStage=()=>{},onRawRe
   async function request(kind,{activeSignal=signal}={}) {
     if(activeSignal?.aborted)throw fail('IOS_WDA_CANCELLED');
     const timed=new AbortController(),budget=kind==='create'?240000:5000,timer=setTimeout(()=>timed.abort(),budget);
+    const deadline=performance.now()+budget;
     const combined=activeSignal?AbortSignal.any([activeSignal,timed.signal]):timed.signal;
+    const checkDeadline=()=>{if(performance.now()>=deadline){timed.abort();throw fail(kind==='create'?'IOS_WDA_SESSION_TIMEOUT':'IOS_WDA_REQUEST_TIMEOUT');}};
     try {
       const owned=await withDriverSignal(()=>device.assertOwned(),combined,()=>fail('IOS_WDA_CANCELLED'));
       if(owned!==true)throw fail('IOS_WDA_OWNERSHIP_REFUSED');
       if(combined.aborted)throw Error();
+      checkDeadline();
       const route=kind==='create'?'/session':'/session/'+encodeURIComponent(session)+(kind==='context'?'/context':'');
-      const response=await fetch(origin+route,{method:kind==='create'?'POST':kind==='context'?'GET':'DELETE',signal:combined,redirect:'error',
-        headers:{'Content-Type':'application/json'},...(kind==='create'?{body:JSON.stringify({capabilities:{alwaysMatch:capabilities(device),firstMatch:[{}]}})}:{})});
+      const response=await withDriverSignal(()=>fetch(origin+route,{method:kind==='create'?'POST':kind==='context'?'GET':'DELETE',signal:combined,redirect:'error',
+        headers:{'Content-Type':'application/json'},...(kind==='create'?{body:JSON.stringify({capabilities:{alwaysMatch:capabilities(device),firstMatch:[{}]}})}:{})}),combined,()=>fail('IOS_WDA_CANCELLED'));
       const reader=response.body?.getReader();if(!reader)throw fail('IOS_WDA_RESPONSE_INVALID');
       let length=0;const chunks=[];
-      for(;;){const {value,done}=await reader.read();if(done)break;length+=value.byteLength;if(length>RESPONSE_LIMIT){await reader.cancel();throw fail('IOS_WDA_RESPONSE_INVALID');}chunks.push(Buffer.from(value));}
+      for(;;){const {value,done}=await withDriverSignal(()=>reader.read(),combined,()=>fail('IOS_WDA_CANCELLED'));if(done)break;length+=value.byteLength;if(length>RESPONSE_LIMIT){await withDriverSignal(()=>reader.cancel(),combined,()=>fail('IOS_WDA_CANCELLED'));throw fail('IOS_WDA_RESPONSE_INVALID');}chunks.push(Buffer.from(value));}
       const raw=Buffer.concat(chunks).toString('utf8');let decoded;
       try{decoded=JSON.parse(raw);}catch{onRawResponse(raw);throw fail('IOS_WDA_RESPONSE_INVALID');}
+      checkDeadline();
       if(!response.ok||!decoded||typeof decoded!=='object'||!Object.hasOwn(decoded,'value')||decoded.value?.error!==undefined){onRawResponse(raw);throw fail('IOS_WDA_REQUEST_FAILED');}
       return decoded.value;
     }catch(caught){

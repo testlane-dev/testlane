@@ -18,6 +18,9 @@ macOS runner** with `TESTLANE_IOS_PROOF_CI=1`. It also requires GitHub's
 `GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT=github-hosted` indicators. Do not
 spoof these variables to run it on a personal Mac or a self-hosted runner. They
 guard the intended environment; they do not sandbox code running as the same user.
+The driver requests headless startup so Appium preserves the owned boot instead of
+restarting it to open a GUI. Appium's headless mode can terminate Simulator UI
+clients; this is another reason the experiment is confined to an ephemeral host.
 
 The runner needs:
 
