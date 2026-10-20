@@ -82,7 +82,10 @@ before sessions and between phases. Session creation requires the prebuilt runne
 uncertain compilation blocks authentication. Setup launches the unauthenticated
 proof app before WDA attaches, with one startup attempt and no forced relaunch.
 The 240-second session and ordinary five-second command limits remain separate
-from compilation. The proof checks authenticated workflows after that setup;
+from compilation. One live ownership check after session creation belongs to the
+remaining startup budget, capped at 20 seconds; later checks retain their ordinary
+limits. Repeated inventory responses are validated in full without retaining their
+raw payloads in the bounded diagnostic log. The proof checks authenticated workflows after that setup;
 it does not establish cold app-start performance.
 
 Generated sandbox credentials pass through the real installed CLI and an explicitly

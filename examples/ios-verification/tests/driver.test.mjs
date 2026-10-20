@@ -324,6 +324,58 @@ test('iOS cold WDA setup alone gets 240 seconds and fixed session/context/readin
       });
     } finally { if (driver) await driver.close(); }
   }
-  assert.ok(calls.some(call => call.route === '/session' && call.milliseconds === 240_000));
+  assert.ok(calls.some(call => call.route === '/session' && call.milliseconds > 239_900 && call.milliseconds <= 240_000));
   assert.equal(calls.some(call => call.route !== '/session' && call.milliseconds > 5000), false); assert.equal(active.size, 0);
+});
+
+test('iOS setup accepts one seven-second logical ownership stabilization then performs a fresh ordinary context guard', async t => {
+  let now = 0, owners = 0; const routes = [];
+  t.mock.method(performance, 'now', () => now);
+  t.mock.method(globalThis, 'fetch', async url => {
+    const route = new URL(url).pathname; routes.push(route);
+    if (route === '/session') now = 90000;
+    return new Response(JSON.stringify({ value: route === '/session' ? { sessionId: 'owned-ios-session' } : route.endsWith('/context') ? 'NATIVE_APP' : null }));
+  });
+  const driver = await createNativeDriver({ deviceBinding: binding(), url: 'http://127.0.0.1:4723', capabilities: caps(),
+    assertOwned: () => { if (++owners === 2) now += 7000; return true; } });
+  assert.equal(owners, 3, 'initial guard, one stabilization, then a fresh context guard');
+  assert.deepEqual(routes, ['/session', '/session/owned-ios-session/context']);
+  await driver.close(); assert.equal(owners, 4);
+});
+
+test('iOS setup shares its original 240-second deadline and retains a known session without sending later HTTP', async t => {
+  let now = 0, owners = 0; const routes = [];
+  t.mock.method(performance, 'now', () => now);
+  t.mock.method(globalThis, 'fetch', async url => { routes.push(new URL(url).pathname); now = 239000;
+    return new Response(JSON.stringify({ value: { sessionId: 'owned-ios-session' } })); });
+  await assert.rejects(createNativeDriver({ deviceBinding: binding(), url: 'http://127.0.0.1:4723', capabilities: caps(),
+    assertOwned: () => { if (++owners === 2) now += 1001; return true; } }), { code: 'NATIVE_DRIVER_SESSION_TIMEOUT' });
+  assert.equal(owners, 2); assert.deepEqual(routes, ['/session']);
+});
+
+test('iOS failed setup stabilization permanently fences late ACKs, fresh guards and deletion', async t => {
+  let now = 0, expire, routes; const originalTimer = globalThis.setTimeout;
+  t.mock.method(performance, 'now', () => now);
+  t.mock.method(globalThis, 'setTimeout', (fn, ms, ...args) => { if (ms === 20000) expire = fn; return originalTimer(fn, ms, ...args); });
+  t.mock.method(globalThis, 'fetch', async url => { routes.push(new URL(url).pathname); return new Response(JSON.stringify({ value: { sessionId: 'owned-ios-session' } })); });
+  for (const mode of ['timeout', 'cancelled', 'rejected']) {
+    now = 0; routes = []; const entered = Promise.withResolvers(), gate = Promise.withResolvers(), controller = new AbortController(); let owners = 0;
+    const rejected = assert.rejects(createNativeDriver({ deviceBinding: binding(), url: 'http://127.0.0.1:4723', capabilities: caps(), signal: controller.signal,
+      assertOwned: () => { if (++owners === 2) { entered.resolve(); return gate.promise; } return true; } }),
+    { code: mode === 'cancelled' ? 'NATIVE_DRIVER_CANCELLED' : 'NATIVE_DRIVER_OWNERSHIP_REFUSED' });
+    await entered.promise;
+    if (mode === 'timeout') { now = 20000; expire(); } else if (mode === 'cancelled') controller.abort(); else gate.reject(Error('private-callback-value'));
+    await rejected; gate.resolve(true); await Promise.resolve(); await Promise.resolve();
+    assert.equal(owners, 2); assert.deepEqual(routes, ['/session']);
+  }
+});
+
+test('an unconfirmed initial context guard also fences setup cleanup while its late ACK remains pending', async t => {
+  const controller = new AbortController(), gate = Promise.withResolvers(), entered = Promise.withResolvers(), routes = []; let owners = 0;
+  t.mock.method(globalThis, 'fetch', async url => { routes.push(new URL(url).pathname); return new Response(JSON.stringify({ value: { sessionId: 'owned-ios-session' } })); });
+  const rejected = assert.rejects(createNativeDriver({ deviceBinding: binding(), url: 'http://127.0.0.1:4723', capabilities: caps(), signal: controller.signal,
+    assertOwned: () => { if (++owners === 3) { entered.resolve(); return gate.promise; } return true; } }), { code: 'NATIVE_DRIVER_CANCELLED' });
+  await entered.promise; controller.abort(); await rejected;
+  gate.resolve(true); await Promise.resolve(); await Promise.resolve();
+  assert.equal(owners, 3); assert.deepEqual(routes, ['/session']);
 });

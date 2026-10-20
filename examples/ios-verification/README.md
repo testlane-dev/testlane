@@ -187,7 +187,13 @@ Each compound role-loading and native UI case has a 90-second body budget,
 15 seconds for cleanup and up to 5 seconds to settle after abort. The installed
 shared `budgets.mjs` declares these bounds and the 600-second outer worker ceiling;
 cases run once without retries. Appium/WebDriverAgent session creation has
-its own 240-second ceiling within that outer limit. The separate 300-second WDA
+its own 240-second ceiling within that outer limit. After receiving a valid session
+ID, setup performs one live ownership check within the remaining startup budget,
+capped at 20 seconds. Ordinary ownership and command checks retain their
+five-second limits. An unconfirmed setup check prevents subsequent native actions;
+session deletion is reported unknown if the prior operation cannot be confirmed
+settled, and the controller fences it through owned-device teardown.
+The separate 300-second WDA
 compile happens during device setup, before the worker and credentials exist;
 it does not extend session or business-case deadlines. Fixed numeric `timings.json`
 metrics retain per-phase elapsed time and ownership-check RPC counts/time even on
@@ -207,6 +213,12 @@ baseline or owned device identifiers. Reports omit raw exceptions, response bodi
 logs. Temporary driver text stays bounded in memory and is checked for generated
 credential variants. Uncertain teardown fails the proof and retains private recovery
 metadata; failure output must be reviewed before sharing.
+
+Repeated device inventory, listener and process-query responses remain bounded
+transient inputs to the live validators. The cumulative diagnostic log omits their
+raw payloads and records fixed command kinds, status and timing instead. This keeps
+repeated ownership checks from filling the unchanged eight-MiB log cap; it does not
+cache ownership decisions or omit response validation.
 
 The workflow uploads selected sanitized evidence after success. Credential-backed
 proof failures retain only

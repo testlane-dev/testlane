@@ -2,6 +2,7 @@
 import { loopbackOrigin } from '../android-verification/contracts.mjs';
 import { combineDriverSignals, withDriverSignal, waitDriverSignal } from '../android-verification/driver-phase.mjs';
 import { validateIosDeviceBinding } from './device-scope.mjs';
+import { stabilizeIosSetupOwnership } from './setup-ownership.mjs';
 
 const ELEMENT = 'element-6066-11e4-a52e-4f735466cecf';
 export class NativeDriverError extends Error {
@@ -50,20 +51,24 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     capabilities = { ...structuredClone(supplied), 'appium:isHeadless': true, 'appium:wdaStartupRetries': 1,
       'appium:wdaConnectionTimeout': 5000, 'appium:forceAppLaunch': false, 'appium:shouldTerminateApp': false, 'appium:usePrebuiltWDA': true };
   } catch { throw fail('NATIVE_DRIVER_CONFIGURATION_INVALID'); }
-  let session, closed = false;
-  async function request(method, route, body, requestSignal = signal, timeoutMs = 5000) {
+  let session, closed = false, setupActive = true, setupFenced = false;
+  async function request(method, route, body, requestSignal = signal, timeoutMs = 5000, outerDeadline) {
+    if (setupFenced) throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED');
     if (requestSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
-    const deadline = performance.now() + timeoutMs;
-    const timer = new AbortController(), timeout = setTimeout(() => timer.abort(), timeoutMs);
+    const began = performance.now(), deadline = outerDeadline === undefined ? began + timeoutMs : Math.min(began + timeoutMs, outerDeadline);
+    const budget = Math.min(timeoutMs, deadline - began);
+    if (budget <= 0) throw fail('NATIVE_DRIVER_TIMEOUT');
+    const timer = new AbortController(), timeout = setTimeout(() => timer.abort(), budget);
     const operationSignal = requestSignal ? AbortSignal.any([requestSignal, timer.signal]) : timer.signal;
     const checkDeadline = () => { if (performance.now() >= deadline) { timer.abort(); throw fail('NATIVE_DRIVER_TIMEOUT'); } };
-    let ownerTimer;
+    let ownerTimer, ownerCompleted = false;
     try {
-      const allowed = await withDriverSignal(() => Promise.race([Promise.resolve().then(assertOwned), new Promise((_, reject) => {
+      const allowed = await withDriverSignal(() => Promise.race([Promise.resolve().then(() => { checkDeadline(); return assertOwned(); }), new Promise((_, reject) => {
         ownerTimer = setTimeout(() => reject(fail('NATIVE_DRIVER_OWNERSHIP_REFUSED')), 5000);
       })]), operationSignal, () => fail('NATIVE_DRIVER_CANCELLED')).catch(() => { throw fail(operationSignal.aborted ? 'NATIVE_DRIVER_CANCELLED' : 'NATIVE_DRIVER_OWNERSHIP_REFUSED'); });
       clearTimeout(ownerTimer);
       if (allowed !== true) throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED');
+      ownerCompleted = true;
       if (requestSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
       if (timer.signal.aborted) throw fail('NATIVE_DRIVER_TIMEOUT');
       checkDeadline();
@@ -86,24 +91,42 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
       }
       return { value: decoded.value };
     } catch (error) {
+      if (setupActive && session && !ownerCompleted) setupFenced = true;
       if (requestSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
       if (timer.signal.aborted) throw fail('NATIVE_DRIVER_TIMEOUT');
       if (error instanceof NativeDriverError) throw error;
       throw fail('NATIVE_DRIVER_COMMAND_FAILED');
     } finally { clearTimeout(timeout); clearTimeout(ownerTimer); }
   }
+  const setupDeadline = performance.now() + 240_000;
   let created;
-  try { created = (await request('POST', '/session', { capabilities: { alwaysMatch: capabilities, firstMatch: [{}] } }, signal, 240_000)).value; }
+  try { created = (await request('POST', '/session', { capabilities: { alwaysMatch: capabilities, firstMatch: [{}] } }, signal, 240_000, setupDeadline)).value; }
   catch (error) { if (error.code === 'NATIVE_DRIVER_TIMEOUT') throw fail('NATIVE_DRIVER_SESSION_TIMEOUT'); throw error; }
   if (!created || typeof created.sessionId !== 'string' || !/^[A-Za-z0-9-]{1,160}$/.test(created.sessionId)) throw fail('NATIVE_DRIVER_SESSION_INVALID');
   session = created.sessionId;
   const route = suffix => '/session/' + encodeURIComponent(session) + suffix;
-  async function nativeContext(activeSignal = signal) {
-    try { if ((await request('GET', route('/context'), undefined, activeSignal)).value !== 'NATIVE_APP') throw fail('NATIVE_DRIVER_CONTEXT_REFUSED'); }
+  async function nativeContext(activeSignal = signal, timeoutMs = 5000, outerDeadline) {
+    try { if ((await request('GET', route('/context'), undefined, activeSignal, timeoutMs, outerDeadline)).value !== 'NATIVE_APP') throw fail('NATIVE_DRIVER_CONTEXT_REFUSED'); }
     catch (error) { if (error.code === 'NATIVE_DRIVER_TIMEOUT') throw fail('NATIVE_DRIVER_CONTEXT_TIMEOUT'); throw error; }
   }
-  try { await nativeContext(); }
-  catch (error) { await request('DELETE', route(''), undefined, null).catch(() => {}); throw error; }
+  try {
+    const owned = await stabilizeIosSetupOwnership({ assertOwned, signal, deadline: setupDeadline });
+    if (!owned.completed) {
+      setupFenced = true;
+      throw fail(owned.status === 'cancelled' ? 'NATIVE_DRIVER_CANCELLED' : performance.now() >= setupDeadline ? 'NATIVE_DRIVER_SESSION_TIMEOUT' : 'NATIVE_DRIVER_OWNERSHIP_REFUSED');
+    }
+    const remaining = setupDeadline - performance.now();
+    if (remaining <= 0) { setupFenced = true; throw fail('NATIVE_DRIVER_SESSION_TIMEOUT'); }
+    try { await nativeContext(signal, Math.min(5000, remaining), setupDeadline); }
+    catch (error) { if (performance.now() >= setupDeadline) throw fail('NATIVE_DRIVER_SESSION_TIMEOUT'); throw error; }
+    if (performance.now() >= setupDeadline) throw fail('NATIVE_DRIVER_SESSION_TIMEOUT');
+    setupActive = false;
+  } catch (error) {
+    // A failed setup callback may still run in the parent. Never start another
+    // ownership callback or native request after that uncertain outcome.
+    if (!setupFenced) await request('DELETE', route(''), undefined, null).catch(() => {});
+    throw error;
+  }
   function elementId(result) {
     const id = result.value?.[ELEMENT];
     if (result.missing || typeof id !== 'string' || !/^[A-Za-z0-9-]{1,160}$/.test(id)) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');

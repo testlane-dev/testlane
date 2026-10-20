@@ -23,6 +23,29 @@ const digest = value => createHash('sha256').update(JSON.stringify(value)).diges
 const sha = value => createHash('sha256').update(value).digest('hex');
 const WDA_BUILD_MS = 300000;
 
+const TRANSIENT_COMMAND_PAYLOADS = new Set(['owned-device-list', 'loopback-listeners', 'process-identity', 'owned-descendants', 'owned-process-group']);
+export const retainIosCommandPayload = kind => !TRANSIENT_COMMAND_PAYLOADS.has(kind);
+
+/** The same fixed aggregate bound applies to retained native logs and markers. */
+export function createIosDeviceCapture() {
+  let captured = '', bytes = 0, overflowed = false;
+  return Object.freeze({
+    append(text) {
+      const length = Buffer.byteLength(text);
+      if (bytes + length > LIMIT) { overflowed = true; return; }
+      captured += text; bytes += length;
+    },
+    text: () => captured,
+    overflowed: () => overflowed,
+  });
+}
+
+/** Omitting aggregate retention never changes the transient parser input. */
+export function captureIosCommandOutput(capture, kind, text) {
+  if (retainIosCommandPayload(kind)) capture(text);
+  return text;
+}
+
 export function ownedIosWdaBuildArguments({ projectPath, derivedDataPath, udid, platformVersion }) {
   if (!safePath(projectPath) || path.basename(projectPath) !== 'WebDriverAgent.xcodeproj' ||
       !safePath(derivedDataPath) || path.basename(derivedDataPath) !== 'derived-data' ||
@@ -223,11 +246,11 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   const marker = { schemaVersion: 2, scope: IOS_DEVICE_SCOPE, nativeHome, privateRoot: root, nonce: randomBytes(12).toString('hex'), ownerPid: process.pid, name: '', udid: null, deviceSetPath, runtimeId: null, deviceType: null, appiumPid: null, baselineSHA256: null, wdaPreparationSHA256: null };
   marker.name = 'testlane_ios_' + marker.nonce;
   const commands = new Set(), diagnosticTasks = new Set(); let diagnosticCleanupUncertain = false, wdaBuildIncomplete = false;
-  let appium, closing, closed = false, ready = false, createAttempted = false, createSettled = false, captured = '', captureBytes = 0, captureFailed = false, target, xcodeVersion;
+  let appium, closing, closed = false, ready = false, createAttempted = false, createSettled = false, target, xcodeVersion;
   let env, baseline, wdaPreparation;
-  const capture = text => { const bytes = Buffer.byteLength(text); if (captureBytes + bytes > LIMIT) { captureFailed = true; return; } captured += text; captureBytes += bytes; };
+  const captured = createIosDeviceCapture(), capture = captured.append;
   const writeMarker = () => writeFile(path.join(root, MARKER), JSON.stringify(marker) + '\n', { mode: 0o600 });
-  const live = (allowClosing = false) => { if (closed || (closing && !allowClosing) || signal?.aborted) throw fail('IOS_CANCELLED'); if (captureFailed) throw fail('IOS_CAPTURE_LIMIT'); if (ready && (!appium?.spawned || appium.closed)) throw fail('IOS_APPIUM_STOPPED'); };
+  const live = (allowClosing = false) => { if (closed || (closing && !allowClosing) || signal?.aborted) throw fail('IOS_CANCELLED'); if (captured.overflowed()) throw fail('IOS_CAPTURE_LIMIT'); if (ready && (!appium?.spawned || appium.closed)) throw fail('IOS_APPIUM_STOPPED'); };
   async function run(executable, args, { timeoutMs = 30000, ignoreSignal = false } = {}) {
     if (!ignoreSignal) live();
     let stdout = '', stderr = '', bytes = 0, overflow = false;
@@ -238,9 +261,11 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       exited: state.exited, closed: state.closed, code: Number.isSafeInteger(state.code) ? state.code : null,
       elapsedMs: Math.max(0, Math.round(performance.now() - began)) }) + '\n');
     diagnostic('start');
-    // Keep command streams separate without ever persisting their contents.
+    // Full command streams remain transient and bounded for live validation.
+    // Repeated host inventory/process payloads do not fill the retained log;
+    // fixed kind/status/timing markers remain available for every command.
     stdout = ''; state.child.stdout.removeAllListeners('data'); state.child.stderr.removeAllListeners('data');
-    for (const name of ['stdout', 'stderr']) state.child[name].on('data', chunk => { const text = chunk.toString('utf8'); capture(text); bytes += chunk.length;
+    for (const name of ['stdout', 'stderr']) state.child[name].on('data', chunk => { const text = captureIosCommandOutput(capture, kind, chunk.toString('utf8')); bytes += chunk.length;
       if (bytes > LIMIT) { overflow = true; return; } if (name === 'stdout') stdout += text; else stderr += text; });
     commands.add(state);
     if (!await state.started) { diagnostic('start-failed'); commands.delete(state); throw fail('IOS_COMMAND_START_FAILED'); }
@@ -274,14 +299,14 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     }
     let completed = false;
     try {
-      while (!state.closed && Date.now() < deadline && !(signal?.aborted && !ignoreSignal) && !overflow && !captureFailed) await sleep(30);
+      while (!state.closed && Date.now() < deadline && !(signal?.aborted && !ignoreSignal) && !overflow && !captured.overflowed()) await sleep(30);
       if (!state.closed) {
-        diagnostic(signal?.aborted && !ignoreSignal ? 'cancelled-before-stop' : overflow || captureFailed ? 'capture-limit-before-stop' : 'timeout-before-stop');
+        diagnostic(signal?.aborted && !ignoreSignal ? 'cancelled-before-stop' : overflow || captured.overflowed() ? 'capture-limit-before-stop' : 'timeout-before-stop');
         if (kind === 'owned-wda-prebuild') await stopOwnedGroups(state);
         else await stop(state);
-        throw fail(signal?.aborted && !ignoreSignal ? 'IOS_CANCELLED' : overflow || captureFailed ? 'IOS_CAPTURE_LIMIT' : 'IOS_COMMAND_TIMEOUT');
+        throw fail(signal?.aborted && !ignoreSignal ? 'IOS_CANCELLED' : overflow || captured.overflowed() ? 'IOS_CAPTURE_LIMIT' : 'IOS_COMMAND_TIMEOUT');
       }
-      if (overflow || captureFailed) throw fail('IOS_CAPTURE_LIMIT');
+      if (overflow || captured.overflowed()) throw fail('IOS_CAPTURE_LIMIT');
       completed = true;
       return { code: state.code, stdout, stderr };
     } finally { if (diagnosticTask) await diagnosticTask; diagnostic(completed ? 'end' : 'error'); if (state.closed) commands.delete(state); }
@@ -531,7 +556,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
         if (ready) await assertListeners({ absent: true });
         await assertRoot(); await rm(root, { recursive: true, force: false, maxRetries: 5, retryDelay: 100 }); closed = true;
       } catch { await recover('simulator-or-path-cleanup-unconfirmed'); throw fail('IOS_DEVICE_CLEANUP_UNCONFIRMED'); }
-      if (captureFailed) throw fail('IOS_CAPTURE_LIMIT');
+      if (captured.overflowed()) throw fail('IOS_CAPTURE_LIMIT');
     })();
     return closing;
   }
@@ -591,7 +616,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     const deviceBinding = validateIosDeviceBinding({ schemaVersion: 1, scope: IOS_DEVICE_SCOPE, nativeHome, deviceSetPath, privateRoot: root, udid: marker.udid, nonce: marker.nonce });
     return Object.freeze({ udid: marker.udid, serverUrl, deviceSetPath, derivedDataPath, deviceBinding, wdaPreparation, wdaPort, mjpegPort,
       versions: Object.freeze({ appium: '3.8.0', xcuitest: '12.19.1', webdriveragent: '16.16.3', xcode: xcodeVersion, ios: target.platformVersion, runtimeId: target.runtimeId, deviceType: target.deviceType }),
-      assertOwned: () => assertOwned(), assertWdaPrepared: () => assertWdaPrepared(), capturedText: () => captured,
+      assertOwned: () => assertOwned(), assertWdaPrepared: () => assertWdaPrepared(), capturedText: captured.text,
       async installApp(appPath) {
         if (!safePath(appPath) || !appPath.endsWith('.app') || !(await lstat(appPath)).isDirectory() || (await lstat(appPath)).isSymbolicLink()) throw fail('IOS_APP_INPUT_INVALID');
         await assertOwned(); live(); const result = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'install', [await realpath(appPath)]), { timeoutMs: 120000 });
@@ -620,6 +645,6 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   } catch (error) {
     let code = /^IOS_[A-Z_]+$/.test(error.message) ? error.message : 'IOS_DEVICE_START_FAILED';
     try { await close(); } catch { code = 'IOS_DEVICE_CLEANUP_UNCONFIRMED'; }
-    const result = fail(code); Object.defineProperty(result, 'capturedText', { value: () => captured }); throw result;
+    const result = fail(code); Object.defineProperty(result, 'capturedText', { value: captured.text }); throw result;
   }
 }

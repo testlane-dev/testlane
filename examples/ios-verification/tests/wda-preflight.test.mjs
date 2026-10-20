@@ -117,7 +117,7 @@ test('session setup preserves its 240-second bound and cancellation never prints
   t.mock.method(globalThis,'fetch',async(_url,options)=>new Promise((_,reject)=>{options.signal.addEventListener('abort',()=>reject(Error('untrusted-native-payload')),{once:true});queueMicrotask(latest);}));
   const device=testDevice();
   await assert.rejects(probeOwnedWdaSession({device}),error=>error.message==='IOS_WDA_SESSION_TIMEOUT'&&!String(error.stack).includes('untrusted-native-payload'));
-  assert.equal(budget,240000);
+  assert.ok(budget>239900&&budget<=240000);
 });
 
 test('credential-free diagnostic refuses a successful response that arrives after its monotonic deadline',async t=>{
@@ -135,4 +135,88 @@ test('credential-free request cancellation settles without relying on HTTP abort
   const pending=assert.rejects(probeOwnedWdaSession({device:testDevice(),signal:controller.signal}),
     error=>error.message==='IOS_WDA_CANCELLED'&&error.sessionCleanup==='not-addressable');
   await promptly(entered.promise);controller.abort();await promptly(pending);
+});
+
+test('pre-auth setup metrics include seven-second ownership stabilization and still use a fresh context guard',async t=>{
+  let now=0,owners=0;const calls=[],stages=[];
+  t.mock.method(performance,'now',()=>now);
+  t.mock.method(globalThis,'fetch',async(url,options)=>{
+    const route=new URL(url).pathname;calls.push([options.method,route]);if(route==='/session')now=90000;
+    return new Response(JSON.stringify({value:route==='/session'?{sessionId:'owned-session'}:route.endsWith('/context')?'NATIVE_APP':null}));
+  });
+  const result=await probeOwnedWdaSession({device:{...testDevice(),assertOwned:()=>{if(++owners===2)now+=7000;return true;}},onStage:value=>stages.push(value)});
+  assert.equal(result.sessionSetupMs,97000);assert.equal(result.sessionCreated,true);assert.equal(result.sessionCleanup,'deleted');
+  assert.equal(owners,4,'create guard, one stabilization, context guard, cleanup guard');
+  assert.deepEqual(stages,['wda-session-create','session-ownership','native-context','session-close']);
+  assert.deepEqual(calls,[['POST','/session'],['GET','/session/owned-session/context'],['DELETE','/session/owned-session']]);
+});
+
+test('pre-auth stabilization cannot extend a nearly exhausted original 240-second setup budget',async t=>{
+  let now=0,owners=0;const calls=[],stages=[];
+  t.mock.method(performance,'now',()=>now);
+  t.mock.method(globalThis,'fetch',async url=>{calls.push(new URL(url).pathname);now=239000;
+    return new Response(JSON.stringify({value:{sessionId:'owned-session'}}));});
+  await assert.rejects(probeOwnedWdaSession({device:{...testDevice(),assertOwned:()=>{if(++owners===2)now+=1001;return true;}},onStage:value=>stages.push(value)}),
+    error=>error.message==='IOS_WDA_SESSION_TIMEOUT'&&error.sessionCreated===true&&error.sessionCleanup==='unknown'&&error.sessionSetupMs===240001);
+  assert.equal(owners,2);assert.deepEqual(calls,['/session']);assert.equal(stages.at(-1),'session-ownership');
+});
+
+test('a context-stage scheduling delay cannot reset the absolute startup deadline or send an expired context request',async t=>{
+  let now=0,owners=0;const calls=[],stages=[];
+  t.mock.method(performance,'now',()=>now);
+  t.mock.method(globalThis,'fetch',async(url,options)=>{
+    const route=new URL(url).pathname;calls.push([options.method,route]);
+    if(route==='/session')now=239995;
+    return new Response(JSON.stringify({value:route==='/session'?{sessionId:'owned-session'}:route.endsWith('/context')?'NATIVE_APP':null}));
+  });
+  await assert.rejects(probeOwnedWdaSession({device:{...testDevice(),assertOwned:()=>{owners++;return true;}},
+    onStage:value=>{stages.push(value);if(value==='native-context')now+=10;}}),error=>
+    error.message==='IOS_WDA_SESSION_TIMEOUT'&&error.sessionCreated===true&&error.sessionCleanup==='deleted'&&error.nativeContextVerified===false);
+  assert.deepEqual(calls,[['POST','/session'],['DELETE','/session/owned-session']]);
+  assert.equal(owners,3,'the expired context starts no guard; confirmed stabilization allows an independent cleanup guard');
+  assert.equal(stages.at(-1),'native-context');
+});
+
+test('pre-auth setup timeout, cancellation and refusal fence late ACKs without another guard or DELETE',async t=>{
+  let now=0,expire,calls;const originalTimer=globalThis.setTimeout;
+  t.mock.method(performance,'now',()=>now);
+  t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>{if(ms===20000)expire=fn;return originalTimer(fn,ms,...args);});
+  t.mock.method(globalThis,'fetch',async url=>{calls.push(new URL(url).pathname);return new Response(JSON.stringify({value:{sessionId:'owned-session'}}));});
+  for(const mode of ['timeout','cancelled','rejected']){
+    now=0;calls=[];const stages=[],entered=Promise.withResolvers(),gate=Promise.withResolvers(),controller=new AbortController();let owners=0;
+    const secret='private-callback-value';
+    const pending=assert.rejects(probeOwnedWdaSession({device:{...testDevice(),assertOwned:()=>{if(++owners===2){entered.resolve();return gate.promise;}return true;}},
+      signal:controller.signal,onStage:value=>stages.push(value)}),error=>{
+      assert.equal(error.message,mode==='timeout'?'IOS_WDA_SETUP_OWNERSHIP_TIMEOUT':mode==='cancelled'?'IOS_WDA_CANCELLED':'IOS_WDA_OWNERSHIP_REFUSED');
+      assert.equal(error.sessionCreated,true);assert.equal(error.sessionCleanup,'unknown');assert.equal(error.nativeContextVerified,false);
+      const status=publicIosWdaStatus({stage:stages.at(-1),error,session:error});
+      assert.equal(status.stage,'session-ownership');assert.equal(status.sessionCreated,true);assert.equal(status.sessionCleanup,'unknown');
+      for(const value of [secret,encodeURIComponent(secret),Buffer.from(secret).toString('base64'),'owned-session']){
+        assert.equal(String(error.stack).includes(value),false);assert.equal(JSON.stringify(status).includes(value),false);
+      }
+      return true;
+    });
+    await entered.promise;
+    if(mode==='timeout'){now=20000;expire();}else if(mode==='cancelled')controller.abort();else gate.reject(Error(secret));
+    await pending;gate.resolve(true);await Promise.resolve();await Promise.resolve();
+    assert.equal(owners,2);assert.deepEqual(calls,['/session']);assert.equal(stages.at(-1),'session-ownership');
+  }
+});
+
+test('a confirmed setup guard permits bounded deletion after a context failure without hiding its stage',async()=>{
+  const fixture=await serverFixture({context:'WEBVIEW'}),stages=[];
+  try{
+    await assert.rejects(probeOwnedWdaSession({device:fixture.device,onStage:value=>stages.push(value)}),error=>
+      error.message==='IOS_WDA_CONTEXT_REFUSED'&&error.sessionCreated===true&&error.sessionCleanup==='deleted');
+    assert.equal(fixture.calls.filter(item=>item.method==='DELETE').length,1);assert.equal(stages.at(-1),'native-context');
+  }finally{await fixture.close();}
+});
+
+test('a cancelled initial context ownership guard retains known-session uncertainty and never starts deletion',async t=>{
+  const controller=new AbortController(),gate=Promise.withResolvers(),entered=Promise.withResolvers(),calls=[],stages=[];let owners=0;
+  t.mock.method(globalThis,'fetch',async url=>{calls.push(new URL(url).pathname);return new Response(JSON.stringify({value:{sessionId:'owned-session'}}));});
+  const pending=assert.rejects(probeOwnedWdaSession({device:{...testDevice(),assertOwned:()=>{if(++owners===3){entered.resolve();return gate.promise;}return true;}},
+    signal:controller.signal,onStage:value=>stages.push(value)}),error=>error.message==='IOS_WDA_CANCELLED'&&error.sessionCreated===true&&error.sessionCleanup==='unknown');
+  await entered.promise;controller.abort();await pending;gate.resolve(true);await Promise.resolve();await Promise.resolve();
+  assert.equal(owners,3);assert.deepEqual(calls,['/session']);assert.equal(stages.at(-1),'native-context');
 });
