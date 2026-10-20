@@ -171,7 +171,7 @@ test('Windows tree-kill launch receives only the OS allowlist with unchanged ret
   }
 });
 
-test('controlled fake-host child proves refusal before allocation and cleanup after marked allocation without starting tools', { timeout: 15000 }, async () => {
+test('controlled child proves host refusal and supported-host cleanup without starting native tools', { timeout: 15000 }, async () => {
   const parent = await realpath(os.tmpdir()), fixture = await mkdtemp(path.join(parent, 'tae'));
   const sdk = path.join(fixture, 's'), java = path.join(fixture, 'j'), tools = path.join(fixture, 't');
   const image = path.join(sdk, 'system-images', 'i'), output = path.join(fixture, 'o');
@@ -199,17 +199,20 @@ test('controlled fake-host child proves refusal before allocation and cleanup af
     const code = 'import cp from "node:child_process";import {syncBuiltinESMExports} from "node:module";import {readdir} from "node:fs/promises";' +
       'import {startOwnedAndroid} from ' + JSON.stringify(new URL('../device.mjs', import.meta.url).href) + ';' +
       'const options=' + JSON.stringify({ sdkRoot: sdk, javaHome: java, toolsRoot: tools, systemImagePath: image, outputDir: output }) + ';' +
-      'const fixture=' + JSON.stringify(fixture) + ';let spawns=0;const stages=[];cp.spawn=()=>{spawns++;throw Error("NATIVE_CHILD_NOT_EXPECTED")};syncBuiltinESMExports();' +
-      'const initial=(await readdir(fixture)).sort();let hostRefused=false,cancelled=false;const originalPlatform=Object.getOwnPropertyDescriptor(process,"platform");' +
+      'const fixture=' + JSON.stringify(fixture) + ';const nativeSupported=process.platform==="win32"||process.platform==="linux";let spawns=0;const stages=[];cp.spawn=()=>{spawns++;throw Error("NATIVE_CHILD_NOT_EXPECTED")};syncBuiltinESMExports();' +
+      'const initial=(await readdir(fixture)).sort();let hostRefused=false,cancelled=false,darwinRefused=false;const originalPlatform=Object.getOwnPropertyDescriptor(process,"platform");' +
       'try{Object.defineProperty(process,"platform",{value:"win32",configurable:true});delete process.env.GITHUB_ACTIONS;delete process.env.RUNNER_ENVIRONMENT;delete process.env.TESTLANE_ANDROID_PROOF_CI;' +
       'try{await startOwnedAndroid(options)}catch(error){hostRefused=error.message==="ANDROID_HOST_POLICY_REFUSED"}' +
       'const controller=new AbortController();controller.abort();try{await startOwnedAndroid({...options,signal:controller.signal})}catch(error){cancelled=error.message==="ANDROID_CANCELLED"}' +
+      'Object.defineProperty(process,"platform",{value:"darwin",configurable:true});process.env.GITHUB_ACTIONS="true";process.env.RUNNER_ENVIRONMENT="github-hosted";process.env.TESTLANE_ANDROID_PROOF_CI="1";' +
+      'try{await startOwnedAndroid(options)}catch(error){darwinRefused=error.message==="ANDROID_PROCESS_IDENTITY_UNSUPPORTED"}' +
       '}finally{Object.defineProperty(process,"platform",originalPlatform)}' +
       'const refusalUntouched=JSON.stringify(initial)===JSON.stringify((await readdir(fixture)).sort());' +
       'process.env.GITHUB_ACTIONS="true";process.env.RUNNER_ENVIRONMENT="github-hosted";process.env.TESTLANE_ANDROID_PROOF_CI="1";process.env.PATH="relative";' +
-      'let builderRefused=false;try{await startOwnedAndroid({...options,onStage:stage=>stages.push(stage)})}catch(error){builderRefused=error.message==="ANDROID_DEVICE_ENV_INVALID"}' +
-      'console.log(JSON.stringify({hostRefused,cancelled,refusalUntouched,builderRefused,zeroTools:spawns===0,knownStage:JSON.stringify(stages)===JSON.stringify(["sdk-and-pinned-tools-validated"]),' +
-      'rootRemoved:JSON.stringify((await readdir(fixture)).sort())===JSON.stringify(["j","o","s","t"]),outputEmpty:(await readdir(options.outputDir)).length===0}));';
+      'let builderRefused=false;try{await startOwnedAndroid({...options,onStage:stage=>stages.push(stage)})}catch(error){builderRefused=error.message===(nativeSupported?"ANDROID_DEVICE_ENV_INVALID":"ANDROID_PROCESS_IDENTITY_UNSUPPORTED")}' +
+      'console.log(JSON.stringify({hostRefused,cancelled,darwinRefused,refusalUntouched,builderRefused,zeroTools:spawns===0,knownStage:JSON.stringify(stages)===JSON.stringify(nativeSupported?["sdk-and-pinned-tools-validated"]:[]),' +
+      'rootRemoved:JSON.stringify((await readdir(fixture)).sort())===JSON.stringify(nativeSupported?["j","o","s","t"]:["j","s","t"]),' +
+      'outputEmpty:nativeSupported?(await readdir(options.outputDir)).length===0:await readdir(options.outputDir).then(()=>false,error=>error.code==="ENOENT")}));';
     const env = { ...configuration, TMP: fixture, TEMP: fixture, TMPDIR: fixture,
       GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', TESTLANE_ANDROID_PROOF_CI: '1' };
     let stdout = ''; const done = Promise.withResolvers();
@@ -218,7 +221,7 @@ test('controlled fake-host child proves refusal before allocation and cleanup af
     child.once('error', () => done.reject(Error('ENV_CHILD_FAILED'))); child.once('close', code => code === 0 ? done.resolve() : done.reject(Error('ENV_CHILD_FAILED')));
     const timer = setTimeout(() => { child.kill(); done.reject(Error('ENV_CHILD_TIMEOUT')); }, 10000);
     try { await done.promise; } finally { clearTimeout(timer); }
-    assert.deepEqual(JSON.parse(stdout), { hostRefused: true, cancelled: true, refusalUntouched: true, builderRefused: true, zeroTools: true, knownStage: true, rootRemoved: true, outputEmpty: true });
+    assert.deepEqual(JSON.parse(stdout), { hostRefused: true, cancelled: true, darwinRefused: true, refusalUntouched: true, builderRefused: true, zeroTools: true, knownStage: true, rootRemoved: true, outputEmpty: true });
   } finally {
     if (child && child.exitCode === null) child.kill();
     assert.equal(path.dirname(await realpath(fixture)), parent); assert.match(path.basename(fixture), /^tae[A-Za-z0-9]+$/);
