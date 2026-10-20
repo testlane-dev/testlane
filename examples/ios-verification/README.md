@@ -190,7 +190,13 @@ once and observes that the keyboard disappears; it does not assume an iPhone num
 or ignore a failed dismissal. This is part of the synthetic app's UI contract.
 
 Setup compiles only the pinned WebDriverAgent project into the run's private
-DerivedData, for the exact owned Simulator UUID. Compilation has a separate
+DerivedData, for the exact newly created Simulator UUID while it is still
+Shutdown. Fresh ownership, availability, foreign-inventory and canonical-path
+checks surround build-only preparation; unexpected boot or transitional state
+blocks setup without shutdown or repair. This preboot ordering is a bounded
+experiment, with no demonstrated compile-time improvement. Normal boot must then
+complete and fresh Booted-only ownership and prepared-artifact checks must pass
+before Appium starts. Public ownership checks remain Booted-only. Compilation has a separate
 600-second monotonic bound and requires actual process close with exit zero.
 This is one bounded cold-compile experiment, not a validated performance fix;
 failure blocks setup without retries or automatic budget increases. Retained

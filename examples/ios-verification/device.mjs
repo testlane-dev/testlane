@@ -246,6 +246,13 @@ export function verifyOwnedSimulator({ expected, marker, devices, baseline, requ
   return owned[0];
 }
 
+/** Read-only preparation policy: never authorizes booted or transitional targets. */
+export function verifyOwnedWdaPreparationSimulator({ expected, marker, devices, baseline }) {
+  const owned = verifyOwnedSimulator({ expected, marker, devices, baseline, requireBooted: false });
+  if (owned.state !== 'Shutdown') throw fail('IOS_OWNERSHIP_REFUSED');
+  return owned;
+}
+
 export function validateIosContainer({ deviceSetPath, udid, containerPath }) {
   if (!safePath(deviceSetPath) || !UUID.test(udid ?? '') || !safePath(containerPath)) throw fail('IOS_BOOTSTRAP_CONTAINER_REFUSED');
   const base = path.join(deviceSetPath, udid, 'data', 'Containers', 'Data', 'Application');
@@ -473,6 +480,15 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     coldBootBudget?.check();
     live(); return true;
   }
+  // This private guard is confined to build-only preparation before first boot.
+  // Public ownership and prepared-artifact checks remain Booted-only.
+  async function assertWdaPreparationOwned() {
+    live(); const current = await assertRoot();
+    verifyOwnedWdaPreparationSimulator({ expected: marker, marker: current, devices: await listOwned(), baseline });
+    const ownDevice = path.join(deviceSetPath, marker.udid);
+    if (await realpath(ownDevice) !== ownDevice || (await lstat(ownDevice)).isSymbolicLink()) throw fail('IOS_OWNERSHIP_REFUSED');
+    live(); return true;
+  }
   async function assertListeners({ absent = false } = {}) {
     await queryIosListeners(run, [appiumPort, wdaPort, mjpegPort], { absent });
   }
@@ -515,15 +531,15 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     return { runnerSHA256, xctestrunSHA256: sha(await readFile(runFile)) };
   }
   async function prepareWda() {
-    await assertOwned(); const before = await wdaSourceBinding(); live();
+    await assertWdaPreparationOwned(); const before = await wdaSourceBinding(); live();
     const began = performance.now(); wdaBuildIncomplete = true;
     const result = await run('/usr/bin/xcodebuild', ownedIosWdaBuildArguments({ projectPath: before.projectPath, derivedDataPath, udid: marker.udid, platformVersion: target.platformVersion }), { timeoutMs: WDA_BUILD_MS, deadlineAt: began + WDA_BUILD_MS });
     // A fractional overrun must not round back into an accepted preparation.
     const buildMs = Math.ceil(performance.now() - began);
     if (result.code !== 0 || buildMs > WDA_BUILD_MS) throw fail('IOS_WDA_PREPARE_FAILED');
-    await assertOwned(); const after = await wdaSourceBinding();
+    await assertWdaPreparationOwned(); const after = await wdaSourceBinding();
     if (JSON.stringify(after) !== JSON.stringify(before)) throw fail('IOS_WDA_PROJECT_REFUSED');
-    const artifacts = await wdaArtifactBinding(); await assertOwned();
+    const artifacts = await wdaArtifactBinding(); await assertWdaPreparationOwned();
     wdaPreparation = validateIosWdaPreparation({ schemaVersion: 1, wdaPrepared: true, buildBudgetMs: WDA_BUILD_MS, buildMs,
       webdriveragent: '16.16.3', projectSHA256: before.projectSHA256, packageSHA256: before.packageSHA256, ...artifacts });
     marker.wdaPreparationSHA256 = digest(wdaPreparation);
@@ -716,7 +732,8 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     // but createSettled remains false and cleanup cannot claim completion.
     createSettled = true; marker.udid = acknowledgedUdid; await writeMarker();
     startupAt('owned-simulator-created');
-    const current = await assertRoot(); verifyOwnedSimulator({ expected: marker, marker: current, devices: await listOwned(), baseline, requireBooted: false });
+    await assertWdaPreparationOwned();
+    startupAt('wda-build-for-testing'); await prepareWda(); startupAt('wda-prepared');
     await runIosColdBoot({ signal,
       boot: ({ timeoutMs, deadlineAt }) => run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'boot'), { timeoutMs, deadlineAt }),
       onBootStarted: () => { startupAt('owned-simulator-boot-started'); signal?.addEventListener('abort', abortLifecycle, { once: true }); },
@@ -724,7 +741,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       confirmOwned: budget => assertOwned(budget.timeoutMs, undefined, budget),
     });
     startupAt('owned-simulator-booted');
-    startupAt('wda-build-for-testing'); await prepareWda(); startupAt('wda-prepared');
+    await assertWdaPrepared();
     const { Manifest } = await import(pathToFileURL(path.join(appiumRoot, 'build', 'lib', 'extension', 'manifest.js')).href);
     const manifest = new Manifest(appiumHome); await manifest.read(); manifest.addExtensionFromPackage(driverPackage, path.join(driverRoot, 'package.json'), 'local'); await manifest.write();
     live();
