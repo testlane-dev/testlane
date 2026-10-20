@@ -46,7 +46,9 @@ track; the current release runs web tests with Playwright.
 A separate [test-account provisioning experiment](examples/account-provisioning/README.md)
 creates and revokes dedicated accounts in a synthetic local app. It demonstrates
 fixed roles, quotas, expiry, ownership checks and integration with the real broker.
-It is source-only; real authentication-provider adapters remain future work.
+It is source-only. A separate [local Supabase/NextAuth proof](examples/account-provisioning/supabase/README.md)
+tests real provider services and a NextAuth v4 Credentials fixture; hosted and
+arbitrary existing-app integrations remain future work.
 
 See the [prioritized roadmap](docs/roadmap.md) and
 [native mobile proposal](docs/mobile-testing.md) for scope and release criteria.

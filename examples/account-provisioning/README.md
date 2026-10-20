@@ -4,6 +4,9 @@ This **source-only, unreleased experiment** creates dedicated accounts in a publ
 synthetic loopback app, then signs in through the real installed Testlane broker.
 It adds no CLI or MCP commands, provider SDK, hosted account factory, admin HTTP
 route or production capability. It is not included in the npm package inventory.
+The separate [local Supabase and NextAuth experiment](supabase/README.md) exercises
+real provider services and a NextAuth v4 Credentials fixture; its optional tools and
+authority remain outside the installed broker too.
 
 The app owns account creation and revocation through local controller functions.
 Its HTTP surface contains only login, identity and two fixed role-check routes.
@@ -103,5 +106,7 @@ must review the code and authority before enabling it.
 Deleting a provider user or revoking refresh tokens may leave existing access JWTs
 valid. A real integration needs demonstrated app-side account/epoch checks or an
 equivalent provider guarantee before claiming immediate session invalidation.
-Supabase, Clerk, Auth0, Firebase and other external providers are **not supported by
-this experiment**; each needs its own authority review, abuse tests and acceptance.
+The synthetic proof does not establish external-provider support. The separate
+Supabase experiment uses a new owned local stack, not a hosted project or existing
+application. Hosted Supabase, Clerk, Auth0, Firebase and other integrations still
+need their own authority review, abuse tests and acceptance.
