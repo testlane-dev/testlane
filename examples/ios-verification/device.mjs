@@ -268,7 +268,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   while (ports.size < 3) ports.add(await freePort());
   const [appiumPort, wdaPort, mjpegPort] = ports;
   const parent = await realpath(os.tmpdir()), root = await mkdtemp(path.join(parent, 'tld-ios-'));
-  const derivedDataPath = path.join(root, 'derived-data'), home = path.join(root, 'home'), appiumHome = path.join(root, 'appium');
+  const derivedDataPath = path.join(root, 'derived-data'), appiumHome = path.join(root, 'appium');
   const marker = { schemaVersion: 2, scope: IOS_DEVICE_SCOPE, nativeHome, privateRoot: root, nonce: randomBytes(12).toString('hex'), ownerPid: process.pid, name: '', udid: null, deviceSetPath, runtimeId: null, deviceType: null, appiumPid: null, baselineSHA256: null, wdaPreparationSHA256: null };
   marker.name = 'testlane_ios_' + marker.nonce;
   const commands = new Set(), diagnosticTasks = new Set(); let diagnosticCleanupUncertain = false, wdaBuildIncomplete = false;
@@ -592,8 +592,10 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   const abortLifecycle = () => { void close().catch(() => {}); };
   try {
     await writeMarker();
-    await Promise.all([derivedDataPath, home, appiumHome, path.join(root, 'tmp'), path.join(root, 'cache')].map(dir => mkdir(dir, { recursive: true, mode: 0o700 })));
-    env = createIosDeviceEnvironment({ HOME: home, CFFIXED_USER_HOME: home, APPIUM_HOME: appiumHome,
+    await Promise.all([derivedDataPath, appiumHome, path.join(root, 'tmp'), path.join(root, 'cache')].map(dir => mkdir(dir, { recursive: true, mode: 0o700 })));
+    // Native frameworks and JS helpers use the canonical account home that owns
+    // the standard device set; Appium/build/temp paths stay explicitly private.
+    env = createIosDeviceEnvironment({ nativeHome, APPIUM_HOME: appiumHome,
       TMPDIR: path.join(root, 'tmp') + '/', XDG_CACHE_HOME: path.join(root, 'cache') });
     const version = await run('/usr/bin/xcodebuild', ['-version']);
     xcodeVersion = /^Xcode (\d+(?:\.\d+){0,2})\s*$/m.exec(version.stdout)?.[1];

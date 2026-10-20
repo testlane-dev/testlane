@@ -185,10 +185,19 @@ retained owned process identities, then checks device/listener absence before
 removing its private temporary directories. A shared device-set path grants no
 process-killing authority.
 
-Native device tools receive only selected toolchain/environment settings and the
-run's private home, temporary and Appium directories. Unrelated inherited
-credentials and Node injection settings are not forwarded. This limits accidental
-diagnostic exposure; it does not isolate trusted tools from the same OS user.
+Native device tools and Appium use the canonical OS-account home that owns the
+standard CoreSimulator set, with no `CFFIXED_USER_HOME` override. Appium's home,
+DerivedData, temporary directory and configured `XDG_CACHE_HOME` stay private to
+the run. Only selected toolchain/environment settings are inherited; unrelated
+credentials and Node injection settings are not forwarded. The parent controller
+and broker environment and explicit credential-store selection are unchanged.
+
+Apple frameworks may use OS-managed Library caches, preferences and service logs
+outside the private root. `XDG_CACHE_HOME` does not redirect every Apple cache.
+Cleanup verifies the owned Simulator, retained processes, listeners and private
+resources; it does not delete or certify all OS-managed home or service state.
+This boundary requires the ephemeral hosted runner above and does not isolate
+trusted tools from the same OS user.
 
 ## Evidence and current limits
 

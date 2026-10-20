@@ -1,7 +1,8 @@
 /** Minimal environment for owned macOS native tools; never copy ambient credentials. */
 import path from 'node:path';
 
-const OWNED_KEYS = ['HOME', 'CFFIXED_USER_HOME', 'APPIUM_HOME', 'TMPDIR', 'XDG_CACHE_HOME'];
+const OWNED_KEYS = ['APPIUM_HOME', 'TMPDIR', 'XDG_CACHE_HOME'];
+const BINDING_KEYS = ['nativeHome', ...OWNED_KEYS];
 const SYSTEM_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
 const fail = () => new Error('IOS_DEVICE_ENV_INVALID');
 const clean = value => typeof value === 'string' && value.length > 0 && !/[\u0000-\u001f\u007f\\]/.test(value);
@@ -14,18 +15,19 @@ function absolute(value, { trailingSlash = false } = {}) {
 
 /**
  * The caller must establish actual filesystem ownership. These checks only bind
- * explicit private sibling directories; no inherited HOME/cache/temp is accepted.
+ * the canonical OS-account home and explicit private sibling directories.
+ * nativeHome is supplied only by the device factory, never inherited from source.
  * PATH and DEVELOPER_DIR remain trusted executable/toolchain configuration.
  */
-export function createIosDeviceEnvironment(owned, source = process.env) {
+export function createIosDeviceEnvironment(binding, source = process.env) {
   try {
-    if (!owned || typeof owned !== 'object' || Array.isArray(owned) ||
-        Object.keys(owned).length !== OWNED_KEYS.length || Object.keys(owned).some(key => !OWNED_KEYS.includes(key)) ||
+    if (!binding || typeof binding !== 'object' || Array.isArray(binding) ||
+        Object.keys(binding).length !== BINDING_KEYS.length || Object.keys(binding).some(key => !BINDING_KEYS.includes(key)) ||
         !source || typeof source !== 'object' || Array.isArray(source)) throw fail();
-    const paths = Object.fromEntries(OWNED_KEYS.map(key => [key, absolute(owned[key], { trailingSlash: key === 'TMPDIR' })]));
-    if (paths.CFFIXED_USER_HOME !== paths.HOME) throw fail();
-    const privatePaths = [paths.HOME, paths.APPIUM_HOME, paths.TMPDIR, paths.XDG_CACHE_HOME];
-    if (new Set(privatePaths).size !== privatePaths.length ||
+    const nativeHome = absolute(binding.nativeHome);
+    const paths = Object.fromEntries(OWNED_KEYS.map(key => [key, absolute(binding[key], { trailingSlash: key === 'TMPDIR' })]));
+    const privatePaths = OWNED_KEYS.map(key => paths[key]);
+    if (privatePaths.includes(nativeHome) || new Set(privatePaths).size !== privatePaths.length ||
         new Set(privatePaths.map(value => path.posix.dirname(value))).size !== 1) throw fail();
     const searchPath = source.PATH === undefined ? SYSTEM_PATH : source.PATH;
     if (!clean(searchPath) || searchPath.length > 32768 ||
@@ -33,7 +35,8 @@ export function createIosDeviceEnvironment(owned, source = process.env) {
           path.posix.normalize(value).replace(/\/$/, '') !== value.replace(/\/$/, ''))) throw fail();
     const environment = {
       PATH: searchPath,
-      ...Object.fromEntries(OWNED_KEYS.map(key => [key, owned[key]])),
+      HOME: nativeHome,
+      ...Object.fromEntries(OWNED_KEYS.map(key => [key, binding[key]])),
       LANG: 'C', LC_ALL: 'C',
       APPIUM_SKIP_EXTENSIONS_INSTALL: '1', DEBUG: '', NODE_DEBUG: '', VERBOSE_LOGGING: '0',
     };
