@@ -1,4 +1,5 @@
 /** Experimental native contracts. Independent of Playwright reports. */
+import { types } from 'node:util';
 export const NATIVE_RUNNER = 'android-uiautomator2';
 export const IOS_NATIVE_RUNNER = 'ios-xcuitest';
 export const NATIVE_CASE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -8,6 +9,38 @@ export const NATIVE_DRIVER_FAILURE_CODES = Object.freeze([
   'NATIVE_DRIVER_SESSION_TIMEOUT', 'NATIVE_DRIVER_CONTEXT_TIMEOUT', 'NATIVE_DRIVER_READINESS_TIMEOUT',
   'NATIVE_DRIVER_ELEMENT_INVALID', 'NATIVE_DRIVER_ELEMENT_TIMEOUT', 'NATIVE_DRIVER_INPUT_INVALID',
 ]);
+export const IOS_REQUEST_OPERATIONS = Object.freeze(['session-create', 'session-delete', 'native-context', 'element-find', 'element-displayed',
+  'element-rect', 'window-rect', 'scroll', 'click', 'clear', 'type', 'text-read', 'value-read', 'keyboard-state', 'keyboard-hide', 'unclassified']);
+export const IOS_REQUEST_PHASES = Object.freeze(['ownership', 'http', 'response']);
+function ownData(value, names) {
+  if (!value || typeof value !== 'object' || types.isProxy(value)) return;
+  try {
+    if (Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertyNames(value).length !== names.length || Object.getOwnPropertySymbols(value).length) return;
+    const result = {};
+    for (const name of names) { const descriptor = Object.getOwnPropertyDescriptor(value, name); if (!descriptor || !Object.hasOwn(descriptor, 'value')) return; result[name] = descriptor.value; }
+    return result;
+  } catch { /* Untrusted data never supplies text or executes accessors. */ }
+}
+/** Fixed request metadata only; this grants no execution or cleanup authority. */
+export function normalizeIosRequestFact(value) {
+  const data = ownData(value, ['operation', 'phase']);
+  if (!data || !IOS_REQUEST_OPERATIONS.includes(data.operation) || !IOS_REQUEST_PHASES.includes(data.phase)) return;
+  return Object.freeze({ operation: data.operation, phase: data.phase });
+}
+const unsafeRequestCodes = ['NATIVE_BODY_TIMEOUT', 'NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_TIMEOUT', 'NATIVE_CLEANUP_UNSETTLED', 'NATIVE_RUN_CANCELLED'];
+function caseRequestFact(value, row, report, runner) {
+  const data = ownData(value, ['stage', 'operation', 'phase']);
+  if (!data || !['body', 'cleanup'].includes(data.stage)) return;
+  const fact = normalizeIosRequestFact({ operation: data.operation, phase: data.phase });
+  if (!fact || runner !== IOS_NATIVE_RUNNER || row.status !== 'failed' || row.attempts !== 1 || report.verdict !== 'failed' ||
+      report.reasonCodes.some(code => unsafeRequestCodes.includes(code))) return;
+  const codes = row.diagnostics.map(item => item.code), marker = data.stage === 'body' ? 'NATIVE_BODY_FAILED' : 'NATIVE_CLEANUP_FAILED';
+  const index = codes.indexOf(marker);
+  if (codes.some(code => unsafeRequestCodes.includes(code)) || index < 0 || !NATIVE_DRIVER_FAILURE_CODES.includes(codes[index + 1]) ||
+      (data.stage === 'body' && (index !== 0 || row.reason !== marker)) ||
+      (data.stage === 'cleanup' && row.cleanup.status !== 'failed')) return;
+  return Object.freeze({ stage: data.stage, ...fact });
+}
 export const NATIVE_LIMITS = Object.freeze([
   'Experimental local Android execution; no general Expo, device or coding-agent certification is claimed.',
   'Plans, callbacks, app code and the supplied context are trusted executable code, not a security sandbox.',
@@ -127,6 +160,9 @@ export function appendNativeRunFailure(input, code) {
   report.reasonCodes = [...new Set([...report.reasonCodes, code])]; report.diagnostics = report.reasonCodes.map(value => nativeDiagnostic(value, report.runner));
   report.verdict = report.cases.some(row => row.status === 'cancelled') || report.reasonCodes.includes('NATIVE_RUN_CANCELLED') ? 'cancelled' :
     report.cases.some(row => row.status === 'failed') ? 'failed' : 'blocked';
+  if (report.verdict === 'cancelled' || report.reasonCodes.some(value => unsafeRequestCodes.includes(value))) {
+    for (const row of report.cases) delete row.requestFailure;
+  }
   return report;
 }
 
@@ -153,7 +189,10 @@ export function sanitizeNativeReport(value, inputPlan) {
   const rows = [];
   for (let index = 0; index < plan.cases.length; index++) {
     const row = value.cases[index], planned = plan.cases[index];
-    if (!keys(row, ['id', 'status', 'reason', 'attempts', 'assertionsObserved', 'bodyAssertionsObserved', 'cleanupAssertionsObserved', 'cleanup', 'diagnostics']) ||
+    if (!row || typeof row !== 'object' || types.isProxy(row)) return refuse();
+    const requestDescriptor = Object.getOwnPropertyDescriptor(row, 'requestFailure');
+    if (requestDescriptor && (!Object.hasOwn(requestDescriptor, 'value') || !requestDescriptor.enumerable)) return refuse();
+    if (!keys(row, ['id', 'status', 'reason', 'attempts', 'assertionsObserved', 'bodyAssertionsObserved', 'cleanupAssertionsObserved', 'cleanup', 'diagnostics', 'requestFailure']) ||
       row.id !== planned.id || !statuses.includes(row.status) || ![0, 1].includes(row.attempts) ||
       !count(row.bodyAssertionsObserved) || !count(row.cleanupAssertionsObserved) || !count(row.assertionsObserved, 2_000_000) ||
       row.assertionsObserved !== row.bodyAssertionsObserved + row.cleanupAssertionsObserved ||
@@ -170,10 +209,13 @@ export function sanitizeNativeReport(value, inputPlan) {
     if (row.attempts === 0 && (row.assertionsObserved !== 0 || row.cleanup.status !== 'unknown')) return refuse();
     if (row.diagnostics.some(item => ['NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_UNSETTLED'].includes(item.code)) &&
       (row.status !== 'blocked' || row.cleanup.status !== 'unknown')) return refuse();
+    const requestFailure = requestDescriptor ? caseRequestFact(requestDescriptor.value, row, value, plan.runner) : undefined;
+    if (requestDescriptor && !requestFailure) return refuse();
     rows.push({ id: planned.id, status: row.status, reason: row.reason, attempts: row.attempts,
       assertionsObserved: row.assertionsObserved, bodyAssertionsObserved: row.bodyAssertionsObserved,
       cleanupAssertionsObserved: row.cleanupAssertionsObserved,
-      cleanup: { required: planned.cleanup.required, status: row.cleanup.status }, diagnostics: row.diagnostics.map(item => nativeDiagnostic(item.code, plan.runner)) });
+      cleanup: { required: planned.cleanup.required, status: row.cleanup.status }, diagnostics: row.diagnostics.map(item => nativeDiagnostic(item.code, plan.runner)),
+      ...(requestFailure ? { requestFailure } : {}) });
   }
   const expectedVerdict = rows.some(row => row.status === 'cancelled') || value.reasonCodes.includes('NATIVE_RUN_CANCELLED') ? 'cancelled' :
     rows.some(row => row.status === 'failed') ? 'failed' : rows.some(row => row.status !== 'passed') || value.reasonCodes.length ? 'blocked' : 'passed';

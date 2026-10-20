@@ -316,6 +316,15 @@ credential variants. Uncertain teardown fails the proof and retains private reco
 metadata; failure output must be reviewed before sharing.
 
 Case failures keep their lifecycle diagnosis, such as `NATIVE_BODY_FAILED`, first.
+An accepted, settled iOS driver failure can also retain one fixed
+`requestFailure` fact with `stage` (`body` or `cleanup`), `operation` and transport
+`phase`. The first attributable body fact wins; otherwise an independently
+attributable cleanup fact may be retained. Failed assertions suppress facts from
+that phase. Unknown errors, cancellation, unsettled callbacks and runner-budget
+timeouts add no such fact. Android reports
+and reports without a qualifying fact keep their previous shape. These fields
+contain no selectors, native content or exception text and establish no cause,
+settlement or cleanup beyond the existing report gates.
 They can add a fixed cause for the selected platform's own driver error class or
 the shared UI-settlement error. Unknown thrown values, wrong-platform classes,
 getters and proxies contribute no cause. The report never copies an exception's

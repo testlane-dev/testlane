@@ -1,24 +1,11 @@
 /** Narrow XCUITest W3C client for an already-owned local Simulator. */
-import { loopbackOrigin } from '../android-verification/contracts.mjs';
+import { loopbackOrigin, normalizeIosRequestFact } from '../android-verification/contracts.mjs';
 import { combineDriverSignals, withDriverSignal, waitDriverSignal } from '../android-verification/driver-phase.mjs';
 import { validateIosDeviceBinding } from './device-scope.mjs';
 import { stabilizeIosSetupOwnership } from './setup-ownership.mjs';
 import { types } from 'node:util';
 
 const ELEMENT = 'element-6066-11e4-a52e-4f735466cecf';
-const OPERATIONS = new Set(['session-create', 'session-delete', 'native-context', 'element-find', 'element-displayed',
-  'element-rect', 'window-rect', 'scroll', 'click', 'clear', 'type', 'text-read', 'value-read', 'keyboard-state', 'keyboard-hide', 'unclassified']);
-const PHASES = new Set(['ownership', 'http', 'response']);
-function validatedRequestFact(value) {
-  if (!value || typeof value !== 'object' || types.isProxy(value)) return undefined;
-  try {
-    if (Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertyNames(value).length !== 2 || Object.getOwnPropertySymbols(value).length) return undefined;
-    const operation = Object.getOwnPropertyDescriptor(value, 'operation'), phase = Object.getOwnPropertyDescriptor(value, 'phase');
-    if (!operation || !Object.hasOwn(operation, 'value') || !phase || !Object.hasOwn(phase, 'value') ||
-      !OPERATIONS.has(operation.value) || !PHASES.has(phase.value)) return undefined;
-    return Object.freeze({ operation: operation.value, phase: phase.value });
-  } catch { return undefined; }
-}
 function requestOperation(method, route) {
   if (method === 'POST' && route === '/session') return 'session-create';
   if (/^\/session\/[A-Za-z0-9-]{1,160}$/.test(route) && method === 'DELETE') return 'session-delete';
@@ -34,7 +21,7 @@ export class NativeDriverError extends Error {
   constructor(code, requestFact) { super(code); this.name = 'NativeDriverError'; this.code = code; retainRequestFact(this, requestFact); }
 }
 function retainRequestFact(error, fact) {
-  const safe = validatedRequestFact(fact);
+  const safe = normalizeIosRequestFact(fact);
   if (safe && error && typeof error === 'object' && !types.isProxy(error) && types.isNativeError(error) && Object.getPrototypeOf(error) === NativeDriverError.prototype) {
     try { if (!Object.getOwnPropertyDescriptor(error, 'requestFailure')) Object.defineProperty(error, 'requestFailure', { value: safe }); } catch {}
   }
@@ -45,7 +32,7 @@ export function readIosRequestFailure(error) {
   try {
     if (Object.getPrototypeOf(error) !== NativeDriverError.prototype) return undefined;
     const descriptor = Object.getOwnPropertyDescriptor(error, 'requestFailure');
-    return descriptor && Object.hasOwn(descriptor, 'value') ? validatedRequestFact(descriptor.value) : undefined;
+    return descriptor && Object.hasOwn(descriptor, 'value') ? normalizeIosRequestFact(descriptor.value) : undefined;
   } catch { return undefined; }
 }
 const fail = (code, requestFact) => new NativeDriverError(code, requestFact);

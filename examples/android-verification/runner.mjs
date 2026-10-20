@@ -2,7 +2,7 @@
 import { isDeepStrictEqual, types } from 'node:util';
 import { NATIVE_RUNNER, IOS_NATIVE_RUNNER, NATIVE_DRIVER_FAILURE_CODES, nativeLimits, NativeVerificationError, validateNativePlan, nativeDiagnostic } from './contracts.mjs';
 import { NativeDriverError as AndroidDriverError } from './driver.mjs';
-import { NativeDriverError as IosDriverError } from '../ios-verification/driver.mjs';
+import { NativeDriverError as IosDriverError, readIosRequestFailure } from '../ios-verification/driver.mjs';
 
 const DRIVER_CAUSES = new Set([...NATIVE_DRIVER_FAILURE_CODES, 'NATIVE_DRIVER_CANCELLED']);
 function failureCause(error, runner) {
@@ -13,8 +13,11 @@ function failureCause(error, runner) {
   try {
     const prototype = Object.getPrototypeOf(error), descriptor = Object.getOwnPropertyDescriptor(error, 'code');
     if (!descriptor || !Object.hasOwn(descriptor, 'value') || typeof descriptor.value !== 'string') return;
-    if (prototype === NativeVerificationError.prototype && descriptor.value === 'NATIVE_UI_SETTLEMENT_TIMEOUT') return descriptor.value;
-    if (prototype === (runner === IOS_NATIVE_RUNNER ? IosDriverError.prototype : AndroidDriverError.prototype) && DRIVER_CAUSES.has(descriptor.value)) return descriptor.value;
+    if (prototype === NativeVerificationError.prototype && descriptor.value === 'NATIVE_UI_SETTLEMENT_TIMEOUT') return Object.freeze({ cause: descriptor.value });
+    if (prototype === (runner === IOS_NATIVE_RUNNER ? IosDriverError.prototype : AndroidDriverError.prototype) && DRIVER_CAUSES.has(descriptor.value)) {
+      const requestFailure = runner === IOS_NATIVE_RUNNER && descriptor.value !== 'NATIVE_DRIVER_CANCELLED' ? readIosRequestFailure(error) : undefined;
+      return Object.freeze({ cause: descriptor.value, ...(requestFailure ? { requestFailure } : {}) });
+    }
   } catch { /* An unrecognized thrown value contributes no public metadata. */ }
 }
 
@@ -26,7 +29,8 @@ function wait(promise, milliseconds, signal) {
       done = true; clearTimeout(timer); signal?.removeEventListener('abort', cancel); resolve(outcome);
     };
     const cancel = () => finish({ kind: 'cancelled' });
-    promise.then(value => finish({ kind: 'settled', ok: value.ok, ...(value.cause ? { cause: value.cause } : {}) }), () => finish({ kind: 'settled', ok: false }));
+    promise.then(value => finish({ kind: 'settled', ok: value.ok, ...(value.cause ? { cause: value.cause } : {}),
+      ...(value.requestFailure ? { requestFailure: value.requestFailure } : {}) }), () => finish({ kind: 'settled', ok: false }));
     timer = setTimeout(() => finish({ kind: 'timeout' }), milliseconds);
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted) cancel();
@@ -48,8 +52,8 @@ async function phase(callback, context, state, timeoutMs, settleTimeoutMs, signa
   const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   const pending = Promise.resolve().then(() => callback(Object.freeze({ ...context, check: checking(state), signal: combined })))
     .then(() => ({ ok: true }), error => {
-      const cause = failureCause(error, runner);
-      return { ok: false, ...(cause ? { cause } : {}) };
+      const facts = failureCause(error, runner);
+      return { ok: false, ...facts };
     }); // Never retain the thrown value or callback return.
   const outcome = await wait(pending, timeoutMs, signal);
   if (outcome.kind === 'settled') { state.open = false; return { ...outcome, unsettled: false }; }
@@ -101,12 +105,15 @@ export async function runNativeCases({ plan: input, cases, context = {}, signal,
     row.attempts = 1;
     const body = counter(), cleanup = counter();
     const bodyResult = await phase(authored.run, context, body, timeoutMs, settleTimeoutMs, signal, plan.runner);
-    const failures = [];
+    const failures = []; let requestFailure;
     if (bodyResult.unsettled) { failures.push('NATIVE_BODY_UNSETTLED'); stop = true; row.status = 'blocked'; }
     else if (bodyResult.kind === 'cancelled') { failures.push('NATIVE_RUN_CANCELLED'); row.status = 'cancelled'; stop = true; }
     else if (bodyResult.kind === 'timeout') { failures.push('NATIVE_BODY_TIMEOUT'); row.status = 'failed'; }
     else if (body.failed) { failures.push('NATIVE_ASSERTION_FAILED'); row.status = 'failed'; }
-    else if (!bodyResult.ok) { failures.push('NATIVE_BODY_FAILED'); if (bodyResult.cause) failures.push(bodyResult.cause); row.status = 'failed'; }
+    else if (!bodyResult.ok) {
+      failures.push('NATIVE_BODY_FAILED'); if (bodyResult.cause) failures.push(bodyResult.cause); row.status = 'failed';
+      if (bodyResult.requestFailure) requestFailure = Object.freeze({ stage: 'body', ...bodyResult.requestFailure });
+    }
     else if (body.observed === 0) { failures.push('NATIVE_NO_BODY_CHECKS'); row.status = 'blocked'; }
     else row.status = 'passed';
     if (bodyResult.unsettled) row.cleanup.status = 'unknown';
@@ -120,7 +127,12 @@ export async function runNativeCases({ plan: input, cases, context = {}, signal,
       else if (cleanup.observed === 0) cleanupFailure = 'NATIVE_NO_CLEANUP_CHECKS';
       if (cleanupFailure) {
         failures.push(cleanupFailure);
-        if (cleanupFailure === 'NATIVE_CLEANUP_FAILED' && !cleanup.failed && cleaned.cause) failures.push(cleaned.cause);
+        if (cleanupFailure === 'NATIVE_CLEANUP_FAILED' && !cleanup.failed && cleaned.cause) {
+          // A repeated cause is deduplicated below and cannot independently
+          // attribute a cleanup request in the JSON contract. Omit that fact.
+          const separateCause = !failures.includes(cleaned.cause); failures.push(cleaned.cause);
+          if (!requestFailure && separateCause && cleaned.requestFailure) requestFailure = Object.freeze({ stage: 'cleanup', ...cleaned.requestFailure });
+        }
         if (row.cleanup.status !== 'unknown' || !cleaned.unsettled) row.cleanup.status = 'failed';
         if (!['blocked', 'cancelled'].includes(row.status)) row.status = 'failed';
       } else row.cleanup.status = 'completed';
@@ -129,6 +141,8 @@ export async function runNativeCases({ plan: input, cases, context = {}, signal,
     row.assertionsObserved = body.observed + cleanup.observed;
     row.reason = failures[0] ?? 'NATIVE_CASE_PASSED';
     row.diagnostics = [...new Set(failures)].map(diagnosis);
+    if (requestFailure && row.status === 'failed' && !failures.some(code =>
+      ['NATIVE_BODY_TIMEOUT', 'NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_TIMEOUT', 'NATIVE_CLEANUP_UNSETTLED', 'NATIVE_RUN_CANCELLED'].includes(code))) row.requestFailure = requestFailure;
     if (failures.includes('NATIVE_RUN_CANCELLED')) report.reasonCodes.push('NATIVE_RUN_CANCELLED');
     if (bodyResult.unsettled || failures.includes('NATIVE_CLEANUP_UNSETTLED')) report.reasonCodes.push('NATIVE_BODY_UNSETTLED' === row.reason ? row.reason : 'NATIVE_CLEANUP_UNSETTLED');
   }
@@ -138,5 +152,8 @@ export async function runNativeCases({ plan: input, cases, context = {}, signal,
   if (rows.some(row => row.status === 'cancelled') || report.reasonCodes.includes('NATIVE_RUN_CANCELLED')) report.verdict = 'cancelled';
   else if (rows.some(row => row.status === 'failed')) report.verdict = 'failed';
   else if (rows.some(row => row.status !== 'passed')) report.verdict = 'blocked';
+  if (report.reasonCodes.some(code => ['NATIVE_RUN_CANCELLED', 'NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_UNSETTLED'].includes(code))) {
+    for (const row of rows) delete row.requestFailure;
+  }
   return report;
 }
