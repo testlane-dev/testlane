@@ -8,7 +8,7 @@ import {requireIosWdaCi,publicIosWdaStatus,validateWdaBuildManifest,probeOwnedWd
 import {IOS_DEVICE_SCOPE} from '../device-scope.mjs';
 
 const ci={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',TESTLANE_IOS_PROOF_CI:'1'};
-const preparation=()=>({schemaVersion:1,wdaPrepared:true,buildBudgetMs:300000,buildMs:12345,webdriveragent:'16.16.3',
+const preparation=()=>({schemaVersion:1,wdaPrepared:true,buildBudgetMs:600000,buildMs:12345,webdriveragent:'16.16.3',
   projectSHA256:'a'.repeat(64),packageSHA256:'b'.repeat(64),runnerSHA256:'c'.repeat(64),xctestrunSHA256:'d'.repeat(64)});
 const testDevice=()=>({serverUrl:'http://127.0.0.1:8210/',udid:'12345678-1234-1234-1234-123456789ABC',
   deviceSetPath:'/Users/runner/Library/Developer/CoreSimulator/Devices',derivedDataPath:'/private/tmp/tld-ios-Abc123/derived-data',
@@ -37,6 +37,8 @@ test('public WDA status never retains arbitrary errors, stages, session IDs or r
   assert.equal(publicIosWdaStatus({...successful,appPrewarmed:true}).appPrewarmed,true);
   assert.equal(publicIosWdaStatus({...successful,appPrewarmed:true}).status,'failed','missing prepared artifact binding cannot pass');
   assert.equal(publicIosWdaStatus({...successful,appPrewarmed:true,wdaPreparation:preparation()}).status,'passed');
+  const stale=publicIosWdaStatus({...successful,appPrewarmed:true,wdaPreparation:{...preparation(),buildBudgetMs:300000}});
+  assert.equal(stale.status,'failed');assert.equal(stale.wdaPrepared,false);assert.equal(Object.hasOwn(stale,'wdaPreparation'),false);
   const invalid=publicIosWdaStatus({...successful,appPrewarmed:true,wdaPreparation:{...preparation(),raw:secret}});
   assert.equal(invalid.status,'failed');assert.equal(invalid.wdaPrepared,false);assert.equal(JSON.stringify(invalid).includes(secret),false);
 });

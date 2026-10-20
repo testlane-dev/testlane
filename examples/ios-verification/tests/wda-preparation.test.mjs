@@ -25,12 +25,13 @@ test('prepared products must be the pinned Simulator runner and test bundle for 
     {architecture:'x86_64'},{platform:'platform IOS\n'},{expectedArchitecture:null}])assert.throws(()=>validateIosWdaBundleMetadata({...value,...change}),/IOS_WDA_ARTIFACT_INVALID/);
 });
 
-const preparation=()=>({schemaVersion:1,wdaPrepared:true,buildBudgetMs:300000,buildMs:12345,webdriveragent:'16.16.3',projectSHA256:'a'.repeat(64),
+const preparation=()=>({schemaVersion:1,wdaPrepared:true,buildBudgetMs:600000,buildMs:12345,webdriveragent:'16.16.3',projectSHA256:'a'.repeat(64),
   packageSHA256:'b'.repeat(64),runnerSHA256:'c'.repeat(64),xctestrunSHA256:'d'.repeat(64)});
 test('public WDA preparation evidence copies only measured hash primitives and the separate compile budget',()=>{
   const original=preparation(),value=validateIosWdaPreparation(original);assert.deepEqual(value,original);assert.equal(Object.isFrozen(value),true);
   original.runnerSHA256='e'.repeat(64);assert.equal(value.runnerSHA256,'c'.repeat(64));
-  for(const change of [{wdaPrepared:false},{buildBudgetMs:600000},{buildMs:300001},{buildMs:-1},{webdriveragent:'other'},
+  for(const buildMs of [300001,599999,600000])assert.equal(validateIosWdaPreparation({...preparation(),buildMs}).buildMs,buildMs);
+  for(const change of [{wdaPrepared:false},{buildBudgetMs:300000},{buildBudgetMs:600001},{buildMs:600001},{buildMs:600000.1},{buildMs:Infinity},{buildMs:-1},{webdriveragent:'other'},
     {runnerSHA256:'missing'},{xctestrunSHA256:null},{runnerSHA256:['c'.repeat(64)]},{packageSHA256:{toString:()=> 'b'.repeat(64)}},
     {raw:'untrusted-native-output'},{root:'/private/arbitrary'}]){
     assert.throws(()=>validateIosWdaPreparation({...preparation(),...change}),error=>error.message==='IOS_WDA_PREPARE_FAILED'&&!String(error.stack).includes('untrusted-native-output'));

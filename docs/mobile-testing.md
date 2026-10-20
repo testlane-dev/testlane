@@ -76,7 +76,11 @@ UI clients, which further limits this experiment to an ephemeral host. It does n
 require an Apple/Expo account or accept SDK licenses.
 
 Setup prebuilds the pinned WDA project for the exact owned Simulator into private
-DerivedData, with a separate 300-second compile bound. It verifies and binds the
+DerivedData, with a separate 600-second monotonic compile bound. This bounded
+cold-compile experiment requires actual process close with exit zero and has no
+retry or automatic budget increase; it does not establish iOS acceptance.
+Retained stop and independent cleanup must settle and may add time before failure
+returns. It verifies and binds the
 generated runner/test artifacts and measured source inputs, then rechecks them
 before sessions and between phases. Session creation requires the prebuilt runner;
 uncertain compilation blocks authentication. Setup launches the unauthenticated

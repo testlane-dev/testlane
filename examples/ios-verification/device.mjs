@@ -23,7 +23,7 @@ const inside = (root, file) => { const rel = path.relative(root, file); return r
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sha = value => createHash('sha256').update(value).digest('hex');
-const WDA_BUILD_MS = 300000;
+const WDA_BUILD_MS = 600000;
 
 /** One cold-start observation window. Callbacks settle; no timer races detach work. */
 export async function runIosColdBoot({ boot, bootStatus, confirmOwned, onBootStarted = () => {}, signal, now = () => performance.now() }) {
@@ -369,8 +369,8 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     if (!ignoreSignal) live();
     let stdout = '', stderr = '', bytes = 0, overflow = false;
     const kind = commandKind(executable, args), began = performance.now();
-    // Only cold-boot callers supply an absolute monotonic deadline. Each command
-    // also keeps its own cap, including time spent acquiring its retained child.
+    // Cold-start and WDA preparation callers supply an absolute monotonic deadline.
+    // Each command also keeps its own cap, including retained-child acquisition.
     const monotonicDeadline = deadlineAt === undefined ? undefined : Math.min(deadlineAt, began + timeoutMs);
     if (monotonicDeadline !== undefined && !(monotonicDeadline > began)) throw tagIosCommandFailure(fail('IOS_COMMAND_TIMEOUT'), kind);
     const state = launch(executable, args, { cwd: root, env, capture: () => {} });
@@ -515,8 +515,9 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   async function prepareWda() {
     await assertOwned(); const before = await wdaSourceBinding(); live();
     const began = performance.now(); wdaBuildIncomplete = true;
-    const result = await run('/usr/bin/xcodebuild', ownedIosWdaBuildArguments({ projectPath: before.projectPath, derivedDataPath, udid: marker.udid, platformVersion: target.platformVersion }), { timeoutMs: WDA_BUILD_MS });
-    const buildMs = Math.round(performance.now() - began);
+    const result = await run('/usr/bin/xcodebuild', ownedIosWdaBuildArguments({ projectPath: before.projectPath, derivedDataPath, udid: marker.udid, platformVersion: target.platformVersion }), { timeoutMs: WDA_BUILD_MS, deadlineAt: began + WDA_BUILD_MS });
+    // A fractional overrun must not round back into an accepted preparation.
+    const buildMs = Math.ceil(performance.now() - began);
     if (result.code !== 0 || buildMs > WDA_BUILD_MS) throw fail('IOS_WDA_PREPARE_FAILED');
     await assertOwned(); const after = await wdaSourceBinding();
     if (JSON.stringify(after) !== JSON.stringify(before)) throw fail('IOS_WDA_PROJECT_REFUSED');

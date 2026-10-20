@@ -166,7 +166,11 @@ or ignore a failed dismissal. This is part of the synthetic app's UI contract.
 
 Setup compiles only the pinned WebDriverAgent project into the run's private
 DerivedData, for the exact owned Simulator UUID. Compilation has a separate
-300-second bound and must finish successfully before setup can continue. The
+600-second monotonic bound and requires actual process close with exit zero.
+This is one bounded cold-compile experiment, not a validated performance fix;
+failure blocks setup without retries or automatic budget increases. Retained
+command stop, pending diagnostics and independent cleanup must settle before
+failure returns and may add time; uncertainty retains recovery state. The
 controller verifies and hashes the generated Simulator runner, test bundle and
 `.xctestrun` file, along with the measured project/package inputs. It checks those
 bindings again before session creation and between proof phases. WDA session
@@ -261,14 +265,14 @@ capped at 20 seconds. Each ordinary driver request shares one five-second ceilin
 between its live ownership check and HTTP operation. An unconfirmed setup check prevents subsequent native actions;
 session deletion is reported unknown if the prior operation cannot be confirmed
 settled, and the controller fences it through owned-device teardown.
-The separate 300-second WDA
+The separate 600-second WDA
 compile happens during device setup, before the worker and credentials exist;
 it does not extend session or business-case deadlines. Fixed numeric `timings.json`
 metrics retain per-phase elapsed time and ownership-check RPC counts/time even on
 phase failure, without identifiers, view text, raw errors or driver payloads.
-Simulator boot has a 180-second bound. Its first read-only ownership inventory query
-has a separate 90-second allowance for cold CoreSimulator startup; subsequent
-inventory queries retain their ordinary 30-second bound.
+Cold boot uses the shared 600-second window described above, including the
+30-second boot-command cap and first fresh ownership confirmation capped at
+90 seconds; subsequent inventory queries retain their ordinary 30-second bound.
 
 Successful output contains the reviewed plan, three fixed-shape JSON reports and a
 receipt with source, app-tree, build-manifest, plan, case and installed-package
