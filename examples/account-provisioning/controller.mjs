@@ -3,19 +3,20 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readFile, realpath, rename, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { isSyntheticApp } from './app.mjs';
+import { isSupabaseApp } from './supabase/app.mjs';
 import { canonical, digest, emailFor, exact, fail, HASH, ProvisionError, ROLES, UUID, validOwner, validatePolicy, WINDOW_MS } from './contracts.mjs';
 
 const STATES = ['creating', 'created', 'seeding', 'ready', 'create-unknown', 'seed-unknown', 'deleted'];
 const samePath = (a, b) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 export async function createProvisioner({ app, root: requested, policy: input, now = Date.now } = {}) {
-  if (!isSyntheticApp(app)) throw fail('PROVISION_TARGET_REFUSED');
+  if (!isSyntheticApp(app) && !isSupabaseApp(app)) throw fail('PROVISION_TARGET_REFUSED');
   const policy = validatePolicy(input, app.target), policyHash = digest(policy);
   if (typeof now !== 'function' || typeof requested !== 'string' || !path.isAbsolute(requested) || /[\r\n\0]/.test(requested)) throw fail('PROVISION_INPUT_REFUSED');
   const root = path.resolve(requested), parent = await realpath(path.dirname(root));
   if (!samePath(parent, path.dirname(root)) || (await lstat(parent)).isSymbolicLink()) throw fail('PROVISION_STATE_INVALID');
   const markerFile = path.join(root, 'owner.json'), stateFile = path.join(root, 'ledger.json'), lock = path.join(root, 'ledger.lock');
-  const bound = app.coordinatorBinding();
+  const bound = await app.coordinatorBinding();
   if (bound && (!samePath(bound.root, root) || bound.policyHash !== policyHash)) throw fail('PROVISION_STATE_INVALID');
   let nonce, fresh = false;
   if (bound) { const info = await lstat(root).catch(() => null); if (!info || !info.isDirectory() || info.isSymbolicLink()) throw fail('PROVISION_STATE_INVALID'); }
@@ -77,7 +78,7 @@ export async function createProvisioner({ app, root: requested, policy: input, n
     if (typeof marker.nonce !== 'string' || !HASH.test(marker.nonce) || (bound && marker.nonce !== bound.nonce)) throw fail('PROVISION_STATE_INVALID'); nonce = marker.nonce;
     await readState();
   }
-  app.bindCoordinator({ root, policyHash, nonce });
+  await app.bindCoordinator({ root, policyHash, nonce });
   async function transaction(callback, allowRollback = false) {
     await assertRoot(); const deadline = Date.now() + 3000; let acquired = false;
     while (!acquired) {
@@ -147,10 +148,10 @@ export async function createProvisioner({ app, root: requested, policy: input, n
         await transaction(state => { const run = matchingRun(state, handle), entry = state.operations.find(item => item.owner.operationId === owner.operationId);
           if (run.status !== 'active' || entry.status === 'deleted') throw fail('PROVISION_RUN_REFUSED'); entry.accountId = created.id; entry.status = 'seeding'; });
         phase = 'seed';
-        app.beginCredentialDelivery(owner);
+        await app.beginCredentialDelivery(owner);
         try { await acceptCredential(Object.freeze({ email: owner.email, password, role, accountId: created.id })); }
         catch { await markUnknown(handle, owner.operationId, 'seed-unknown'); throw fail('PROVISION_SEED_UNKNOWN'); }
-        finally { app.endCredentialDelivery(owner); }
+        finally { await app.endCredentialDelivery(owner); }
         await transaction(state => { const run = matchingRun(state, handle), entry = state.operations.find(item => item.owner.operationId === owner.operationId);
           if (run.status !== 'active' || entry.status !== 'seeding') throw fail('PROVISION_RUN_REFUSED'); entry.status = 'ready'; });
         return Object.freeze({ id: created.id, role, expiresAt: owner.expiresAt });
@@ -167,10 +168,10 @@ export async function createProvisioner({ app, root: requested, policy: input, n
         return structuredClone(state.operations.filter(entry => entry.owner.runId === run.runId)); }, true);
       try {
         for (const entry of entries) {
-          const before = app.inspectOwned(entry.owner);
+          const before = await app.inspectOwned(entry.owner);
           if (entry.accountId !== null && before.present && before.id !== entry.accountId) throw fail('PROVISION_OWNERSHIP_REFUSED');
-          app.revokeDeleteOwned(entry.owner);
-          const absent = app.inspectOwned(entry.owner);
+          await app.revokeDeleteOwned(entry.owner);
+          const absent = await app.inspectOwned(entry.owner);
           if (absent.present || absent.revoked !== true || absent.deliveryPending) throw fail('PROVISION_CLEANUP_INCOMPLETE');
           await transaction(state => { const item = state.operations.find(item => item.owner.operationId === entry.owner.operationId); item.status = 'deleted'; }, true);
         }

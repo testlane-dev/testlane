@@ -132,6 +132,8 @@ export const URL_ALLOWLIST = [
   "docs.maestro.dev/",
   "docs.maestro.dev/reference/commands-available/asserttrue.md",
   "docs.expo.dev/develop/development-builds/introduction",
+  // Reviewed official JWT revocation limitation used by the local provider proof.
+  "supabase.com/docs/reference/javascript/auth-signout",
   "example.com",
   "example.net",
   "example.org",

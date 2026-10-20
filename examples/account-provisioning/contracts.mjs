@@ -1,4 +1,4 @@
-/** Fixed local experiment, not provider or production provisioning authority. */
+/** Fixed local experiment; no hosted-project or production provisioning authority. */
 import { createHash } from 'node:crypto';
 
 export const ROLES = Object.freeze(['Editor', 'Reviewer']);
@@ -33,13 +33,17 @@ export function reviewedSyntheticPolicy(target, releaseId) {
     roles: [...ROLES], ttlMs: TTL_MS, maxAccountsPerRun: 2, maxActiveAccounts: 4, maxCreateAttemptsPerHour: 10,
     effects: { email: false, sms: false, billing: false, webhooks: false } };
 }
+export function reviewedSupabasePolicy(target, releaseId) {
+  if (target?.kind !== 'supabase-local') throw fail('PROVISION_TARGET_REFUSED');
+  return reviewedSyntheticPolicy(target, releaseId);
+}
 export function validatePolicy(input, target) {
   if (!exact(input, ['schemaVersion', 'enabled', 'environment', 'target', 'releaseId', 'roles', 'ttlMs', 'maxAccountsPerRun', 'maxActiveAccounts', 'maxCreateAttemptsPerHour', 'effects']) ||
     !exact(input.target, ['kind', 'targetId', 'origin']) || input.schemaVersion !== 1 || input.enabled !== true || input.environment !== 'testing' ||
     !HASH.test(input.releaseId ?? '') || canonical(input.roles) !== canonical(ROLES) || input.ttlMs !== TTL_MS ||
     input.maxAccountsPerRun !== 2 || input.maxActiveAccounts !== 4 || input.maxCreateAttemptsPerHour !== 10 ||
     !exact(input.effects, ['email', 'sms', 'billing', 'webhooks']) || Object.values(input.effects).some(value => value !== false)) throw fail('PROVISION_POLICY_REFUSED');
-  if (canonical(input.target) !== canonical(target) || target.kind !== 'synthetic-local') throw fail('PROVISION_TARGET_REFUSED');
+  if (canonical(input.target) !== canonical(target) || !['synthetic-local', 'supabase-local'].includes(target.kind)) throw fail('PROVISION_TARGET_REFUSED');
   const url = new URL(target.origin);
   if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.origin !== target.origin || !url.port || !UUID.test(target.targetId)) throw fail('PROVISION_TARGET_REFUSED');
   return structuredClone(input);

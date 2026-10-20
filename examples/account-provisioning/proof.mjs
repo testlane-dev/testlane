@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { lstat, mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises';
+import { lstat, readFile, readdir, realpath, rmdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { consumerProject, assertNoLeaks } from '../playwright/tests/consumer.mjs';
@@ -12,6 +12,8 @@ import { runDemoChild } from '../verification-demo/native.mjs';
 import { startProvisioningApp } from './app.mjs';
 import { createProvisioner } from './controller.mjs';
 import { canonical, emailFor, reviewedSyntheticPolicy } from './contracts.mjs';
+import { assertPrivateRuntimeDirectory, createPrivateRuntimeDirectory } from './supabase/tools/private-directory.mjs';
+import { finalizeProvisioningProof } from './proof-finalization.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..');
@@ -19,7 +21,44 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 async function sources() { return Object.fromEntries(await Promise.all(['contracts.mjs', 'app.mjs', 'controller.mjs', 'proof.mjs'].map(async file => [file, sha(await readFile(path.join(HERE, file)))]))); }
 async function supportSources() {
   return Object.fromEntries(await Promise.all(['examples/verification-demo/native.mjs', 'examples/playwright/tests/consumer.mjs',
-    'examples/workflows/test-support/real-broker.mjs'].map(async file => [file, sha(await readFile(path.join(REPO, file)))])));
+    'examples/workflows/test-support/real-broker.mjs', 'examples/account-provisioning/supabase/tools/private-directory.mjs',
+    'examples/account-provisioning/supabase/tools/process.mjs', 'examples/account-provisioning/proof-finalization.mjs']
+    .map(async file => [file, sha(await readFile(path.join(REPO, file)))])));
+}
+/** Source-only proof setup. Reuses the provider's platform permission verifier. */
+export async function prepareProvisioningProofDirectories(outputDir, { signal } = {}) {
+  signal?.throwIfAborted();
+  assert.ok(typeof outputDir === 'string' && path.isAbsolute(outputDir), 'a NEW absolute output directory is required');
+  const output = path.resolve(outputDir);
+  await createPrivateRuntimeDirectory(output, { signal });
+  const sessionRoot = await createPrivateRuntimeDirectory(path.join(output, 'sessions'), { signal });
+  const scratchRoot = await createPrivateRuntimeDirectory(path.join(output, 'scratch'), { signal });
+  signal?.throwIfAborted();
+  // Reused consumer and broker helpers consult os.tmpdir() on creation AND
+  // disposal. Lease these values until their owned children and trees settle.
+  const keys = ['TMP', 'TEMP', 'TMPDIR', 'NODE_DISABLE_COMPILE_CACHE'];
+  const previous = keys.map(key => [key, Object.hasOwn(process.env, key), process.env[key]]);
+  for (const key of ['TMP', 'TEMP', 'TMPDIR']) process.env[key] = scratchRoot;
+  process.env.NODE_DISABLE_COMPILE_CACHE = '1';
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    restored = true;
+    for (const [key, present, value] of previous) {
+      if (present) process.env[key] = value; else delete process.env[key];
+    }
+  };
+  return Object.freeze({ output, sessionRoot, scratchRoot, restore,
+    async removeEmpty() {
+      for (const directory of [scratchRoot, sessionRoot]) {
+        await assertPrivateRuntimeDirectory(directory);
+        assert.equal((await readdir(directory)).length, 0, 'private proof directories must be empty before disposal');
+      }
+      for (const directory of [scratchRoot, sessionRoot]) {
+        await rmdir(directory);
+      }
+    },
+  });
 }
 async function tree(root) {
   const entries = [];
@@ -46,14 +85,12 @@ export async function runProvisioningProof({ outputDir, signal, onStage = () => 
   const support = realBrokerSupport();
   assert.ok(support.supported, 'requires Windows DPAPI or explicitly isolated Linux Secret Service');
   assert.ok(typeof outputDir === 'string' && path.isAbsolute(outputDir), 'a NEW absolute output directory is required');
-  const output = path.resolve(outputDir); await mkdir(output, { mode: 0o700 });
-  assert.equal((await lstat(output)).isSymbolicLink(), false); assert.equal(await realpath(output), output);
-  await writeFile(path.join(output, '.gitignore'), '*\n', { flag: 'wx', mode: 0o600 });
+  const output = path.resolve(outputDir);
   const sourceHashes = await sources(), supportHashes = await supportSources(), releaseId = sha(canonical({ sourceHashes, supportHashes })), runId = randomUUID();
   const credentials = [], cookies = new Map(), attempted = new Set(), namespace = 'provision-' + randomBytes(8).toString('hex');
   const unconfirmedOwnedChildPids = new Set();
   const profileFor = role => namespace + ':testing:' + role.toLowerCase();
-  let app, manager, handle, consumer, harness, env, before, receipt, failure, captured = '', terminationConfirmed = true, cleanupFailed = false, stage = 'setup';
+  let app, manager, handle, consumer, harness, env, before, receipt, failure, storage, captured = '', terminationConfirmed = true, cleanupFailed = false, stage = 'setup';
   const at = value => { stage = value; onStage(value); };
   const execute = async (args, options = {}) => {
     try { const result = await runDemoChild({ entry: consumer.brokerCli, args, cwd: consumer.root, env, timeoutMs: 35_000, signal, ...options }); captured += result.stdout + result.stderr; return result; }
@@ -66,6 +103,8 @@ export async function runProvisioningProof({ outputDir, signal, onStage = () => 
     }
   };
   try {
+    at('private-session-directory'); storage = await prepareProvisioningProofDirectories(output, { signal });
+    await writeFile(path.join(output, '.gitignore'), '*\n', { flag: 'wx', mode: 0o600 });
     at('installed-broker'); consumer = await consumerProject({ tarball: process.env.TESTLANE_PACKAGE_TARBALL }); before = await installedTreeHash(consumer.packageRoot);
     assert.equal(sha(await readFile(path.join(consumer.packageRoot, 'examples/verification-demo/native.mjs'))), supportHashes['examples/verification-demo/native.mjs'],
       'the actual imported bounded native helper must match the installed broker helper');
@@ -85,7 +124,7 @@ export async function runProvisioningProof({ outputDir, signal, onStage = () => 
         sessionCookieName: 'tlp_session', mePath: '/api/me', emailField: 'email', roleField: 'role' },
     }])) };
     harness = await createRealBrokerHarness({ brokerCli: consumer.brokerCli, registry: profiles, support });
-    env = { ...harness.env, DEBUG: '', NODE_DEBUG: '', PWDEBUG: '', TMP: consumer.sessionTemp, TEMP: consumer.sessionTemp, TMPDIR: consumer.sessionTemp };
+    env = { ...harness.env, DEBUG: '', NODE_DEBUG: '', PWDEBUG: '', TMP: storage.sessionRoot, TEMP: storage.sessionRoot, TMPDIR: storage.sessionRoot };
     delete env.NODE_OPTIONS;
     const roleResults = [];
     for (const role of ['Editor', 'Reviewer']) {
@@ -98,7 +137,7 @@ export async function runProvisioningProof({ outputDir, signal, onStage = () => 
       const check = await execute(['--json', 'check', profileFor(role)]); assert.equal(check.code, 0);
       const identity = JSON.parse(check.stdout);
       assert.equal(identity.ok, true); assert.equal(identity.roleSource, 'app'); assert.equal(identity.role, role); assert.equal(identity.email, emailFor(runId, role));
-      const file = path.join(consumer.sessionTemp, role.toLowerCase() + '.json');
+      const file = path.join(storage.sessionRoot, role.toLowerCase() + '.json');
       try {
         assert.equal((await execute(['session', profileFor(role), '--format', 'storage-state', '--out', file])).code, 0);
         const state = JSON.parse(await readFile(file, 'utf8')), found = state.cookies.filter(item => item.name === 'tlp_session');
@@ -126,6 +165,7 @@ export async function runProvisioningProof({ outputDir, signal, onStage = () => 
       installedBrokerVersion: metadata.version, installedBrokerTreeSha256: before, nativeStore: support.store,
       roles: roleResults, ownedAccountsRemaining: 0, oldSessionsRefused: 2, deletedAccountSignInRefused: 2, foreignAccountUnchanged: true,
       controllerRoutesExposed: false, nativeEntriesRemoved: 2, cleanupVerified: false, credentialLeakScanPassed: false };
+    receipt.privateScratchAndSessionDirectories = true;
   } catch (error) { failure = error; }
   finally {
     at('cleanup');
@@ -141,6 +181,7 @@ export async function runProvisioningProof({ outputDir, signal, onStage = () => 
     }
     try {
       if (consumer && (await readdir(consumer.sessionTemp)).length) cleanupFailed = true;
+      if (storage && (await readdir(storage.sessionRoot)).length) cleanupFailed = true;
       const material = credentials.map(item => item.password).concat(app?.issuedSessionTokens() ?? []);
       assertNoLeaks(captured + await textTree(output) + (harness ? await textTree(harness.root) : '') + (consumer ? await textTree(consumer.sessionTemp) : ''), material);
     } catch { cleanupFailed = true; }
@@ -150,8 +191,10 @@ export async function runProvisioningProof({ outputDir, signal, onStage = () => 
       try { await harness?.dispose(); } catch { cleanupFailed = true; }
       if (!cleanupFailed) try { await consumer?.dispose(); } catch { cleanupFailed = true; }
     }
+    if (!cleanupFailed && storage) try { await storage.removeEmpty(); } catch { cleanupFailed = true; }
+    storage?.restore();
     if (cleanupFailed) {
-      await writeFile(path.join(output, 'recovery.json'), canonical({ schemaVersion: 1, status: 'manual-inspection-required', stage,
+      if (storage) await writeFile(path.join(output, 'recovery.json'), canonical({ schemaVersion: 1, status: 'manual-inspection-required', stage,
         profiles: [...attempted], nativeHome: harness?.root ?? null, consumerRoot: consumer?.root ?? null,
         childTerminationConfirmed: terminationConfirmed, unconfirmedOwnedChildPids: [...unconfirmedOwnedChildPids] }) + '\n', { mode: 0o600 });
       throw new Error('PROVISION_PROOF_CLEANUP_INCOMPLETE');
@@ -159,7 +202,7 @@ export async function runProvisioningProof({ outputDir, signal, onStage = () => 
   }
   if (failure) throw new Error('PROVISION_PROOF_FAILED');
   receipt.cleanupVerified = true; receipt.credentialLeakScanPassed = true;
-  await writeFile(path.join(output, 'receipt.json'), canonical(receipt) + '\n', { flag: 'wx', mode: 0o600 }); return receipt;
+  return finalizeProvisioningProof({ outputDir: output, receipt, kind: 'synthetic', signal });
 }
 async function main() {
   if (process.argv.length !== 4 || process.argv[2] !== '--output-dir') throw new Error('PROVISION_PROOF_ARGUMENTS_INVALID');
