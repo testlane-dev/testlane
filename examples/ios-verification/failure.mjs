@@ -5,11 +5,11 @@ import {sanitizeNativeReport} from '../android-verification/contracts.mjs';
 import {APPROVAL_REQUIREMENTS} from '../android-verification/proof-cases.mjs';
 
 const STAGES=new Set(['consumer-install','setup','owned-simulator-start','device-xcode-runtime-and-pinned-tools-validated',
-  'device-owned-simulator-created','device-owned-simulator-boot-started','device-owned-simulator-booted','device-private-appium-ready','broker-setup','positive','fault','corrected','cleanup']);
+  'device-owned-simulator-created','device-owned-simulator-boot-started','device-owned-simulator-booted','device-private-appium-ready','app-prewarm','broker-setup','positive','fault','corrected','cleanup']);
 const CODES=new Set(['IOS_PROOF_CLEANUP_INCOMPLETE','IOS_DEVICE_CLEANUP_UNCONFIRMED','IOS_BROKER_KEYCHAIN_CREATE_FAILED',
   'IOS_BROKER_KEYCHAIN_DELETE_FAILED','IOS_BROKER_KEYCHAIN_DELETE_UNCONFIRMED','IOS_BROKER_SEARCH_LIST_RESTORE_FAILED',
   'IOS_BROKER_DEFAULT_CHANGED','IOS_BROKER_CHILD_FAILED','IOS_BROKER_CREDENTIAL_LEAK','IOS_COMMAND_TIMEOUT','IOS_SIMULATOR_BOOT_TIMEOUT',
-  'IOS_SIMULATOR_BOOT_FAILED','IOS_SIMULATOR_CREATE_FAILED','IOS_APPIUM_READY_TIMEOUT','IOS_APPIUM_STOPPED','IOS_OWNERSHIP_REFUSED']);
+  'IOS_SIMULATOR_BOOT_FAILED','IOS_SIMULATOR_CREATE_FAILED','IOS_APPIUM_READY_TIMEOUT','IOS_APPIUM_STOPPED','IOS_OWNERSHIP_REFUSED','IOS_APP_LAUNCH_FAILED']);
 export async function publicIosFailure({output,stage,error}) {
   const summary={schemaVersion:1,status:'failed',stage:STAGES.has(stage)?stage:'setup',
     code:CODES.has(error?.message)?error.message:error?.code==='ERR_ASSERTION'?'IOS_PROOF_ASSERTION_FAILED':'IOS_PROOF_FAILED',reports:[]};

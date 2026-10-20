@@ -30,6 +30,10 @@ test('public WDA status never retains arbitrary errors, stages, session IDs or r
   assert.equal(status.code,'IOS_WDA_PREFLIGHT_FAILED');assert.equal(status.stage,'build-validation');assert.equal(status.status,'failed');
   assert.equal(JSON.stringify(status).includes(secret),false);assert.equal(publicIosWdaStatus().status,'failed');
   assert.equal(publicIosWdaStatus({error:Error('IOS_WDA_SESSION_TIMEOUT')}).code,'IOS_WDA_SESSION_TIMEOUT');
+  const successful={ownershipVerified:true,session:{sessionCreated:true,nativeContextVerified:true,sessionCleanup:'deleted'},deviceCleanup:'completed'};
+  assert.equal(publicIosWdaStatus(successful).status,'failed','success cannot silently omit the prewarmed setup condition');
+  assert.equal(publicIosWdaStatus({...successful,appPrewarmed:true}).appPrewarmed,true);
+  assert.equal(publicIosWdaStatus({...successful,appPrewarmed:true}).status,'passed');
 });
 test('build binding rejects changed public source, builder, app tree, signing and architecture metadata',()=>{
   const sourceHashes=Object.fromEntries(['package.json','package-lock.json','app.ios.config.cjs','index.js','App.js','bootstrap.mjs','plugins/withIosProofBuild.cjs'].map(file=>[file,'a'.repeat(64)]));
@@ -64,6 +68,8 @@ test('credential-free probe creates once, checks native context and deletes only
     assert.equal(caps['appium:showXcodeLog'],true);assert.equal(caps['appium:skipLogCapture'],true);assert.equal(caps['appium:disableAutomaticScreenshots'],true);
     assert.equal(caps['appium:printPageSourceOnFindFailure'],false);assert.equal(caps['appium:bundleId'],'dev.testlane.iosproof');
     assert.equal(caps['appium:isHeadless'],true);
+    assert.equal(caps['appium:wdaStartupRetries'],1);assert.equal(caps['appium:wdaConnectionTimeout'],5000);
+    assert.equal(caps['appium:forceAppLaunch'],false);assert.equal(caps['appium:shouldTerminateApp'],false);
     assert.equal(caps['appium:simulatorDevicesSetPath'],fixture.device.deviceBinding.deviceSetPath);
     assert.equal(Object.hasOwn(caps,'deviceBinding'),false);
     assert.equal(Object.hasOwn(caps,'appium:processArguments'),false);

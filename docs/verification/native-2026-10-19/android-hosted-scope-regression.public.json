@@ -1,0 +1,291 @@
+{
+  "schemaVersion": 1,
+  "evidenceKind": "local-controller-observation",
+  "recordedOn": "2026-10-19",
+  "sourceCommit": "dc159d2bd8d91a014dae0c77eebb4c081ff23b63",
+  "sourceStatus": "unreleased",
+  "publishedPackageTested": false,
+  "hostOS": "Windows",
+  "emulatorAbi": "x86_64",
+  "testAuthoring": "prewritten",
+  "limits": [
+    "Android regression after shared native worker and host changes for hosted iOS standard-device-set scope; this is not iOS acceptance.",
+    "One synthetic React Native/Expo app on an API34 emulator; no general existing-app integration.",
+    "The broker package was freshly packed from the named source checkout and installed locally; this did not test the published beta.2 npm archive.",
+    "The prior proof APK was reused only after all seven recorded app build-input hashes matched the committed public app source.",
+    "Controller observations and hashes are not a signed attestation or evidence of independent agent test design."
+  ],
+  "proof": {
+    "schemaVersion": 1,
+    "passed": true,
+    "runner": "android-uiautomator2",
+    "context": "NATIVE_APP",
+    "proofOnly": true,
+    "nativeStore": "dpapi",
+    "packageTreeSha256": "67781047c9bb281ed38539431a73c21e084177b48cb40ba39a5462f426327d94",
+    "apkSha256": "7353db3b0e4241f10f654d5bb7d83a04e4653f8d2226829935518e0e09a2eaa8",
+    "buildManifestSha256": "459aa3c51f2dcf617ce4eaff4f61f440dd59caf5d2dc9bee55b91d1218165ec8",
+    "publicAppSourceSha256": {
+      "package.json": "767b8605e7a2d1ae2ed487570eed947f84c840673d1e09029f1094d34bdfc52c",
+      "package-lock.json": "eb8ec94d64d6c9135d6a2175c5c4b78a9f13a4906b74e3403b773bcfdb130ace",
+      "app.config.cjs": "5de846fc6fcd469e1d03971b06d52d5adc9587b820888372ca46bbedd1b203f6",
+      "index.js": "7a206cb9a18c6ee95a18ea6eea5fd4cbe119ac1db3094c545aa94c2f8b8588e0",
+      "App.js": "773ffea50b69e4fc668db76e7dd13d1df7af2523e946a577fe970d304162dfb8",
+      "bootstrap.mjs": "db569d9d5dca36f0a2e6ae6377dfe3fecdfd7e0b161fee9a2a11778514c7c5b3",
+      "plugins/withProofBuild.cjs": "2895697fc9c47fa5f489dcc962dad176a453575647d20fcfe1cf47d1af671669"
+    },
+    "versions": {
+      "appium": "3.8.0",
+      "uiautomator2": "8.7.0",
+      "androidApi": "34",
+      "systemImageRevision": "14",
+      "automationApks": [
+        {
+          "file": "settings.apk",
+          "version": "8.0.9",
+          "sha256": "bcfc5e6c2547d83beb3202c43c54cd0a0d3fe48511c87e43585db214259e11f8"
+        },
+        {
+          "file": "uiautomator2-server.apk",
+          "version": "10.6.6",
+          "sha256": "8ff760a2a86b487f53090fbdcd5b0360e67d02bb811887d527a9557b0d59c80d"
+        },
+        {
+          "file": "uiautomator2-test.apk",
+          "version": "10.6.6",
+          "sha256": "e6f729287d72351388fd66597c35b69988b9091a7011954bf92a55d416cb1e1c"
+        }
+      ]
+    },
+    "budgets": {
+      "bodyMs": 90000,
+      "cleanupMs": 15000,
+      "settleMs": 5000,
+      "workerMs": 600000
+    },
+    "runs": [
+      {
+        "phase": "positive",
+        "verdict": "passed",
+        "passed": 5,
+        "failed": 0,
+        "recordsRemaining": 0
+      },
+      {
+        "phase": "fault",
+        "verdict": "failed",
+        "passed": 3,
+        "failed": 2,
+        "recordsRemaining": 0
+      },
+      {
+        "phase": "corrected",
+        "verdict": "passed",
+        "passed": 5,
+        "failed": 0,
+        "recordsRemaining": 0
+      }
+    ],
+    "planSha256": "cce055326ab7419223b3df2e6df6c1cd1780be2470fb37ac8337cb7a2b4284c2",
+    "specSha256": "837e922db3353a4aa6820ff8ddf918ada51b3890e523a8bdbb56e1c0e127b3d7",
+    "timings": {
+      "schemaVersion": 1,
+      "assertOwned": {
+        "calls": 1202,
+        "failed": 0,
+        "elapsedMs": 137341
+      },
+      "phases": [
+        {
+          "phase": "positive",
+          "elapsedMs": 146787,
+          "assertOwned": {
+            "calls": 404,
+            "failed": 0,
+            "elapsedMs": 51535
+          }
+        },
+        {
+          "phase": "fault",
+          "elapsedMs": 86899,
+          "assertOwned": {
+            "calls": 399,
+            "failed": 0,
+            "elapsedMs": 44715
+          }
+        },
+        {
+          "phase": "corrected",
+          "elapsedMs": 76640,
+          "assertOwned": {
+            "calls": 399,
+            "failed": 0,
+            "elapsedMs": 41091
+          }
+        }
+      ]
+    },
+    "cleanupVerified": true,
+    "credentialLeakScanPassed": true
+  },
+  "cases": {
+    "positive": [
+      {
+        "id": "editor-native-total",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 14,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "editor-cannot-approve",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 16,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "reviewer-native-approval",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 18,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "duplicate-approval-unchanged",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 17,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "anonymous-denied",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 7,
+        "cleanupAssertionsObserved": 0,
+        "cleanup": "not-required"
+      }
+    ],
+    "fault": [
+      {
+        "id": "editor-native-total",
+        "status": "failed",
+        "reason": "NATIVE_ASSERTION_FAILED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 11,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "editor-cannot-approve",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 16,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "reviewer-native-approval",
+        "status": "failed",
+        "reason": "NATIVE_ASSERTION_FAILED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 14,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "duplicate-approval-unchanged",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 17,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "anonymous-denied",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 7,
+        "cleanupAssertionsObserved": 0,
+        "cleanup": "not-required"
+      }
+    ],
+    "corrected": [
+      {
+        "id": "editor-native-total",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 14,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "editor-cannot-approve",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 16,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "reviewer-native-approval",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 18,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "duplicate-approval-unchanged",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 17,
+        "cleanupAssertionsObserved": 7,
+        "cleanup": "completed"
+      },
+      {
+        "id": "anonymous-denied",
+        "status": "passed",
+        "reason": "NATIVE_CASE_PASSED",
+        "attempts": 1,
+        "bodyAssertionsObserved": 7,
+        "cleanupAssertionsObserved": 0,
+        "cleanup": "not-required"
+      }
+    ]
+  },
+  "sourceFileSha256": {
+    "scripts/android-proof.mjs": "20e9455acc9b04ba72c67d79929d8946487a71b1febf884c308a58c8ea122d06",
+    "scripts/native-proof-support.mjs": "d6960202d075b70de77fe5c41530972761236cbd3766a929850047bf20bcdc5a",
+    "examples/playwright/tests/consumer.mjs": "6db34bb1389709daa7355f81f4c93ac65795bd7526ce9c8c1d24efdba13e8676",
+    "examples/workflows/test-support/real-broker.mjs": "d138cbea3460071979edef2b21a6705265819d1f257722893149c921410ef57f",
+    "examples/verification-demo/native.mjs": "904b9d35dbf3c1bf8b38f015f5fae215936945d79b6b6009590f71dd59bfca6b",
+    "examples/android-verification/device.mjs": "949e68c3ed1b68faace97f4acf9824fac380cd52a31a1304d5825b65a2394748",
+    "examples/android-verification/contracts.mjs": "99ec8aa24aef6a6c8dafe0929e6aa547f2233254ed4ae37ed05b61cc5f5a0828",
+    "examples/android-verification/driver.mjs": "4c64d52bb357b93c4f29c91a998bd1f9edae7789891a917d66119248c67e409c",
+    "examples/android-verification/driver-phase.mjs": "c7b4692fe1c65bf167ce78633d21153ca3309668b66127fed1dfce6a80b176c3",
+    "examples/android-verification/budgets.mjs": "51a296f5ca70a32e0f8aa42f12b9568cf36d67835e9f5eff522907dd10dcd2c7",
+    "examples/android-verification/runner.mjs": "c0d52946978810116aade576b40526057da95eb8fa7b401fa4d7cb09f2356612",
+    "examples/android-verification/worker.mjs": "24ff6b607d7e0fe7bf603a6970cf0a37cf2929fdf54591b972f041dbab539f60",
+    "examples/android-verification/worker-host.mjs": "9decb307f080a476f6bb28dc4d6d39515ce31eda03a5c94247bd499f33d3edcc",
+    "examples/android-verification/proof-cases.mjs": "837e922db3353a4aa6820ff8ddf918ada51b3890e523a8bdbb56e1c0e127b3d7",
+    "examples/ios-verification/device-scope.mjs": "abdf2e55c3f008b9cf8c513c7ade763b68283ad1ea0de7ca3c0a6500e3df0426"
+  }
+}

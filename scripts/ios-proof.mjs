@@ -37,8 +37,7 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
   assert.deepEqual(Object.keys(build.publicSourceSHA256).sort(),[...publicFiles].sort());
   for(const file of publicFiles)assert.equal(build.publicSourceSHA256[file],sha(await readFile(path.join(consumer.packageRoot,'examples/mobile-approval-app',file))),'installed app source matches the compiled build inputs');
   const namespace='ios-'+randomBytes(8).toString('hex');
-  const accounts=Object.fromEntries(['editor','reviewer'].map(role=>[role,{email:namespace+'-'+role+'@example.test',role:role==='editor'?'Editor':'Reviewer',password:randomBytes(32).toString('base64url')}]));
-  const identities=Object.fromEntries(Object.entries(accounts).map(([role,{email,role:label}])=>[role,{email,role:label}]));
+  let accounts={},identities;
   let app,device,broker,receipt,captured='',audit='',stage='setup',workerUnconfirmed=false,brokerRecovery;
   const at=name=>{stage=name;onStage(name);};const attempted=new Set();
   try {
@@ -48,6 +47,10 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
     try{device=await startOwnedIos({toolsRoot,outputDir:path.join(output,'device'),signal:startup.signal,onStage:name=>at('device-'+name)});}
     finally{signal?.removeEventListener('abort',cancelStartup);}
     signal?.throwIfAborted();await device.installApp(appRoot);
+    at('app-prewarm');assert.deepEqual(await device.prewarmProofApp(),{appPrewarmed:true});
+    signal?.throwIfAborted();
+    accounts=Object.fromEntries(['editor','reviewer'].map(role=>[role,{email:namespace+'-'+role+'@example.test',role:role==='editor'?'Editor':'Reviewer',password:randomBytes(32).toString('base64url')}]));
+    identities=Object.fromEntries(Object.entries(accounts).map(([role,{email,role:label}])=>[role,{email,role:label}]));
     at('broker-setup');app=await startDemoApp({accounts});
     try{broker=await startIosBroker({packageRoot:consumer.packageRoot,registry:proofProfiles(namespace,app.origin,accounts,'testlane-ios-proof'),signal});}
     catch(error){brokerRecovery=error.root;throw error;}
@@ -73,8 +76,9 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
         'appium:wdaRemotePort':device.wdaPort,'appium:wdaBindingIP':'127.0.0.1','appium:wdaBaseUrl':'http://127.0.0.1','appium:mjpegServerPort':device.mjpegPort,
         'appium:skipLogCapture':true,'appium:showIOSLog':false,'appium:showXcodeLog':false,'appium:printPageSourceOnFindFailure':false,
         'appium:disableAutomaticScreenshots':true,'appium:shutdownOtherSimulators':false,'appium:resetLocationService':false,'appium:noReset':true,
-        'appium:newCommandTimeout':90,'appium:waitForIdleTimeout':1,'appium:wdaLaunchTimeout':120000,'appium:wdaConnectionTimeout':5000}}});
-    receipt={schemaVersion:1,passed:true,runner:'ios-xcuitest',context:'NATIVE_APP',proofOnly:true,deviceScope:device.deviceBinding.scope,nativeStore:'keychain-macos',
+        'appium:newCommandTimeout':90,'appium:waitForIdleTimeout':1,'appium:wdaLaunchTimeout':120000,'appium:wdaConnectionTimeout':5000,
+        'appium:wdaStartupRetries':1,'appium:forceAppLaunch':false,'appium:shouldTerminateApp':false}}});
+    receipt={schemaVersion:1,passed:true,runner:'ios-xcuitest',context:'NATIVE_APP',proofOnly:true,deviceScope:device.deviceBinding.scope,appPrewarmed:true,nativeStore:'keychain-macos',
       brokerEntry:'installed runCli with explicit temporary KeychainMacosStore',packageTreeSha256:before,appSha256:appTree.sha256,
       buildManifestSha256:sha(manifestBytes),publicAppSourceSha256:build.publicSourceSHA256,versions:device.versions,budgets:NATIVE_PROOF_BUDGETS,...result};
     if(/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA??'')&&/^[1-9][0-9]*$/.test(process.env.GITHUB_RUN_ID??''))

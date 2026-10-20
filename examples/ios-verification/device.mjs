@@ -50,7 +50,7 @@ function commandKind(executable, args) {
   if (args[index] === 'list') return { runtimes: 'runtime-list', devicetypes: 'device-type-list', devices: 'owned-device-list' }[args[index + 1]] ?? 'other';
   return { create: 'owned-device-create', boot: 'owned-device-boot', bootstatus: 'owned-device-bootstatus',
     shutdown: 'owned-device-shutdown', delete: 'owned-device-delete', install: 'owned-app-install',
-    get_app_container: 'owned-app-container' }[args[index]] ?? 'other';
+    launch: 'owned-proof-app-prewarm', get_app_container: 'owned-app-container' }[args[index]] ?? 'other';
 }
 
 export function selectIosTarget({ runtimes, devicetypes }, { runtimeId = 'com.apple.CoreSimulator.SimRuntime.iOS-26-4', deviceType = 'com.apple.CoreSimulator.SimDeviceType.iPhone-17' } = {}) {
@@ -67,10 +67,11 @@ export function selectIosTarget({ runtimes, devicetypes }, { runtimeId = 'com.ap
 }
 
 export function ownedSimctlArguments({ deviceSetPath, udid }, command, args = []) {
-  if (!safePath(deviceSetPath) || !UUID.test(udid ?? '') || !['boot', 'shutdown', 'delete', 'install', 'get_app_container'].includes(command) ||
+  if (!safePath(deviceSetPath) || !UUID.test(udid ?? '') || !['boot', 'shutdown', 'delete', 'install', 'launch', 'get_app_container'].includes(command) ||
       !Array.isArray(args) || args.some(value => typeof value !== 'string' || /[\r\n\0]/.test(value)) ||
       (['boot', 'shutdown', 'delete'].includes(command) && args.length !== 0) ||
       (command === 'install' && (args.length !== 1 || !safePath(args[0]) || !args[0].endsWith('.app'))) ||
+      (command === 'launch' && (args.length !== 1 || args[0] !== BUNDLE)) ||
       (command === 'get_app_container' && (args.length !== 2 || args[0] !== BUNDLE || args[1] !== 'data'))) throw fail('IOS_SIMCTL_SCOPE_REFUSED');
   return ['simctl', '--set', deviceSetPath, command, udid, ...args];
 }
@@ -78,6 +79,13 @@ export function ownedSimctlArguments({ deviceSetPath, udid }, command, args = []
 export function acknowledgedIosCreate(result) {
   if (!result || result.code !== 0 || typeof result.stdout !== 'string' || !UUID.test(result.stdout.trim())) throw fail('IOS_SIMULATOR_CREATE_FAILED');
   return result.stdout.trim();
+}
+
+export function acknowledgedIosProofLaunch(result) {
+  if (!result || result.code !== 0 || typeof result.stdout !== 'string' ||
+      !/^dev\.testlane\.iosproof: [1-9][0-9]{0,9}$/.test(result.stdout.trim())) throw fail('IOS_APP_LAUNCH_FAILED');
+  // The PID is an acknowledgement only, never a later process-kill authority.
+  return Object.freeze({ appPrewarmed: true });
 }
 
 export function verifyOwnedSimulator({ expected, marker, devices, baseline, requireBooted = true, verifyForeign = true }) {
@@ -427,6 +435,14 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
         if (!safePath(appPath) || !appPath.endsWith('.app') || !(await lstat(appPath)).isDirectory() || (await lstat(appPath)).isSymbolicLink()) throw fail('IOS_APP_INPUT_INVALID');
         await assertOwned(); live(); const result = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'install', [await realpath(appPath)]), { timeoutMs: 120000 });
         if (result.code !== 0) throw fail('IOS_APP_INSTALL_FAILED'); return { installed: true };
+      },
+      async prewarmProofApp(...args) {
+        if (args.length !== 0) throw fail('IOS_APP_INPUT_INVALID');
+        // This fixed public app is still signed out: no backend, account or
+        // bootstrap has been allocated by the controller at this stage.
+        await assertOwned(); live();
+        const result = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'launch', [BUNDLE]), { timeoutMs: 30000 });
+        return acknowledgedIosProofLaunch(result);
       },
       async writeBootstrap(payload) {
         if (typeof payload !== 'string' || Buffer.byteLength(payload) > 65536 || payload.includes('\0')) throw fail('IOS_BOOTSTRAP_INPUT_INVALID');

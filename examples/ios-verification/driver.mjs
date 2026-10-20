@@ -12,7 +12,8 @@ const identifier = value => typeof value === 'string' && value.length > 0 && val
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
 const port = value => Number.isSafeInteger(value) && value >= 1024 && value <= 65535;
 const optionalCaps = ['appium:deviceName', 'appium:platformVersion', 'appium:newCommandTimeout', 'appium:waitForIdleTimeout',
-  'appium:wdaLaunchTimeout', 'appium:wdaConnectionTimeout', 'appium:isHeadless'];
+  'appium:wdaLaunchTimeout', 'appium:wdaConnectionTimeout', 'appium:isHeadless', 'appium:wdaStartupRetries',
+  'appium:forceAppLaunch', 'appium:shouldTerminateApp'];
 const requiredCaps = ['platformName', 'appium:automationName', 'appium:udid', 'appium:bundleId', 'appium:simulatorDevicesSetPath',
   'appium:derivedDataPath', 'appium:wdaLocalPort', 'appium:wdaRemotePort', 'appium:wdaBindingIP', 'appium:wdaBaseUrl', 'appium:mjpegServerPort',
   'appium:skipLogCapture', 'appium:showIOSLog', 'appium:showXcodeLog', 'appium:printPageSourceOnFindFailure',
@@ -35,14 +36,18 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
       !['appium:showIOSLog', 'appium:showXcodeLog', 'appium:printPageSourceOnFindFailure', 'appium:shutdownOtherSimulators', 'appium:resetLocationService'].every(key => supplied[key] === false) ||
       Object.keys(supplied).some(key => !requiredCaps.includes(key) && !optionalCaps.includes(key)) || typeof assertOwned !== 'function' ||
       (keyboardDismissId !== undefined && !identifier(keyboardDismissId)) ||
-      (supplied['appium:isHeadless'] !== undefined && supplied['appium:isHeadless'] !== true)) throw new Error();
+      (supplied['appium:isHeadless'] !== undefined && supplied['appium:isHeadless'] !== true) ||
+      (supplied['appium:wdaStartupRetries'] !== undefined && supplied['appium:wdaStartupRetries'] !== 1) ||
+      (supplied['appium:wdaConnectionTimeout'] !== undefined && supplied['appium:wdaConnectionTimeout'] !== 5000) ||
+      ['appium:forceAppLaunch', 'appium:shouldTerminateApp'].some(key => supplied[key] !== undefined && supplied[key] !== false)) throw new Error();
     for (const key of ['appium:deviceName', 'appium:platformVersion']) if (supplied[key] !== undefined && !identifier(supplied[key])) throw new Error();
     for (const key of ['appium:newCommandTimeout', 'appium:waitForIdleTimeout', 'appium:wdaLaunchTimeout', 'appium:wdaConnectionTimeout']) {
       if (supplied[key] !== undefined && (!Number.isFinite(supplied[key]) || supplied[key] < 0 || supplied[key] > 240_000)) throw new Error();
     }
-    // The owner has already booted this private Simulator without a UI client.
+    // The owner has already booted this owned Simulator without a UI client.
     // Avoid Appium rebooting it just to make a Simulator window visible.
-    capabilities = { ...structuredClone(supplied), 'appium:isHeadless': true };
+    capabilities = { ...structuredClone(supplied), 'appium:isHeadless': true, 'appium:wdaStartupRetries': 1,
+      'appium:wdaConnectionTimeout': 5000, 'appium:forceAppLaunch': false, 'appium:shouldTerminateApp': false };
   } catch { throw fail('NATIVE_DRIVER_CONFIGURATION_INVALID'); }
   let session, closed = false;
   async function request(method, route, body, requestSignal = signal, timeoutMs = 5000) {

@@ -38,9 +38,9 @@ revision and detect changes during execution.
 | React Native/Expo on Android | A pinned test build, Android SDK, emulator and platform driver | Unreleased synthetic emulator proof; see its recipe and limits |
 | React Native/Expo on iOS | A pinned Simulator Release build without Apple signing credentials, macOS, Xcode, iOS Simulator and XCUITest | Unreleased implementation; hosted macOS proof and cleanup must pass independently of Android |
 
-The [latest Android regression evidence](verification/native-2026-10-19/android-keyboard-regression.public.json)
-binds the shared cancellation/controller changes and rebuilt keyboard-accessory app to an installed
-source package. Its five passes → two expected injected failures → five passes
+The [latest Android regression evidence](verification/native-2026-10-19/android-hosted-scope-regression.public.json)
+binds the shared worker changes to an installed source package and the unchanged
+keyboard-accessory app. Its five passes → two expected injected failures → five passes
 included independent cleanup and credential scans. These are prewritten cases for
 one synthetic app; the record does not establish general mobile or agent-authoring
 support.
@@ -74,6 +74,10 @@ directory. Appium's home and derived data remain private, and process cleanup
 requires retained owned process identities. Headless Appium can terminate Simulator
 UI clients, which further limits this experiment to an ephemeral host. It does not
 require an Apple/Expo account or accept SDK licenses.
+
+Setup launches the unauthenticated proof app before WDA attaches, with one startup
+attempt and no forced relaunch. The proof checks authenticated workflows after
+that setup; it does not establish cold app-start performance.
 
 Generated sandbox credentials pass through the real installed CLI and an explicitly
 selected temporary macOS keychain. A private file in the owned app container delivers

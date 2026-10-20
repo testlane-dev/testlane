@@ -63,6 +63,10 @@ test('iOS driver uses exact owned Simulator caps, value observations and bounded
   try {
     const requested = caps(), driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: requested, assertOwned: () => { checks++; return true; } });
     assert.equal(appium.calls[0].body.capabilities.alwaysMatch['appium:isHeadless'], true);
+    assert.equal(appium.calls[0].body.capabilities.alwaysMatch['appium:wdaStartupRetries'], 1);
+    assert.equal(appium.calls[0].body.capabilities.alwaysMatch['appium:wdaConnectionTimeout'], 5000);
+    assert.equal(appium.calls[0].body.capabilities.alwaysMatch['appium:forceAppLaunch'], false);
+    assert.equal(appium.calls[0].body.capabilities.alwaysMatch['appium:shouldTerminateApp'], false);
     assert.equal(appium.calls[0].body.capabilities.alwaysMatch['appium:simulatorDevicesSetPath'], binding().deviceSetPath);
     assert.equal(JSON.stringify(appium.calls[0].body).includes('deviceBinding'), false, 'descriptor is never forwarded as an Appium capability');
     assert.equal(Object.hasOwn(requested, 'appium:isHeadless'), false, 'headless mode does not mutate caller capabilities');
@@ -144,6 +148,8 @@ test('real devices, global paths/lifecycle, signing, WebViews and missing privac
       c => { c['appium:printPageSourceOnFindFailure'] = true; }, c => { c['appium:wdaBindingIP'] = '0.0.0.0'; },
       c => { c['appium:wdaRemotePort']++; }, c => { c.browserName = 'Safari'; }, c => { c['appium:autoWebview'] = true; },
       c => { c['appium:mjpegServerPort'] = c['appium:wdaLocalPort']; }, c => { c['appium:isHeadless'] = false; },
+      c => { c['appium:wdaStartupRetries'] = 2; }, c => { c['appium:wdaStartupRetries'] = 0; },
+      c => { c['appium:wdaConnectionTimeout'] = 30000; }, c => { c['appium:forceAppLaunch'] = true; }, c => { c['appium:shouldTerminateApp'] = true; },
       c => { c['appium:webDriverAgentUrl'] = 'http://example.test'; }, c => { c['appium:keychainPath'] = '/private/keychain'; },
       c => { c['appium:processArguments'] = { args: ['private'] }; }, c => { c['appium:app'] = '/arbitrary.app'; }]) {
       const capabilities = caps(); mutate(capabilities);

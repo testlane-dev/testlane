@@ -45,7 +45,7 @@ certificate, provisioning profile, Expo account or human test account is needed.
 Use the repository's [iOS Simulator workflow](../../.github/workflows/ios-simulator-proof.yml).
 It inspects prerequisites, runs the policy tests and builds the Simulator app without
 Apple signing credentials. A credential-free diagnostic then creates a new owned
-Simulator, installs the app, opens one WebDriverAgent session, verifies `NATIVE_APP`
+Simulator, installs and launches the unauthenticated app, opens one WebDriverAgent session, verifies `NATIVE_APP`
 and removes that session and Simulator. Only after that passes does the
 installed-package proof create credentials and use another new Simulator. Ordinary
 `npm run test:mobile` executes unit/control tests without starting a device.
@@ -126,6 +126,14 @@ The test app provides an iOS input accessory with an explicit keyboard dismissal
 control. The driver activates that configured control once and observes that the
 keyboard disappears; it does not assume an iPhone number pad has a system Done key
 or ignore a failed dismissal. This is part of the synthetic app's UI contract.
+
+Setup launches only the fixed proof bundle on the owned Simulator before the
+application backend, broker or bootstrap credentials exist. WDA attaches to that
+running app with forced relaunch disabled and one startup attempt. This separates
+cold app startup from the five-second ordinary command transport; it does not test
+cold-start performance or prove the app is ready merely because launch was
+acknowledged. Role loading, identity checks and all business assertions still run
+through the native controls.
 
 Passwords and cookies are not typed into native controls, placed in launch arguments
 or environment variables, or sent to WebDriverAgent. Live sessions remain available

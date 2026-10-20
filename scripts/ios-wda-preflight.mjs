@@ -16,7 +16,7 @@ const BUNDLE='dev.testlane.iosproof',PRODUCT='TestlaneIOSProof.app',MARKER='test
 const LIMIT=8*1024*1024,RESPONSE_LIMIT=64*1024;
 const SOURCES=['package.json','package-lock.json','app.ios.config.cjs','index.js','App.js','bootstrap.mjs','plugins/withIosProofBuild.cjs'];
 const STAGES=new Set(['build-validation','device-start','xcode-runtime-and-pinned-tools-validated','owned-simulator-created',
-  'owned-simulator-boot-started','owned-simulator-booted','private-appium-ready','app-install','wda-session-create','native-context','session-close','complete']);
+  'owned-simulator-boot-started','owned-simulator-booted','private-appium-ready','app-install','app-prewarm','wda-session-create','native-context','session-close','complete']);
 const CODES=new Set(['IOS_WDA_CI_REQUIRED','IOS_WDA_CANCELLED','IOS_WDA_INPUT_INVALID','IOS_WDA_BUILD_INVALID',
   'IOS_WDA_OUTPUT_REFUSED','IOS_WDA_OUTPUT_OWNERSHIP_REFUSED','IOS_WDA_SESSION_TIMEOUT','IOS_WDA_REQUEST_TIMEOUT',
   'IOS_WDA_REQUEST_FAILED','IOS_WDA_RESPONSE_INVALID','IOS_WDA_SESSION_INVALID','IOS_WDA_CONTEXT_REFUSED',
@@ -66,7 +66,8 @@ function capabilities(device) {
     'appium:showIOSLog':false,'appium:showXcodeLog':true,'appium:printPageSourceOnFindFailure':false,
     'appium:disableAutomaticScreenshots':true,'appium:shutdownOtherSimulators':false,'appium:resetLocationService':false,
     'appium:noReset':true,'appium:isHeadless':true,'appium:newCommandTimeout':90,'appium:waitForIdleTimeout':1,
-    'appium:wdaLaunchTimeout':120000,'appium:wdaConnectionTimeout':5000};
+    'appium:wdaLaunchTimeout':120000,'appium:wdaConnectionTimeout':5000,'appium:wdaStartupRetries':1,
+    'appium:forceAppLaunch':false,'appium:shouldTerminateApp':false};
 }
 /** One fixed session attempt, one context read, one exact-session deletion. No app actions or credentials. */
 export async function probeOwnedWdaSession({device,signal,onStage=()=>{},onRawResponse=()=>{}}) {
@@ -119,11 +120,11 @@ export async function probeOwnedWdaSession({device,signal,onStage=()=>{},onRawRe
   if(error){const safe=fail(fixedIosWdaCode(error));Object.assign(safe,result);throw safe;}
   return result;
 }
-export function publicIosWdaStatus({stage,error,ownershipVerified=false,session={},deviceCleanup='not-started',elapsedMs=0,build}={}) {
-  if(!error&&!(ownershipVerified===true&&session.sessionCreated===true&&session.nativeContextVerified===true&&session.sessionCleanup==='deleted'&&deviceCleanup==='completed'))error=fail('IOS_WDA_PREFLIGHT_FAILED');
+export function publicIosWdaStatus({stage,error,ownershipVerified=false,appPrewarmed=false,session={},deviceCleanup='not-started',elapsedMs=0,build}={}) {
+  if(!error&&!(ownershipVerified===true&&appPrewarmed===true&&session.sessionCreated===true&&session.nativeContextVerified===true&&session.sessionCleanup==='deleted'&&deviceCleanup==='completed'))error=fail('IOS_WDA_PREFLIGHT_FAILED');
   return {schemaVersion:1,purpose:'credential-free-wda-readiness',deviceScope:IOS_DEVICE_SCOPE,status:error?'failed':'passed',
     stage:STAGES.has(stage)?stage:'build-validation',code:error?fixedIosWdaCode(error):'IOS_WDA_READY',
-    ownershipVerified:ownershipVerified===true,sessionCreated:session.sessionCreated===true,nativeContextVerified:session.nativeContextVerified===true,
+    ownershipVerified:ownershipVerified===true,appPrewarmed:appPrewarmed===true,sessionCreated:session.sessionCreated===true,nativeContextVerified:session.nativeContextVerified===true,
     sessionCleanup:['not-created','deleted','unknown','not-addressable'].includes(session.sessionCleanup)?session.sessionCleanup:'not-created',
     deviceCleanup:['not-started','completed','unconfirmed'].includes(deviceCleanup)?deviceCleanup:'unconfirmed',
     sessionSetupMs:Number.isSafeInteger(session.sessionSetupMs)&&session.sessionSetupMs>=0?session.sessionSetupMs:0,
@@ -142,7 +143,7 @@ export async function runIosWdaPreflight({appDirectory,toolsRoot,outputDir,signa
     if(!same(await realpath(output),output)||(await lstat(output)).isSymbolicLink()||!info.isFile()||info.isSymbolicLink()||
       JSON.stringify(JSON.parse(await readFile(file,'utf8')))!==JSON.stringify(marker))throw fail('IOS_WDA_OUTPUT_OWNERSHIP_REFUSED');
   }
-  let device,error,build,session={},stage='build-validation',ownershipVerified=false,deviceCleanup='not-started',raw='';
+  let device,error,build,session={},stage='build-validation',ownershipVerified=false,appPrewarmed=false,deviceCleanup='not-started',raw='';
   const at=name=>{if(STAGES.has(name)){stage=name;onStage(name);}};
   const append=text=>{if(typeof text!=='string'||Buffer.byteLength(raw)+Buffer.byteLength(text)>RESPONSE_LIMIT)throw fail('IOS_WDA_CAPTURE_LIMIT');raw+=text;};
   try{
@@ -154,6 +155,8 @@ export async function runIosWdaPreflight({appDirectory,toolsRoot,outputDir,signa
       deviceCleanup='unconfirmed';await device.assertOwned();ownershipVerified=true;
       if(signal?.aborted)throw fail('IOS_WDA_CANCELLED');
       at('app-install');await device.installApp(appDirectory);
+      at('app-prewarm');const warmed=await device.prewarmProofApp();
+      if(warmed?.appPrewarmed!==true)throw fail('IOS_WDA_OWNERSHIP_REFUSED');appPrewarmed=true;
     }finally{signal?.removeEventListener('abort',cancel);}
     session=await probeOwnedWdaSession({device,signal,onStage:at,onRawResponse:append});
     const after=await verifyBuild(appDirectory,signal);
@@ -169,7 +172,7 @@ export async function runIosWdaPreflight({appDirectory,toolsRoot,outputDir,signa
   if(signal?.aborted&&!error)error=fail('IOS_WDA_CANCELLED');
   if(!error&&(!session.sessionCreated||!session.nativeContextVerified||session.sessionCleanup!=='deleted'||deviceCleanup!=='completed'))error=fail('IOS_WDA_PREFLIGHT_FAILED');
   if(!error)at('complete');
-  const status=publicIosWdaStatus({stage,error,ownershipVerified,session,deviceCleanup,elapsedMs:Math.round(performance.now()-began),build});
+  const status=publicIosWdaStatus({stage,error,ownershipVerified,appPrewarmed,session,deviceCleanup,elapsedMs:Math.round(performance.now()-began),build});
   await assertOutput();
   if(error){
     let captured='';try{captured=device?.capturedText()??error?.capturedText?.()??'';}catch{}

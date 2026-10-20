@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
 import { lstat, mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
-import { selectIosTarget, ownedSimctlArguments, acknowledgedIosCreate, verifyOwnedSimulator, validateIosContainer, validateIosListener, startOwnedIos, requireIosHostedDevice, canonicalIosStandardSet } from '../device.mjs';
+import { selectIosTarget, ownedSimctlArguments, acknowledgedIosCreate, acknowledgedIosProofLaunch, verifyOwnedSimulator, validateIosContainer, validateIosListener, startOwnedIos, requireIosHostedDevice, canonicalIosStandardSet } from '../device.mjs';
 import { IOS_DEVICE_SCOPE, snapshotIosForeignDevices } from '../device-scope.mjs';
 
 const udid = '12345678-1234-1234-1234-123456789ABC', other = '87654321-1234-1234-1234-123456789ABC';
@@ -24,10 +24,23 @@ test('target selection requires the explicit installed runtime and device type w
 test('simctl commands always select the owned device set and exact UUID', () => {
   assert.deepEqual(ownedSimctlArguments({ deviceSetPath, udid }, 'shutdown'), ['simctl', '--set', deviceSetPath, 'shutdown', udid]);
   assert.deepEqual(ownedSimctlArguments({ deviceSetPath, udid }, 'get_app_container', ['dev.testlane.iosproof', 'data']), ['simctl', '--set', deviceSetPath, 'get_app_container', udid, 'dev.testlane.iosproof', 'data']);
+  assert.deepEqual(ownedSimctlArguments({ deviceSetPath, udid }, 'launch', ['dev.testlane.iosproof']), ['simctl', '--set', deviceSetPath, 'launch', udid, 'dev.testlane.iosproof']);
   for (const command of ['erase', 'shutdown all', 'spawn', 'io', 'openurl', 'list']) assert.throws(() => ownedSimctlArguments({ deviceSetPath, udid }, command), /IOS_SIMCTL_SCOPE_REFUSED/);
   for (const invalid of ['booted', 'all', 'phone-udid', '']) assert.throws(() => ownedSimctlArguments({ deviceSetPath, udid: invalid }, 'delete'), /IOS_SIMCTL_SCOPE_REFUSED/);
   assert.throws(() => ownedSimctlArguments({ deviceSetPath, udid }, 'shutdown', ['all']), /IOS_SIMCTL_SCOPE_REFUSED/);
   assert.throws(() => ownedSimctlArguments({ deviceSetPath, udid }, 'get_app_container', ['another.bundle', 'data']), /IOS_SIMCTL_SCOPE_REFUSED/);
+  for (const args of [[], ['another.bundle'], ['--terminate-running-process', 'dev.testlane.iosproof'], ['dev.testlane.iosproof', 'extra'], ['dev.testlane.iosproof\n']]) {
+    assert.throws(() => ownedSimctlArguments({ deviceSetPath, udid }, 'launch', args), /IOS_SIMCTL_SCOPE_REFUSED/);
+  }
+});
+
+test('prewarm accepts only a successful fixed-bundle PID acknowledgement and exposes no PID or native text', () => {
+  assert.deepEqual(acknowledgedIosProofLaunch({ code: 0, stdout: 'dev.testlane.iosproof: 12345\n' }), { appPrewarmed: true });
+  for (const result of [{ code: 1, stdout: 'dev.testlane.iosproof: 123' }, { code: 0, stdout: 'another.bundle: 123' },
+    { code: 0, stdout: 'dev.testlane.iosproof: 0' }, { code: 0, stdout: 'dev.testlane.iosproof: -123' },
+    { code: 0, stdout: 'dev.testlane.iosproof: 123\nuntrusted-native-text' }, { code: 0, stdout: 'untrusted-native-text' }, { code: 0 }]) {
+    assert.throws(() => acknowledgedIosProofLaunch(result), error => error.message === 'IOS_APP_LAUNCH_FAILED' && !String(error.stack).includes('untrusted-native-text'));
+  }
 });
 
 test('only a successful UUID acknowledgement settles an attempted external Simulator create', () => {
