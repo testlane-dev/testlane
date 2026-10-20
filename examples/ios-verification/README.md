@@ -25,7 +25,8 @@ clients; this is another reason the experiment is confined to an ephemeral host.
 The runner needs:
 
 - A checkout of this revision, Node 22.14+ compatible with Expo 58, and npm 10+.
-- Xcode 26.4+, its iOS Simulator SDK and completed license/first-launch setup.
+- Xcode 26.6 at the workflow's fixed developer directory, its iOS Simulator SDK
+  and completed license/first-launch setup.
   The tools do not download Xcode or runtimes, accept licenses, or select a different
   developer directory.
 - The installed, available `com.apple.CoreSimulator.SimRuntime.iOS-26-4` runtime and
@@ -33,10 +34,33 @@ The runner needs:
   fallback is used.
 - An existing CocoaPods executable and enough disk/memory for a Release native
   build, WebDriverAgent compilation and a new Simulator.
+- A Node distribution that includes matching local C/C++ headers, its bundled
+  npm/node-gyp, and the operating system's Python 3, Clang and Make. The installer
+  refuses missing or mismatched local inputs; it does not download Node headers
+  or substitute a builder from an arbitrary search path.
 
 The optional tooling installer pins Appium 3.8.0, XCUITest 12.19.1 and WebDriverAgent
 16.16.3 through its lockfile. It uses `npm ci --ignore-scripts` in a new explicit
-output directory and leaves the default Appium installation alone. Device startup
+output directory and leaves the default Appium installation alone. It then enables
+only the exact bundled `@appium/coresim@1.13.1` install hook in an explicit targeted
+rebuild. Other package lifecycle scripts remain disabled. This forces a source
+build on both supported Mac architectures, including Intel: the locked archive
+contains an ARM prebuild but no Intel binary. The exact reviewed addon, loader and
+Node-addon API source trees are checked before and after the rebuild. The resulting
+architecture-specific binary must load and return a numeric CoreSimulator
+framework version before app building or Simulator allocation begins. This probe
+does not create a device or establish native test acceptance.
+
+The new marked tools directory holds installer configuration, npm/build caches and
+temporary files. Install/rebuild use its private HOME; the read-only Xcode and
+framework probes use the same canonical native account HOME as device startup,
+with fixed Xcode/Node paths and private Appium/cache/temporary directories. No
+ambient environment is forwarded. This does not redirect OS service state away
+from the native account. Setup records private source, binary, runtime and toolchain hashes;
+device startup rechecks them before allocation. These are observations that bind
+this run, not independent provenance attestation or a reproducibility claim. A
+failed or cancelled rebuild/probe retains incomplete setup and recovery metadata.
+There is no automatic rebuild retry or lifecycle-script fallback. Device startup
 does not install dependencies. No physical device, Apple developer account, signing
 certificate, provisioning profile, Expo account or human test account is needed.
 

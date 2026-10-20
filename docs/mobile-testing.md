@@ -61,6 +61,12 @@ native/WebView flows each require additional tests and evidence.
 
 ## iOS experiment boundary
 
+The hosted proof requires the workflow's exact Xcode 26.6 developer directory,
+matching local Node headers, npm-provided node-gyp, Python 3, Clang and Make.
+Its [tooling prerequisites](../examples/ios-verification/README.md#required-environment)
+include a targeted native-addon source build and read-only load probe before any
+app build or Simulator allocation. These checks do not establish acceptance.
+
 The iOS controller is restricted to an explicitly opted-in, ephemeral GitHub-hosted
 macOS job. It builds a Simulator Release app with embedded JavaScript without Apple
 signing credentials; a linker ad-hoc signature may remain, with no Developer

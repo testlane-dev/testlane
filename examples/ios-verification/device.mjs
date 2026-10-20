@@ -12,6 +12,7 @@ import { IOS_DEVICE_SCOPE, validateIosDeviceBinding, normalizeIosDeviceInventory
   snapshotIosForeignDevices, assertIosForeignSnapshot } from './device-scope.mjs';
 import { hashIosTree } from '../mobile-approval-app/build-ios.mjs';
 import { verifyPinnedWdaStartupPatch } from './tools/wda-startup-patch.mjs';
+import { verifyPinnedIosNativePrerequisite } from './tools/setup.mjs';
 import { createIosStartupFailure, fixedIosDeviceFailureCode, retainIosStartupFailure, tagIosCommandFailure } from './failure-facts.mjs';
 
 const UUID = /^[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}$/;
@@ -348,6 +349,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   catch { throw fail('IOS_TOOLS_MISSING'); }
   if (appiumPackage.version !== '3.8.0' || driverPackage.version !== '12.19.1' || wdaPackage.version !== '16.16.3') throw fail('IOS_TOOLS_VERSION_MISMATCH');
   const wdaStartupPatch = await verifyPinnedWdaStartupPatch({ toolsRoot: tools });
+  await verifyPinnedIosNativePrerequisite({ toolsRoot: tools });
   try { await Promise.all([access('/usr/bin/xcrun'), access('/usr/bin/xcodebuild'), access(path.join(wdaRoot, 'WebDriverAgent.xcodeproj', 'project.pbxproj'))]); }
   catch { throw fail('IOS_XCODE_PREREQUISITE_MISSING'); }
   await mkdir(outputDir, { recursive: true, mode: 0o700 });

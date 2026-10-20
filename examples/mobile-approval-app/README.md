@@ -73,6 +73,10 @@ it does not accept licenses, install Xcode or select a different developer direc
 The [Expo SDK matrix](https://docs.expo.dev/versions/v58.0.0/) documents the minimum
 Xcode version. The proof is intended for the separately owned iOS 26.4+ Simulator.
 
+The standalone Release builder's minimum above is separate from the hosted iOS
+proof tooling. That experiment requires the workflow's exact Xcode 26.6 and the
+[local headers, Python and native-addon prerequisites](../ios-verification/README.md#required-environment).
+
 From this example directory on macOS:
 
 ```sh
