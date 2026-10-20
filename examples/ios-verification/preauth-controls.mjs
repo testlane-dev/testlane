@@ -6,15 +6,15 @@ import { NATIVE_DRIVER_FAILURE_CODES } from '../android-verification/contracts.m
 const codes = new Set([...NATIVE_DRIVER_FAILURE_CODES, 'NATIVE_DRIVER_CANCELLED']);
 const visibility = Object.freeze(['run-marker', 'quantity', 'unit-price', 'create-request',
   'selected-id', 'load-request', 'approve-request', 'anonymous-check']);
-const fail = code => new NativeDriverError(code);
+const fail = (code, request) => new NativeDriverError(code, request);
 function fixedCode(error) {
-  if (error === null || typeof error !== 'object' || types.isProxy(error) || !types.isNativeError(error)) return 'NATIVE_DRIVER_COMMAND_FAILED';
+  if (error === null || typeof error !== 'object' || types.isProxy(error) || !types.isNativeError(error)) return undefined;
   try {
     const code = Object.getOwnPropertyDescriptor(error, 'code');
     if (Object.getPrototypeOf(error) === NativeDriverError.prototype && code && Object.hasOwn(code, 'value') &&
         typeof code.value === 'string' && codes.has(code.value)) return code.value;
   } catch { /* No thrown value, getter, text or payload becomes public metadata. */ }
-  return 'NATIVE_DRIVER_COMMAND_FAILED';
+  return undefined;
 }
 
 /** onStep is a trusted in-process collector; callers cannot supply IDs/actions. */
@@ -25,10 +25,11 @@ export async function probeIosPreauthControls({ driver, signal, onStep = () => {
       await action();
       if (signal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
     } catch (error) {
-      const code = signal?.aborted ? 'NATIVE_DRIVER_CANCELLED' : fixedCode(error);
-      const request = readIosRequestFailure(error);
+      const trustedCode = fixedCode(error);
+      const code = signal?.aborted ? 'NATIVE_DRIVER_CANCELLED' : trustedCode ?? 'NATIVE_DRIVER_COMMAND_FAILED';
+      const request = trustedCode ? readIosRequestFailure(error) : undefined;
       onStep(Object.freeze({ controlId, step: kind, completed: false, code, ...(request ? { request } : {}) }));
-      throw fail(code);
+      throw fail(code, request);
     }
     onStep(Object.freeze({ controlId, step: kind, completed: true }));
   }

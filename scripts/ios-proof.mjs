@@ -154,7 +154,9 @@ async function main(){
     console.log(JSON.stringify(result));
   }catch(error){
     preserve=error.preserveConsumer===true;
-    const summary=await publicIosFailure({output:options.outputDir,stage,error});
+    // Driver error classes belong to the installed package, including its reader.
+    const projectFailure=consumer?(await installedModule(consumer.packageRoot,'examples/ios-verification/failure.mjs')).publicIosFailure:publicIosFailure;
+    const summary=await projectFailure({output:options.outputDir,stage,error});
     try{await writeFile(path.join(options.outputDir,'public-failure.json'),JSON.stringify(summary,null,2)+'\n',{flag:'wx',mode:0o600});}catch{}
     console.error('FAIL iOS proof at fixed stage: '+summary.stage+' ('+summary.code+')');process.exitCode=1;
   }

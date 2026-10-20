@@ -4,6 +4,7 @@ import path from 'node:path';
 import {sanitizeNativeReport,NATIVE_DRIVER_FAILURE_CODES} from '../android-verification/contracts.mjs';
 import {APPROVAL_REQUIREMENTS} from '../android-verification/proof-cases.mjs';
 import {ownIosErrorString,readIosStartupFailure} from './failure-facts.mjs';
+import {readIosRequestFailure} from './driver.mjs';
 
 const STAGES=new Set(['consumer-install','setup','owned-simulator-start','device-xcode-runtime-and-pinned-tools-validated',
   'device-owned-simulator-created','device-owned-simulator-boot-started','device-owned-simulator-booted','device-wda-build-for-testing','device-wda-prepared','device-private-appium-ready','app-prewarm','wda-readiness','broker-setup','positive','fault','corrected','cleanup']);
@@ -18,6 +19,7 @@ export async function publicIosFailure({output,stage,error}) {
   const summary={schemaVersion:1,status:'failed',stage:STAGES.has(stage)?stage:'setup',
     code:CODES.has(message)?message:DRIVER_CODES.has(code)?code:code==='ERR_ASSERTION'?'IOS_PROOF_ASSERTION_FAILED':'IOS_PROOF_FAILED',reports:[]};
   const startupFailure=readIosStartupFailure(error);if(startupFailure)summary.startupFailure=startupFailure;
+  const requestFailure=DRIVER_CODES.has(code)?readIosRequestFailure(error):undefined;if(requestFailure)summary.requestFailure=requestFailure;
   try{
     const plan=JSON.parse(await readFile(path.join(output,'plan.json'),'utf8'));
     if(plan.runner!=='ios-xcuitest'||JSON.stringify(plan.cases.map(item=>item.id))!==JSON.stringify(APPROVAL_REQUIREMENTS.map(item=>item.id)))return summary;
