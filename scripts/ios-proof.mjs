@@ -46,7 +46,7 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
     at('owned-simulator-start');
     const startup=new AbortController(),cancelStartup=()=>startup.abort();
     signal?.addEventListener('abort',cancelStartup,{once:true});if(signal?.aborted)startup.abort();
-    try{device=await startOwnedIos({toolsRoot,outputDir:path.join(output,'device'),signal:startup.signal,onStage:name=>at('device-'+name)});}
+    try{device=await startOwnedIos({toolsRoot,outputDir:path.join(output,'device'),signal:startup.signal,onStage:name=>at('device-'+name),prewarmDiagnostics:true});}
     finally{signal?.removeEventListener('abort',cancelStartup);}
     signal?.throwIfAborted();await device.installApp(appRoot);
     at('app-prewarm');assert.deepEqual(await device.prewarmProofApp(),{appPrewarmed:true});

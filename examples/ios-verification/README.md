@@ -249,11 +249,15 @@ readiness check establishes that authenticated cases pass. The workflow does not
 post-authentication driver logs, keychain homes or recovery directories. Hashes bind reviewed inputs;
 they do not authenticate arbitrary reports or establish assertion quality.
 
-For a launch still pending after 15 seconds, the optional standalone diagnostic can
-sample the exact retained launch process for one second, with a five-second helper
-bound. It rechecks process identity, captures only to the bounded pre-auth log and
-joins the helper before returning or completing cleanup. The app launch still has
-its 30-second limit. Credential-backed runs do not enable this diagnostic.
+The first fixed proof-app launch can sample its exact retained launch process if
+it remains pending after 15 seconds. Sampling lasts one second, with a five-second
+helper bound, identity rechecks and a bounded pre-auth capture. The helper must join
+before the launch or cleanup completes. Permission is consumed at the first prewarm
+invocation, including ownership failure or cancellation; later calls cannot sample.
+The launch retains its 30-second limit. The installed proof enables this setup-only
+sampler before generating credentials while Appium logging stays at error level.
+The optional standalone diagnostic separately enables verbose startup logging; it
+never generates application credentials.
 
 This experiment covers one synthetic app, installed runtime and Simulator type.
 It does not establish physical-device or existing-app support, App Store builds,

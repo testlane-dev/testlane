@@ -1,9 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { iosPrewarmDiagnosticDue, verifyIosDiagnosticIdentity, iosPrewarmDiagnosticFailure } from '../device.mjs';
+import { iosPrewarmDiagnosticDue, verifyIosDiagnosticIdentity, iosPrewarmDiagnosticFailure, createIosDiagnosticPolicy } from '../device.mjs';
 
 const state = () => ({ spawned: true, pid: 2345, child: { pid: 2345 }, exited: false, closed: false });
 const info = () => ({ pid: 2345, ppid: 1234, pgid: 2345, zombie: false, started: 'Tue Oct 20 01:20:30 2026' });
+
+test('sampler-only policy retains error-level Appium while standalone diagnostics preserves debug verbosity', () => {
+  const normal = createIosDiagnosticPolicy(), sampler = createIosDiagnosticPolicy({ prewarmDiagnostics: true });
+  assert.equal(normal.appiumLogLevel, 'error'); assert.equal(normal.beginPrewarm(), false);
+  assert.equal(sampler.appiumLogLevel, 'error'); assert.equal(sampler.beginPrewarm(), true);
+  assert.equal(iosPrewarmDiagnosticDue({ diagnostics: true, kind: 'owned-proof-app-prewarm', elapsedMs: 15000, state: state() }), true);
+  for (const options of [{ diagnostics: true }, { diagnostics: true, prewarmDiagnostics: true }]) {
+    const standalone = createIosDiagnosticPolicy(options);
+    assert.equal(standalone.appiumLogLevel, 'debug'); assert.equal(standalone.beginPrewarm(), true);
+  }
+  for (const value of ['true', null, 1, {}, []]) {
+    assert.throws(() => createIosDiagnosticPolicy({ prewarmDiagnostics: value }), /IOS_DEVICE_INPUT_INVALID/);
+    assert.throws(() => createIosDiagnosticPolicy({ diagnostics: value }), /IOS_DEVICE_INPUT_INVALID/);
+  }
+});
+
+test('the prewarm diagnostic lease excludes concurrent use and stays consumed after every settlement outcome', async () => {
+  for (const outcome of ['success', 'guard-failure', 'launch-failure', 'cancelled']) {
+    const policy = createIosDiagnosticPolicy({ prewarmDiagnostics: true });
+    const entered = Promise.withResolvers(), settle = Promise.withResolvers();
+    const first = (async () => {
+      const allowed = policy.beginPrewarm(); assert.equal(allowed, true); entered.resolve();
+      try {
+        await settle.promise;
+        if (outcome !== 'success') throw Error(outcome);
+      } finally { policy.finishPrewarm(); }
+    })();
+    const result = outcome === 'success' ? first : assert.rejects(first, error => error.message === outcome);
+    await entered.promise;
+    assert.equal(policy.beginPrewarm(), false, 'a pending first prewarm cannot grant a second sampler');
+    settle.resolve(); await result;
+    assert.equal(policy.beginPrewarm(), false, 'success, refusal and cancellation never renew the permission');
+    policy.finishPrewarm(); assert.equal(policy.beginPrewarm(), false);
+    assert.equal(policy.appiumLogLevel, 'error');
+  }
+});
 
 test('sampling is due only for a still-live explicit pre-auth prewarm diagnostic after fifteen seconds', () => {
   const value = { diagnostics: true, kind: 'owned-proof-app-prewarm', elapsedMs: 15000, state: state() };

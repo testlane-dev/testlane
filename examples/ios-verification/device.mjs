@@ -80,6 +80,21 @@ export function iosPrewarmDiagnosticDue({ diagnostics, kind, elapsedMs, state })
     state?.spawned === true && state.exited === false && state.closed === false && Number.isSafeInteger(state.pid) && state.pid > 1;
 }
 
+/** Sampling permission is independent of Appium verbosity and cannot be renewed. */
+export function createIosDiagnosticPolicy({ diagnostics = false, prewarmDiagnostics = false } = {}) {
+  if (typeof diagnostics !== 'boolean' || typeof prewarmDiagnostics !== 'boolean') throw fail('IOS_DEVICE_INPUT_INVALID');
+  let prewarm = 'unused';
+  return Object.freeze({
+    appiumLogLevel: diagnostics ? 'debug' : 'error',
+    beginPrewarm() {
+      if (prewarm !== 'unused') return false;
+      prewarm = 'in-flight';
+      return diagnostics || prewarmDiagnostics;
+    },
+    finishPrewarm() { prewarm = 'consumed'; },
+  });
+}
+
 export function verifyIosDiagnosticIdentity(state, info, { ownerPid, started } = {}) {
   if (!state || state.spawned !== true || state.exited !== false || state.closed !== false || state.pid !== state.child?.pid ||
       !Number.isSafeInteger(state.pid) || state.pid < 2 || !Number.isSafeInteger(ownerPid) || ownerPid < 1 ||
@@ -219,9 +234,9 @@ async function stop(state) {
 }
 
 /** Requires installed Xcode/runtime and explicit pinned tooling; downloads nothing. */
-export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = () => {}, runtimeId, deviceType, diagnostics = false } = {}) {
+export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = () => {}, runtimeId, deviceType, diagnostics = false, prewarmDiagnostics = false } = {}) {
   requireIosHostedDevice();
-  if (typeof diagnostics !== 'boolean') throw fail('IOS_DEVICE_INPUT_INVALID');
+  const diagnosticPolicy = createIosDiagnosticPolicy({ diagnostics, prewarmDiagnostics });
   if (![toolsRoot, outputDir].every(safePath)) throw fail('IOS_DEVICE_INPUT_INVALID');
   if (signal?.aborted) throw fail('IOS_CANCELLED');
   const nativeHome = os.userInfo().homedir;
@@ -251,7 +266,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   const captured = createIosDeviceCapture(), capture = captured.append;
   const writeMarker = () => writeFile(path.join(root, MARKER), JSON.stringify(marker) + '\n', { mode: 0o600 });
   const live = (allowClosing = false) => { if (closed || (closing && !allowClosing) || signal?.aborted) throw fail('IOS_CANCELLED'); if (captured.overflowed()) throw fail('IOS_CAPTURE_LIMIT'); if (ready && (!appium?.spawned || appium.closed)) throw fail('IOS_APPIUM_STOPPED'); };
-  async function run(executable, args, { timeoutMs = 30000, ignoreSignal = false } = {}) {
+  async function run(executable, args, { timeoutMs = 30000, ignoreSignal = false, prewarmDiagnostic = false } = {}) {
     if (!ignoreSignal) live();
     let stdout = '', stderr = '', bytes = 0, overflow = false;
     const kind = commandKind(executable, args), began = performance.now();
@@ -271,7 +286,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     if (!await state.started) { diagnostic('start-failed'); commands.delete(state); throw fail('IOS_COMMAND_START_FAILED'); }
     state.child.stdin.end(); const deadline = Date.now() + timeoutMs;
     let diagnosticTask;
-    if (diagnostics && kind === 'owned-proof-app-prewarm') {
+    if (prewarmDiagnostic === true && kind === 'owned-proof-app-prewarm') {
       // Only the retained child of this fixed pre-auth command may be sampled.
       // There is no timer callback that could launch work after run()/close().
       diagnosticTask = (async () => {
@@ -280,10 +295,10 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
           if (closing || signal?.aborted || state.exited || state.closed) return;
           started = verifyIosDiagnosticIdentity(state, await processInfo(state.pid, { timeoutMs: 1000 }), { ownerPid: process.pid });
           while (Date.now() < deadline && !closing && !signal?.aborted && !state.exited && !state.closed) {
-            if (iosPrewarmDiagnosticDue({ diagnostics, kind, elapsedMs: performance.now() - began, state })) break;
+            if (iosPrewarmDiagnosticDue({ diagnostics: prewarmDiagnostic, kind, elapsedMs: performance.now() - began, state })) break;
             await sleep(30);
           }
-          if (closing || signal?.aborted || !iosPrewarmDiagnosticDue({ diagnostics, kind, elapsedMs: performance.now() - began, state })) return;
+          if (closing || signal?.aborted || !iosPrewarmDiagnosticDue({ diagnostics: prewarmDiagnostic, kind, elapsedMs: performance.now() - began, state })) return;
           verifyIosDiagnosticIdentity(state, await processInfo(state.pid, { timeoutMs: 1000 }), { ownerPid: process.pid, started });
           if (closing || signal?.aborted || state.exited || state.closed || deadline - Date.now() < 6000) return;
           const result = await run('/usr/bin/sample', [String(state.pid), '1', '1', '-file', '/dev/stdout'], { timeoutMs: 5000 });
@@ -602,7 +617,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     const manifest = new Manifest(appiumHome); await manifest.read(); manifest.addExtensionFromPackage(driverPackage, path.join(driverRoot, 'package.json'), 'local'); await manifest.write();
     live();
     appium = launch(process.execPath, [path.join(appiumRoot, 'index.js'), '--address', '127.0.0.1', '--port', String(appiumPort), '--base-path', '/',
-      '--log-level', diagnostics ? 'debug' : 'error', '--log-no-colors', '--use-drivers', 'xcuitest'], { cwd: root, env, capture });
+      '--log-level', diagnosticPolicy.appiumLogLevel, '--log-no-colors', '--use-drivers', 'xcuitest'], { cwd: root, env, capture });
     if (!await appium.started) throw fail('IOS_APPIUM_START_FAILED');
     appium.child.stdin.end(); marker.appiumPid = appium.pid; await writeMarker();
     const serverUrl = 'http://127.0.0.1:' + appiumPort + '/', deadline = Date.now() + 45000;
@@ -626,9 +641,12 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
         if (args.length !== 0) throw fail('IOS_APP_INPUT_INVALID');
         // This fixed public app is still signed out: no backend, account or
         // bootstrap has been allocated by the controller at this stage.
-        await assertOwned(); live();
-        const result = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'launch', [BUNDLE]), { timeoutMs: 30000 });
-        return acknowledgedIosProofLaunch(result);
+        const prewarmDiagnostic = diagnosticPolicy.beginPrewarm();
+        try {
+          await assertOwned(); live();
+          const result = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'launch', [BUNDLE]), { timeoutMs: 30000, prewarmDiagnostic });
+          return acknowledgedIosProofLaunch(result);
+        } finally { diagnosticPolicy.finishPrewarm(); }
       },
       async writeBootstrap(payload) {
         if (typeof payload !== 'string' || Buffer.byteLength(payload) > 65536 || payload.includes('\0')) throw fail('IOS_BOOTSTRAP_INPUT_INVALID');

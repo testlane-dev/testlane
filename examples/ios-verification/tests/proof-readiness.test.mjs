@@ -32,7 +32,7 @@ async function fixture(mode, { failPostReadinessCheck = false } = {}) {
       state.roles=Object.values(accounts).map(account=>account.role);throw Error('FIXTURE_AFTER_READINESS');}
   `);
   await file('examples/ios-verification/device.mjs', stateImport + `
-    export async function startOwnedIos(){state.events.push('device-start');const binding={schemaVersion:1,scope:'ephemeral-hosted-standard-device-set',
+    export async function startOwnedIos(options){state.events.push('device-start');state.deviceDiagnostics={diagnostics:options.diagnostics??false,prewarmDiagnostics:options.prewarmDiagnostics??false};const binding={schemaVersion:1,scope:'ephemeral-hosted-standard-device-set',
       nativeHome:'/Users/runner',deviceSetPath:'/Users/runner/Library/Developer/CoreSimulator/Devices',privateRoot:'/private/tmp/tld-ios-abc123',
       udid:'FA001122-3344-5566-7788-9900AABBCCDD',nonce:'a'.repeat(24)};
       return {udid:binding.udid,deviceBinding:binding,deviceSetPath:binding.deviceSetPath,derivedDataPath:binding.privateRoot+'/derived-data',
@@ -79,6 +79,7 @@ test('controller refuses all credential/backend/broker work until installed-driv
       assert.equal(owned.state.accounts, 0); assert.equal(owned.state.broker, 0);
       assert.equal(owned.state.scannedPasswordCount, 0, 'failure before readiness has not even allocated generated passwords');
       assert.equal(owned.state.close, 1, 'the same owned device receives final teardown');
+      assert.deepEqual(owned.state.deviceDiagnostics, { diagnostics: false, prewarmDiagnostics: true });
       assert.equal(owned.state.events.filter(value => value === 'installed-driver-create').length, 1);
       assert.equal(owned.state.events.filter(value => value === 'installed-driver-close').length, mode === 'create-failed' ? 0 : 1);
       await assert.rejects(readFile(path.join(owned.outputDir, 'readiness.json')), { code: 'ENOENT' });
@@ -99,6 +100,7 @@ test('a successful single-session readiness record precedes credential creation 
     assert.equal(owned.state.broker, 0); assert.equal(owned.state.close, 1);
     assert.equal(events.filter(value => value === 'installed-driver-close').length, 1);
     assert.deepEqual(owned.state.privacy, { showXcodeLog: false, showIOSLog: false, skipLogCapture: true });
+    assert.deepEqual(owned.state.deviceDiagnostics, { diagnostics: false, prewarmDiagnostics: true });
     assert.equal(owned.state.wdaChecks, 2, 'WDA artifacts are checked again after the readiness driver closes');
     const record = JSON.parse(await readFile(path.join(owned.outputDir, 'readiness.json'), 'utf8'));
     assert.equal(record.installedDriver, true); assert.equal(record.nativeContextVerified, true); assert.equal(record.sessionCleanup, 'deleted');
