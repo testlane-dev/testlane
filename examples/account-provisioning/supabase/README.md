@@ -137,7 +137,7 @@ Both modes passed on Windows with DPAPI and Docker 29.8.0 using the pinned Linux
 provider images: [app-owned form proof](../../../docs/verification/provisioning-2026-10-19/supabase-form.public.json)
 and [NextAuth proof](../../../docs/verification/provisioning-2026-10-19/supabase-nextauth.public.json).
 These receipts bind the final source files and a fresh source-packed broker; they
-do not describe a new npm release or a hosted-provider test. The 38 unit/control
+do not describe a new npm release or a hosted-provider test. The 40 unit/control
 tests include actual Windows ACL checks as well as contract and abuse cases.
 
 A passing `receipt.json` binds the exact source inputs, app authentication mode,

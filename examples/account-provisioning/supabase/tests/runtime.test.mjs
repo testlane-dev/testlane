@@ -54,15 +54,60 @@ test('explicit tooling destination preserves existing content and rejects redire
     await assert.rejects(validateToolsDirectory('relative'),{code:'SUPABASE_TOOLS_OUTPUT_REFUSED'});
   }finally{await temp.close();}
 });
-test('bounded child output stays private and a timeout stops the retained parent and child tree',async()=>{
+test('bounded child input/output can be inspected privately',async()=>{
   const temp=await temporary(),canary=randomBytes(32).toString('base64url');
   try{
-    const echoed=await runOwnedCommand(process.execPath,['-e','process.stdin.pipe(process.stdout)'],{cwd:temp.root,input:canary,timeoutMs:3000});
+    const echoed=await runOwnedCommand(process.execPath,['-e','process.stdin.pipe(process.stdout)'],{cwd:temp.root,input:canary,timeoutMs:15000});
     assert.equal(echoed.stdout,canary);assert.equal(echoed.code,0);
-    const pidFile=path.join(temp.root,'child.pid');
-    const source="const{spawn}=require('node:child_process');const{writeFileSync}=require('node:fs');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});writeFileSync(process.argv[1],String(child.pid));setInterval(()=>{},1000);";
-    await assert.rejects(runOwnedCommand(process.execPath,['-e',source,pidFile],{cwd:temp.root,timeoutMs:500}),{code:'SUPABASE_COMMAND_TIMEOUT'});
-    const childPid=Number(await readFile(pidFile,'utf8'));assert.ok(Number.isSafeInteger(childPid)&&childPid>0);
-    assert.throws(()=>process.kill(childPid,0),error=>error.code==='ESRCH');
   }finally{await temp.close();}
+});
+
+test('a command timeout is reported without assuming the process reached user code',async()=>{
+  const temp=await temporary();try{
+    await assert.rejects(runOwnedCommand(process.execPath,['-e','setInterval(()=>{},1000)'],{cwd:temp.root,timeoutMs:500}),{code:'SUPABASE_COMMAND_TIMEOUT'});
+  }finally{await temp.close();}
+});
+
+async function reportedPid(file){
+  const text=await readFile(file,'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;});
+  const pid=/^[1-9]\d*$/.test(text)?Number(text):NaN;
+  return Number.isSafeInteger(pid)?pid:undefined;
+}
+const alive=pid=>{try{process.kill(pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}};
+async function waitForAbsence(pids){
+  const deadline=Date.now()+5000;
+  while(pids.some(alive)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));
+  assert.equal(pids.some(alive),false,'the owned parent and child must both be absent after confirmed cancellation');
+}
+
+test('cancellation stops the owned parent and child after both independently report readiness',async()=>{
+  const temp=await temporary(),controller=new AbortController();
+  const parentFile=path.join(temp.root,'parent.pid'),childFile=path.join(temp.root,'child.pid');
+  // The child writes its own readiness PID after starting user code. This
+  // deliberately occurs later than the separate 500ms timeout test's budget.
+  const childSource="const{writeFileSync}=require('node:fs');setTimeout(()=>{writeFileSync(process.argv[1],String(process.pid),{flag:'wx'});setInterval(()=>{},1000);},750);";
+  const parentSource="const{spawn}=require('node:child_process');const{writeFileSync}=require('node:fs');writeFileSync(process.argv[1],String(process.pid),{flag:'wx'});spawn(process.execPath,['-e',process.argv[3],process.argv[2]],{stdio:'ignore'});setInterval(()=>{},1000);";
+  let settled=false;
+  const finished=runOwnedCommand(process.execPath,['-e',parentSource,parentFile,childFile,childSource],
+    {cwd:temp.root,timeoutMs:30000,signal:controller.signal}).then(value=>({value}),error=>({error})).finally(()=>{settled=true;});
+  try{
+    const deadline=Date.now()+15000;let pids;
+    while(Date.now()<deadline){
+      pids=await Promise.all([reportedPid(parentFile),reportedPid(childFile)]);
+      if(pids.every(pid=>pid!==undefined)&&pids[0]!==pids[1]&&pids.every(alive))break;
+      assert.equal(settled,false,'the owned command must stay live until the readiness handshake');
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+    assert.ok(pids?.every(pid=>pid!==undefined)&&pids[0]!==pids[1]&&pids.every(alive),'both owned processes must report ready within 15 seconds');
+    controller.abort();
+    assert.equal((await finished).error?.code,'SUPABASE_CANCELLED');
+    await waitForAbsence(pids);
+  }finally{
+    // Also settle teardown when readiness fails, so cold-start failures cannot
+    // leave the parent or a child that started near the deadline running.
+    controller.abort();await finished;
+    const known=(await Promise.all([reportedPid(parentFile),reportedPid(childFile)])).filter(pid=>pid!==undefined);
+    await waitForAbsence(known);
+    await temp.close();
+  }
 });
