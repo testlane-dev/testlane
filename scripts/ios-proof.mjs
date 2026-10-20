@@ -11,7 +11,8 @@ import {sha,tree,digestTree,installedModule,proofProfiles,runProofPhases} from '
 import {publicIosFailure} from '../examples/ios-verification/failure.mjs';
 
 const BUNDLE='dev.testlane.iosproof';
-export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,signal,onStage=()=>{}}) {
+export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,signal,onStage=()=>{},preauthControls=false}) {
+  assert.equal(typeof preauthControls,'boolean');
   const load=file=>installedModule(consumer.packageRoot,file);
   const {startIosBroker,requireIosBrokerCi,scanIosCredentials}=await load('examples/ios-verification/broker.mjs');
   requireIosBrokerCi();signal?.throwIfAborted();
@@ -53,7 +54,10 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
     await device.assertWdaPrepared();
     const driverOptions=iosProofDriverOptions(device);
     at('wda-readiness');
-    wdaReadiness=await verifyInstalledIosReadiness({createNativeDriver,driverOptions,assertOwned:()=>device.assertOwned(),signal,appPrewarmed:true});
+    let controlResult;
+    try{wdaReadiness=await verifyInstalledIosReadiness({createNativeDriver,driverOptions,assertOwned:()=>device.assertOwned(),signal,appPrewarmed:true,
+      preauthControls,onPreauthControls:value=>{controlResult=value;}});}
+    finally{if(preauthControls&&controlResult)await writeFile(path.join(output,'preauth-controls.json'),JSON.stringify(controlResult,null,2)+'\n',{flag:'wx',mode:0o600});}
     await device.assertWdaPrepared();
     signal?.throwIfAborted();
     await writeFile(path.join(output,'readiness.json'),JSON.stringify(wdaReadiness,null,2)+'\n',{flag:'wx',mode:0o600});
@@ -135,6 +139,7 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
 async function main(){
   const args=process.argv.slice(2),options={};
   for(let i=0;i<args.length;i++){
+    if(args[i]==='--preauth-controls'){if(options.preauthControls)throw Error('IOS_PROOF_ARGUMENTS_INVALID');options.preauthControls=true;continue;}
     const key={'--app':'appDirectory','--tools-root':'toolsRoot','--output-dir':'outputDir'}[args[i]];
     if(!key||options[key]||!args[i+1])throw Error('IOS_PROOF_ARGUMENTS_INVALID');options[key]=path.resolve(args[++i]);
   }

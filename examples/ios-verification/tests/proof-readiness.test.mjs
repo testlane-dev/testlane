@@ -11,7 +11,7 @@ import { publicIosFailure } from '../failure.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 
-async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailure = false, deviceCloseFails = false, statusWriteFails = false, captureThrows = false } = {}) {
+async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailure = false, deviceCloseFails = false, statusWriteFails = false, captureThrows = false, preauthControls = false } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'tld-ios-readiness-'));
   const packageRoot = path.join(root, 'package'), appDirectory = path.join(root, 'TestlaneIOSProof.app');
   const outputDir = path.join(root, 'output'), sessionTemp = path.join(root, 'sessions');
@@ -58,18 +58,22 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
           if(state.deviceCloseFails)throw Error('IOS_DEVICE_CLEANUP_UNCONFIRMED');},capturedText(){if(state.captureThrows)throw Error('FIXTURE_CAPTURE_UNAVAILABLE');return '';}};}
   `);
   await file('examples/ios-verification/driver.mjs', stateImport + `
+    export class NativeDriverError extends Error{constructor(code){super('FIXTURE_NATIVE_FAILURE');this.code=code;}}
     export async function createNativeDriver(options){state.events.push('installed-driver-create');
       state.privacy={showXcodeLog:options.capabilities['appium:showXcodeLog'],showIOSLog:options.capabilities['appium:showIOSLog'],
         skipLogCapture:options.capabilities['appium:skipLogCapture']};
       if(state.mode==='create-failed')throw Object.assign(Error('private-fixture-native-message'),{code:'NATIVE_DRIVER_SESSION_TIMEOUT'});
-      return {context:state.mode==='context-failed'?'WEBVIEW':'NATIVE_APP',async close(){state.events.push('installed-driver-close');
+      return {context:state.mode==='context-failed'?'WEBVIEW':'NATIVE_APP',
+        async scrollIntoView(id){state.events.push('control-visibility:'+id);if(state.mode==='controls-failed'&&id==='quantity')throw new NativeDriverError('NATIVE_DRIVER_ELEMENT_TIMEOUT');},
+        async click(id){state.events.push('control-focus:'+id);},async hideKeyboard(){state.events.push('control-keyboard-check');},
+        async close(){state.events.push('installed-driver-close');
         if(state.mode==='close-failed')throw Object.assign(Error('private-fixture-native-message'),{code:'NATIVE_DRIVER_TIMEOUT'});}};}
   `);
-  for (const name of ['readiness.mjs', 'device-scope.mjs']) await file('examples/ios-verification/' + name, await readFile(new URL('../' + name, import.meta.url)));
+  for (const name of ['readiness.mjs', 'device-scope.mjs', 'preauth-controls.mjs']) await file('examples/ios-verification/' + name, await readFile(new URL('../' + name, import.meta.url)));
   await file('examples/android-verification/worker-host.mjs', stateImport + `export function runNativeWorker(){
     if(!state.lateStartupFailure)throw Error('WORKER_NOT_EXPECTED');state.events.push('worker-start');
     return {report:{verdict:'blocked',reasonCodes:['NATIVE_DRIVER_SESSION_TIMEOUT'],cases:[]},captured:''};}`);
-  await file('examples/android-verification/contracts.mjs', 'export const validateNativePlan=value=>value,sanitizeNativeReport=value=>value,NATIVE_DRIVER_FAILURE_CODES=["NATIVE_DRIVER_SESSION_TIMEOUT","NATIVE_DRIVER_CONTEXT_REFUSED","NATIVE_DRIVER_TIMEOUT"];');
+  await file('examples/android-verification/contracts.mjs', 'export const validateNativePlan=value=>value,sanitizeNativeReport=value=>value,NATIVE_DRIVER_FAILURE_CODES=["NATIVE_DRIVER_SESSION_TIMEOUT","NATIVE_DRIVER_CONTEXT_REFUSED","NATIVE_DRIVER_TIMEOUT","NATIVE_DRIVER_ELEMENT_TIMEOUT","NATIVE_DRIVER_COMMAND_FAILED"];');
   await file('examples/android-verification/proof-cases.mjs', 'export const APPROVAL_REQUIREMENTS=[];');
   await file('examples/android-verification/budgets.mjs', 'export const NATIVE_PROOF_BUDGETS={};');
   const appSHA256 = 'a'.repeat(64);
@@ -83,7 +87,7 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
     proofOnly: true, configuration: 'Release', signature: 'none', unsigned: true, codeSigningAllowed: false, embeddedBundle: true,
     architecture: 'arm64', appSHA256, builderSHA256: sha(builder), publicSourceSHA256 }));
   const { state } = await import(stateUrl);
-  return { state, outputDir, options: { consumer: { root, packageRoot, sessionTemp }, appDirectory, toolsRoot: path.join(root, 'tools'), outputDir,
+  return { state, outputDir, options: { consumer: { root, packageRoot, sessionTemp }, appDirectory, toolsRoot: path.join(root, 'tools'), outputDir, preauthControls,
     onStage: value => state.events.push('stage:' + value) }, close: () => rm(root, { recursive: true, force: true }) };
 }
 
@@ -103,6 +107,31 @@ test('controller refuses all credential/backend/broker work until installed-driv
       const summary = await publicIosFailure({ output: owned.outputDir, stage: 'wda-readiness', error });
       assert.equal(summary.stage, 'wda-readiness'); assert.match(summary.code, /^NATIVE_DRIVER_/);
       assert.equal(JSON.stringify(summary).includes('private-fixture-native-message'), false);
+    } finally { await owned.close(); }
+  }
+});
+
+test('explicit fixed-controls probe uses the installed helper before account allocation and retains no values', async () => {
+  for (const mode of ['passed', 'controls-failed']) {
+    const owned = await fixture(mode, { preauthControls: true });
+    try {
+      await assert.rejects(runIosProof(owned.options));
+      const result = JSON.parse(await readFile(path.join(owned.outputDir, 'preauth-controls.json'), 'utf8'));
+      assert.equal(result.completed, mode === 'passed'); assert.equal(result.sessionCleanupAcknowledged, true);
+      assert.equal(owned.state.events.filter(value => value === 'installed-driver-close').length, 1);
+      assert.equal(owned.state.close, 1);
+      if (mode === 'controls-failed') {
+        assert.equal(owned.state.accounts, 0); assert.equal(owned.state.broker, 0); assert.equal(owned.state.scannedPasswordCount, 0);
+        assert.deepEqual(result.steps.at(-1), { controlId: 'quantity', step: 'visibility', completed: false, code: 'NATIVE_DRIVER_ELEMENT_TIMEOUT' });
+        assert.equal(owned.state.events.includes('control-focus:quantity'), false);
+        await assert.rejects(readFile(path.join(owned.outputDir, 'readiness.json')), { code: 'ENOENT' });
+      } else {
+        assert.equal(result.steps.length, 11);
+        assert.ok(owned.state.events.indexOf('control-visibility:session-status') < owned.state.events.indexOf('installed-driver-close'));
+        assert.ok(owned.state.events.indexOf('installed-driver-close') < owned.state.events.indexOf('account-backend-start'));
+      }
+      const text = JSON.stringify(result);
+      assert.equal(text.includes(owned.state.cookie), false); assert.equal(text.includes('FA001122'), false);
     } finally { await owned.close(); }
   }
 });

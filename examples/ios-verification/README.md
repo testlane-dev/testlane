@@ -53,6 +53,14 @@ the same owned Simulator for the authenticated cases. Final teardown removes the
 Simulator. Ordinary
 `npm run test:mobile` executes unit/control tests without starting a device.
 
+The hosted workflow also enables `--preauth-controls` in that same readiness
+session. This optional diagnostic scrolls to eight fixed synthetic controls,
+focuses the quantity input without typing, checks keyboard dismissal and restores
+the session-status control. Failure blocks account and broker setup. Its
+`preauth-controls.json` contains only fixed control IDs, step categories, completion
+booleans and allowlisted error codes. Session-deletion acknowledgement does not
+establish final device cleanup or replace the required business-case outcomes.
+
 The equivalent commands below belong in that opted-in ephemeral hosted job, from
 the repository root. Every final output directory must be new; its parent must
 exist at a canonical path:
@@ -67,7 +75,7 @@ proof_root="$(cd "$RUNNER_TEMP" && pwd -P)/testlane-ios-$$"
 mkdir "$proof_root"
 npm --prefix examples/ios-verification/tools run setup -- --output-dir "$proof_root/tools"
 npm run build:ios-proof -- --output-dir "$proof_root/build"
-TESTLANE_IOS_PROOF_CI=1 npm run proof:ios -- --app "$proof_root/build/TestlaneIOSProof.app" --tools-root "$proof_root/tools" --output-dir "$GITHUB_WORKSPACE/output/ios-proof"
+TESTLANE_IOS_PROOF_CI=1 npm run proof:ios -- --app "$proof_root/build/TestlaneIOSProof.app" --tools-root "$proof_root/tools" --output-dir "$GITHUB_WORKSPACE/output/ios-proof" --preauth-controls
 ```
 
 For a separate credential-free diagnostic, run the command below instead of the
@@ -133,8 +141,8 @@ file before parsing or accepting its contents and keeps the cookie in memory.
 After identity is ready, the controller independently checks file absence.
 
 The test app provides an iOS input accessory with an explicit keyboard dismissal
-control. The driver activates that configured control once and observes that the
-keyboard disappears; it does not assume an iPhone number pad has a system Done key
+control. When the keyboard is shown, the driver activates that configured control
+once and observes that the keyboard disappears; it does not assume an iPhone number pad has a system Done key
 or ignore a failed dismissal. This is part of the synthetic app's UI contract.
 
 Setup compiles only the pinned WebDriverAgent project into the run's private

@@ -1,6 +1,7 @@
 /** Credential-free setup using the same installed driver and options as the proof workers. */
 import { IOS_DEVICE_SCOPE, validateIosDeviceBinding } from './device-scope.mjs';
 import { NATIVE_DRIVER_FAILURE_CODES } from '../android-verification/contracts.mjs';
+import { probeIosPreauthControls } from './preauth-controls.mjs';
 
 const fail = code => Object.assign(new Error(code), { code });
 const fixedFailure = error => fail(NATIVE_DRIVER_FAILURE_CODES.includes(error?.code) || error?.code === 'NATIVE_DRIVER_CANCELLED' ? error.code : 'NATIVE_DRIVER_COMMAND_FAILED');
@@ -28,26 +29,32 @@ export function iosProofDriverOptions(device) {
  * Construction must verify NATIVE_APP. Close is attempted exactly once for a
  * returned driver; unknown setup or close outcomes belong to device teardown.
  */
-export async function verifyInstalledIosReadiness({ createNativeDriver, driverOptions, assertOwned, signal, appPrewarmed } = {}) {
+export async function verifyInstalledIosReadiness({ createNativeDriver, driverOptions, assertOwned, signal, appPrewarmed,
+  preauthControls = false, onPreauthControls = () => {} } = {}) {
   if (signal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
   if (typeof createNativeDriver !== 'function' || typeof assertOwned !== 'function' || appPrewarmed !== true ||
-    driverOptions?.deviceBinding?.scope !== IOS_DEVICE_SCOPE) throw fail('NATIVE_DRIVER_CONFIGURATION_INVALID');
-  let driver, error, failed = false, sessionSetupMs;
+    driverOptions?.deviceBinding?.scope !== IOS_DEVICE_SCOPE || typeof preauthControls !== 'boolean' ||
+    typeof onPreauthControls !== 'function') throw fail('NATIVE_DRIVER_CONFIGURATION_INVALID');
+  let driver, error, failed = false, sessionSetupMs, sessionCleanupAcknowledged = false;
+  const steps = [];
   const began = performance.now();
   try {
     driver = await createNativeDriver({ ...driverOptions, signal, assertOwned });
     sessionSetupMs = Math.max(0, Math.round(performance.now() - began));
     if (driver?.context !== 'NATIVE_APP') throw fail('NATIVE_DRIVER_CONTEXT_REFUSED');
     if (signal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
+    if (preauthControls) await probeIosPreauthControls({ driver, signal, onStep: row => steps.push(row) });
   } catch (caught) { error = fixedFailure(caught); failed = true; }
   finally {
     if (driver) {
-      try { await driver.close(); }
+      try { await driver.close(); sessionCleanupAcknowledged = true; }
       catch (caught) { if (!failed) { error = fixedFailure(caught); failed = true; } }
     }
   }
+  if (signal?.aborted && !failed) { error = fail('NATIVE_DRIVER_CANCELLED'); failed = true; }
+  if (preauthControls) onPreauthControls(Object.freeze({ schemaVersion: 1, purpose: 'credential-free-fixed-controls',
+    completed: !failed, sessionCleanupAcknowledged, steps: Object.freeze(steps) }));
   if (failed) throw error;
-  if (signal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
   return Object.freeze({
     schemaVersion: 1, purpose: 'credential-free-native-readiness', runner: 'ios-xcuitest', deviceScope: IOS_DEVICE_SCOPE,
     installedDriver: true, appPrewarmed: true, sessionCreated: true, nativeContextVerified: true,
