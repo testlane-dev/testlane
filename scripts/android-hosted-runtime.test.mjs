@@ -2,8 +2,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomBytes } from 'node:crypto';
+import { lstat, mkdtemp, open, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { exerciseHostedSecretService, assertRuntimeSecretsAbsent, retainedHostedServiceLive, runHostedAndroidRuntime,
-  verifyHostedServiceOwners } from './android-hosted-runtime.mjs';
+  verifyHostedServiceOwners, scanHostedRuntimeSecrets, readHostedRuntimeScanText } from './android-hosted-runtime.mjs';
 
 function fixture(overrides = {}) {
   const calls = [], failures = [];
@@ -173,4 +176,84 @@ test('pre-aborted sequencing allocates neither services nor a proof, while failu
   assert.equal(f.calls.includes('startKeyring'), false);
   assert.equal(f.calls.includes('runProof'), false);
   assert.equal(f.calls.includes('removeStorage'), false);
+});
+
+const serviceSecrets = () => ({ unlock: randomBytes(32).toString('base64') + ' /+?', canary: randomBytes(32).toString('base64') + ' /+?' });
+const encodedSecrets = secret => ({ raw:secret,uri:encodeURIComponent(secret),base64:Buffer.from(secret).toString('base64'),base64url:Buffer.from(secret).toString('base64url') });
+function noServiceSecrets(value, secrets) {
+  const text=JSON.stringify(value);
+  for(const secret of Object.values(secrets))for(const encoded of Object.values(encodedSecrets(secret)))assert.equal(text.includes(encoded),false);
+}
+function scanningFixture(sources, secrets, overrides={}) {
+  return fixture({ ...overrides, scan: () => scanHostedRuntimeSecrets({captured:sources.captured??'',overflow:sources.overflow??false,
+    readProofOutput:sources.readProofOutput??(async()=>sources['proof-output']??''),
+    readPrivateRuntime:sources.readPrivateRuntime??(async()=>sources['private-runtime']??'')},secrets) });
+}
+
+test('actual matches record only fixed scope, secret kind and encoding, retaining failure storage',async()=>{
+  const secrets=serviceSecrets();
+  for(const scope of ['captured','proof-output','private-runtime'])for(const [secret,value]of Object.entries(secrets))for(const [encoding,encoded]of Object.entries(encodedSecrets(value))){
+    const f=scanningFixture({[scope]:'prefix '+encoded+' suffix'},secrets);
+    await rejected(exerciseHostedSecretService(f.ops),'LEAK_DETECTED');
+    assert.deepEqual(f.failures[0].scanFact,{scope,kind:'match',code:'LEAK_DETECTED',secret,encoding});
+    assert.equal(f.failures[0].recoveryRetained,true);assert.equal(f.calls.includes('removeStorage'),false);noServiceSecrets(f.failures,secrets);
+  }
+});
+
+test('the original concatenation matches remain detectable across two or three scan scopes',async()=>{
+  const secrets=serviceSecrets();
+  for(const [encoding,encoded]of Object.entries(encodedSecrets(secrets.canary))){
+    const split=Math.floor(encoded.length/3);
+    for(const parts of [[encoded.slice(0,split),encoded.slice(split),''],['',encoded.slice(0,split),encoded.slice(split)],
+      [encoded.slice(0,split),encoded.slice(split,split*2),encoded.slice(split*2)]]){
+      const f=scanningFixture({captured:parts[0],'proof-output':parts[1],'private-runtime':parts[2]},secrets);
+      await rejected(exerciseHostedSecretService(f.ops),'LEAK_DETECTED');
+      assert.deepEqual(f.failures[0].scanFact,{scope:'combined-boundary',kind:'match',code:'LEAK_DETECTED',secret:'canary',encoding});
+      assert.equal(f.calls.includes('removeStorage'),false);noServiceSecrets(f.failures,secrets);
+    }
+  }
+});
+
+test('incomplete scans preserve known read/size codes without claiming a secret match',async()=>{
+  const secrets=serviceSecrets();
+  for(const scope of ['proof-output','private-runtime'])for(const code of ['OUTPUT_LIMIT','STORAGE_UNCONFIRMED','OWNERSHIP_REFUSED','FAILED']){
+    const failure=code==='FAILED'?Error(secrets.unlock):error(code);
+    const f=scanningFixture({[scope==='proof-output'?'readProofOutput':'readPrivateRuntime']:async()=>{throw failure;}},secrets);
+    await rejected(exerciseHostedSecretService(f.ops),'LEAK_DETECTED');
+    assert.deepEqual(f.failures[0].scanFact,{scope,kind:'incomplete',code});
+    assert.equal(f.failures[0].code,'LEAK_DETECTED');assert.equal(f.calls.includes('removeStorage'),false);noServiceSecrets(f.failures,secrets);
+  }
+  const overflow=scanningFixture({overflow:true},secrets);await rejected(exerciseHostedSecretService(overflow.ops),'LEAK_DETECTED');
+  assert.deepEqual(overflow.failures[0].scanFact,{scope:'captured',kind:'incomplete',code:'OUTPUT_LIMIT'});
+  const invalid=scanningFixture({captured:null},secrets);invalid.ops.scan=()=>scanHostedRuntimeSecrets({captured:null,readProofOutput:async()=>'',readPrivateRuntime:async()=>''},secrets);
+  await rejected(exerciseHostedSecretService(invalid.ops),'LEAK_DETECTED');
+  assert.deepEqual(invalid.failures[0].scanFact,{scope:'captured',kind:'incomplete',code:'LEAK_DETECTED'});
+});
+
+test('secondary scan failure preserves a primary proof failure; forged error facts do not become evidence',async()=>{
+  const secrets=serviceSecrets(),f=scanningFixture({readPrivateRuntime:async()=>{throw error('OUTPUT_LIMIT');}},secrets,{runProof:()=>1});
+  await rejected(exerciseHostedSecretService(f.ops),'PROOF_FAILED');assert.equal(f.failures[0].stage,'proof');
+  assert.deepEqual(f.failures[0].scanFact,{scope:'private-runtime',kind:'incomplete',code:'OUTPUT_LIMIT'});
+  const forged=fixture({scan:()=>{throw Object.assign(Error(secrets.canary),{scanFact:{scope:'captured',kind:'match',code:'LEAK_DETECTED',secret:secrets.canary,encoding:'raw'}});}});
+  await rejected(exerciseHostedSecretService(forged.ops),'LEAK_DETECTED');assert.equal(Object.hasOwn(forged.failures[0],'scanFact'),false);noServiceSecrets(forged.failures,secrets);
+});
+
+test('complete sequential scans still gate success and storage removal',async()=>{
+  const secrets=serviceSecrets(),readers=[],f=scanningFixture({captured:'fixed capture',readProofOutput:async()=>{readers.push('proof');return 'fixed proof';},
+    readPrivateRuntime:async()=>{readers.push('private');return 'fixed private';}},secrets);
+  const result=await exerciseHostedSecretService(f.ops);assert.deepEqual(readers,['proof','private']);assert.equal(result.unlockSecretLeakScanPassed,true);
+  assert.equal(f.calls.includes('removeStorage'),true);assert.deepEqual(f.failures,[]);
+});
+
+test('the real read-only collector retains the 64 MiB bound and symlink refusal',async t=>{
+  const parent=await realpath(os.tmpdir()),root=await mkdtemp(path.join(parent,'tld-scan-tree-'));
+  t.after(async()=>{assert.equal(path.dirname(root),parent);assert.match(path.basename(root),/^tld-scan-tree-[A-Za-z0-9]+$/);assert.equal(await realpath(root),root);assert.equal((await lstat(root)).isSymbolicLink(),false);await rm(root,{recursive:true});});
+  const uid=(await lstat(root)).uid,secrets=serviceSecrets(),file=path.join(root,'ordinary');
+  await writeFile(file,'synthetic');assert.equal(await readHostedRuntimeScanText(root,uid),'synthetic\n');
+  const handle=await open(file,'r+');try{await handle.truncate(64*1024*1024+1);}finally{await handle.close();}
+  const f=scanningFixture({readPrivateRuntime:()=>readHostedRuntimeScanText(root,uid)},secrets);
+  await rejected(exerciseHostedSecretService(f.ops),'LEAK_DETECTED');
+  assert.deepEqual(f.failures[0].scanFact,{scope:'private-runtime',kind:'incomplete',code:'OUTPUT_LIMIT'});assert.equal(f.calls.includes('removeStorage'),false);
+  await rm(file);await symlink(root,path.join(root,'link'),process.platform==='win32'?'junction':'dir');
+  await assert.rejects(readHostedRuntimeScanText(root,uid),{message:'ANDROID_HOSTED_RUNTIME_STORAGE_UNCONFIRMED'});
 });

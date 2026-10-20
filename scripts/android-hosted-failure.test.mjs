@@ -7,7 +7,7 @@ import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, write
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { validateHostedAndroidRuntimeFailure, readHostedAndroidRuntimeFailure } from './android-hosted-failure.mjs';
+import { validateHostedAndroidRuntimeFailure, readHostedAndroidRuntimeFailure, validateHostedRuntimeScanFact } from './android-hosted-failure.mjs';
 import { exerciseHostedSecretService } from './android-hosted-runtime.mjs';
 import { publicAndroidFailure } from '../examples/android-verification/failure.mjs';
 
@@ -135,4 +135,38 @@ test('actual inline workflow never reads proof diagnostics for an earlier failed
   const result = await project(f, { stage: 'tools' });
   assert.deepEqual(result, { schemaVersion: 1, status: 'failed', stage: 'tools', code: 'ANDROID_HOSTED_EXPERIMENT_FAILED' });
   noLeaks(JSON.stringify(result), secret);
+});
+
+test('optional scan facts are exact data-only match or incomplete variants',()=>{
+  const secret=randomBytes(32).toString('base64')+' /+?',match={scope:'captured',kind:'match',code:'LEAK_DETECTED',secret:'canary',encoding:'base64url'},
+    incomplete={scope:'private-runtime',kind:'incomplete',code:'OUTPUT_LIMIT'};
+  for(const scanFact of [match,incomplete]){
+    assert.deepEqual(validateHostedRuntimeScanFact(scanFact),scanFact);
+    assert.deepEqual(validateHostedAndroidRuntimeFailure({...valid(),scanFact}),{...valid(),scanFact});
+    assert.equal(Object.isFrozen(validateHostedAndroidRuntimeFailure({...valid(),scanFact}).scanFact),true);
+  }
+  const candidates=[null,[],{}, {...match,message:secret},{...match,scope:secret},{...match,kind:secret},{...match,code:'OUTPUT_LIMIT'},
+    {...match,secret},{...match,encoding:secret},{...incomplete,code:secret},{...incomplete,secret:'unlock'},
+    {...incomplete,encoding:'raw'},{...incomplete,scope:'combined-boundary'}, {...match,kind:'incomplete'}];
+  for(const value of candidates)assert.throws(()=>validateHostedAndroidRuntimeFailure({...valid(),scanFact:value}),{message:INVALID});
+  let reads=0;const hostile=()=>{reads++;throw Error(secret);},getter={...match};Object.defineProperty(getter,'secret',{get:hostile});
+  const proxy=new Proxy(match,{ownKeys:hostile,get:hostile,getPrototypeOf:hostile});
+  for(const value of [getter,proxy])assert.throws(()=>validateHostedRuntimeScanFact(value),{message:INVALID});assert.equal(reads,0);
+  noLeaks(JSON.stringify(validateHostedAndroidRuntimeFailure({...valid(),scanFact:match})),secret);
+});
+
+test('actual inline workflow preserves validated scan facts and refuses malformed or secret-bearing facts',async t=>{
+  const f=await workflowFixture(t),secret=randomBytes(32).toString('base64')+' /+?',native=await publicAndroidFailure({output:f.output,stage:'setup',error:Error(secret)}),
+    file=path.join(f.output,'linux-runtime-failure.json'),match={scope:'proof-output',kind:'match',code:'LEAK_DETECTED',secret:'unlock',encoding:'uri'},
+    incomplete={scope:'private-runtime',kind:'incomplete',code:'OUTPUT_LIMIT'};
+  await writeFile(path.join(f.output,'public-failure.json'),JSON.stringify(native));
+  for(const scanFact of [match,incomplete]){
+    await writeFile(file,JSON.stringify({...valid(),scanFact}));const result=await project(f);
+    assert.deepEqual(result.runtimeDiagnostic,{...valid(),scanFact});assert.deepEqual(result.nativeDiagnostic,native);noLeaks(JSON.stringify(result),secret);
+  }
+  for(const scanFact of [{...match,path:secret},{...match,secret},{...incomplete,encoding:secret},...variants(secret).map(code=>({...incomplete,code}))]){
+    await writeFile(file,JSON.stringify({...valid(),scanFact}));const result=await project(f);
+    assert.equal(result.runtimeDiagnosticStatus,'unavailable');assert.equal(Object.hasOwn(result,'runtimeDiagnostic'),false);
+    assert.deepEqual(result.nativeDiagnostic,native);noLeaks(JSON.stringify(result),secret);
+  }
 });

@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireHostedAndroid, hostedAndroidEnvironment } from './android-hosted-setup.mjs';
 import { retainDetachedChild, stopRetainedGroup, confirmRetainedGroupAbsent } from '../examples/android-verification/process-group.mjs';
+import { validateHostedRuntimeScanFact } from './android-hosted-failure.mjs';
 
 const PREFIX = 'ANDROID_HOSTED_RUNTIME_';
 const fail = code => new Error(PREFIX + code);
@@ -53,12 +54,54 @@ export function assertRuntimeSecretsAbsent(text, secrets) {
   }
   return true;
 }
+const scanFacts = new WeakMap();
+/** Fixed facts only; readers and secrets remain private to the trusted parent. */
+export async function scanHostedRuntimeSecrets({ captured, overflow, readProofOutput, readPrivateRuntime }, { unlock, canary }) {
+  let scope = 'captured';
+  try {
+    if (overflow) throw fail('OUTPUT_LIMIT');
+    const variants = [];
+    for (const [secret, value] of [['unlock',unlock],['canary',canary]]) {
+      if (typeof value !== 'string' || value.length < 24) throw fail('LEAK_DETECTED');
+      const bytes = Buffer.from(value), seen = new Set();
+      for (const [encoding, encoded] of [['raw',value],['uri',encodeURIComponent(value)],['base64',bytes.toString('base64')],['base64url',bytes.toString('base64url')]]) {
+        if (!seen.has(encoded)) { seen.add(encoded); variants.push({secret,encoding,encoded}); }
+      }
+    }
+    const retain = Math.max(...variants.map(row => row.encoded.length)) - 1;
+    let tail = '';
+    const inspect = text => {
+      if (typeof text !== 'string') throw fail('LEAK_DETECTED');
+      const recordMatch = (row, matchedScope) => {
+        const error = fail('LEAK_DETECTED');
+        scanFacts.set(error, validateHostedRuntimeScanFact({scope:matchedScope,kind:'match',code:'LEAK_DETECTED',secret:row.secret,encoding:row.encoding}));
+        throw error;
+      };
+      for (const row of variants) if (text.includes(row.encoded)) recordMatch(row, scope);
+      // Preserve matches spanning the old concatenation without building a
+      // second full aggregate: at most two encoded-secret lengths are copied.
+      const boundary = tail + text.slice(0, retain);
+      for (const row of variants) if (boundary.includes(row.encoded)) recordMatch(row, 'combined-boundary');
+      tail = text.length >= retain ? text.slice(-retain) : (tail + text).slice(-retain);
+    };
+    inspect(captured);
+    scope = 'proof-output'; inspect(await readProofOutput());
+    scope = 'private-runtime'; inspect(await readPrivateRuntime());
+    return true;
+  } catch (error) {
+    if (scanFacts.has(error)) throw error;
+    const observed = fixedCode(error), code = ['OUTPUT_LIMIT','STORAGE_UNCONFIRMED','OWNERSHIP_REFUSED','LEAK_DETECTED'].includes(observed) ? observed : 'FAILED';
+    const wrapped = fail(code);
+    scanFacts.set(wrapped, validateHostedRuntimeScanFact({scope,kind:'incomplete',code}));
+    throw wrapped;
+  }
+}
 
 /** Pure sequencing seam for unit tests; it grants no process or filesystem authority. */
 export async function exerciseHostedSecretService(ops, { signal, onStage = () => {} } = {}) {
   let stage = 'private-runtime', primary, proofExitCode = null, attempted = false, canaryRemoved = false;
   let privateBusStopped = false, keyringStopped = false, processGroupsAbsent = false, listenersAbsent = false;
-  let scanPassed = false, runtimeStorageRemoved = false;
+  let scanPassed = false, runtimeStorageRemoved = false, scanFact;
   const at = name => { stage = name; onStage(name); };
   try {
     checkAbort(signal);
@@ -86,7 +129,7 @@ export async function exerciseHostedSecretService(ops, { signal, onStage = () =>
     try { await ops.stopBus(); privateBusStopped = true; } catch { primary ??= { stage, code: 'PROCESS_UNCONFIRMED' }; }
     try { await ops.confirmGroupsAbsent(); processGroupsAbsent = true; } catch { primary ??= { stage, code: 'PROCESS_UNCONFIRMED' }; }
     try { await ops.confirmListenersAbsent(); listenersAbsent = true; } catch { primary ??= { stage, code: 'LISTENER_UNCONFIRMED' }; }
-    try { await ops.scan(); scanPassed = true; } catch { primary ??= { stage, code: 'LEAK_DETECTED' }; }
+    try { await ops.scan(); scanPassed = true; } catch (error) { scanFact = scanFacts.get(error); primary ??= { stage, code: 'LEAK_DETECTED' }; }
     if (signal?.aborted) primary ??= { stage, code: 'ABORTED' };
     if (!primary && !ops.uncertain() && privateBusStopped && keyringStopped && processGroupsAbsent &&
         listenersAbsent && scanPassed && canaryRemoved && proofExitCode === 0) {
@@ -100,7 +143,8 @@ export async function exerciseHostedSecretService(ops, { signal, onStage = () =>
     runtimeStorageRemoved, canaryRemoved, unlockSecretLeakScanPassed: scanPassed, proofExitCode,
   });
   const failure = Object.freeze({ schemaVersion: 1, purpose: 'fixed-hosted-runtime-failure', stage: primary?.stage ?? 'cleanup',
-    code: primary?.code ?? 'STORAGE_UNCONFIRMED', proofExitCode, recoveryRetained: !runtimeStorageRemoved });
+    code: primary?.code ?? 'STORAGE_UNCONFIRMED', proofExitCode, recoveryRetained: !runtimeStorageRemoved,
+    ...(scanFact ? {scanFact} : {}) });
   await ops.writeFailure(failure);
   throw fail(failure.code);
 }
@@ -150,6 +194,8 @@ async function walkOwned(root, uid, { text = false } = {}) {
   await walk(root);
   return { sockets, content };
 }
+/** Read-only collector; callers bind its root before use. Limits stay fixed. */
+export async function readHostedRuntimeScanText(root, uid) { return (await walkOwned(root, uid, { text: true })).content; }
 
 export async function runHostedAndroidRuntime({ root, proofOutput, signal, onStage = () => {} }) {
   checkAbort(signal);
@@ -338,11 +384,9 @@ export async function runHostedAndroidRuntime({ root, proofOutput, signal, onSta
       for (const file of new Set([socket, ...sockets])) await socketAbsent(file);
     },
     scan: async () => {
-      if (overflow) throw fail('OUTPUT_LIMIT');
-      let publicText = '';
-      if (!(await absent(proofOutput))) publicText = (await walkOwned(proofOutput, uid, { text: true })).content;
-      const privateText = (await walkOwned(privateRoot, uid, { text: true })).content;
-      assertRuntimeSecretsAbsent(captured + publicText + privateText, [unlock, canary]);
+      await scanHostedRuntimeSecrets({ captured, overflow,
+        readProofOutput: async () => await absent(proofOutput) ? '' : readHostedRuntimeScanText(proofOutput, uid),
+        readPrivateRuntime: () => readHostedRuntimeScanText(privateRoot, uid) }, {unlock,canary});
     },
     removeStorage: async () => {
       await assertOwned();
