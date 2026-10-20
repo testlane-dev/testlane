@@ -19,6 +19,7 @@ async function fixture() {
   const calls = [], secret = randomBytes(32).toString('base64url');
   let context = 'NATIVE_APP', keyboard = true, shown = true, failClick = false, oversized = false, malformed = false, missing = 0, clearGate;
   let dismissPending = false, persistKeyboard = false, dismissPolls = 0, keyboardReadHook;
+  let snapshotAfter = 0, gestureCount = 0, gestureHook;
   const server = createServer(async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null;
@@ -27,12 +28,12 @@ async function fixture() {
     if (request.url === '/session') value = { sessionId: 'owned-ios-session', capabilities: { private: secret } };
     else if (request.url.endsWith('/context')) value = context;
     else if (request.url.endsWith('/element')) {
-      if (missing-- > 0) { status = 404; value = { error: 'no such element', message: secret }; }
+      if (gestureCount < snapshotAfter || missing-- > 0) { status = 404; value = { error: 'no such element', message: secret }; }
       else value = { 'element-6066-11e4-a52e-4f735466cecf': body?.value === 'dismiss-keyboard' ? 'owned-keyboard-dismiss' : 'owned-element' };
     } else if (request.url.endsWith('/displayed')) value = shown;
     else if (request.url.endsWith('/window/rect')) value = { x: 0, y: 0, width: 400, height: 800 };
     else if (request.url.endsWith('/rect')) value = { x: 10, y: 1000, width: 200, height: 40 };
-    else if (request.url.endsWith('/actions')) shown = true;
+    else if (request.url.endsWith('/actions')) { shown = true; gestureCount++; gestureHook?.(); }
     else if (request.url.endsWith('/attribute/value')) value = secret;
     else if (request.url.endsWith('/text')) value = 'accessibility-identifier';
     else if (request.url.endsWith('/is_keyboard_shown')) {
@@ -54,6 +55,7 @@ async function fixture() {
     setContext(value) { context = value; }, offscreen() { shown = false; }, failClick() { failClick = true; }, oversized() { oversized = true; }, missing(value) { missing = value; },
     malformed() { malformed = true; },
     keepKeyboardShown() { persistKeyboard = true; }, onKeyboardRead(callback) { keyboardReadHook = callback; },
+    absentUntilSwipes(count) { snapshotAfter = count; }, onGesture(callback) { gestureHook = callback; },
     hangClear() { clearGate = { entered: Promise.withResolvers(), closed: Promise.withResolvers() }; return { entered: clearGate.entered.promise, closed: clearGate.closed.promise }; },
     async close() { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } };
 }
@@ -82,6 +84,72 @@ test('iOS driver uses exact owned Simulator caps, value observations and bounded
     assert.equal(appium.calls.filter(call => call.path.endsWith('/hide_keyboard')).length, 1);
     assert.equal(appium.calls.filter(call => call.method === 'DELETE').length, 1); assert.ok(checks >= appium.calls.length);
     assert.equal(appium.calls.some(call => /screenshot|source|logcat|execute|simctl|shell/.test(call.path)), false);
+  } finally { await appium.close(); }
+});
+
+test('a target absent from the initial accessibility snapshot can be found by one bounded native swipe', async () => {
+  const appium = await fixture();
+  try {
+    const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), assertOwned: () => true });
+    appium.absentUntilSwipes(1); await driver.click('anonymous-check');
+    assert.equal(appium.calls.filter(call => call.path.endsWith('/actions')).length, 1);
+    assert.equal(appium.calls.filter(call => call.path.endsWith('/element')).length, 2);
+    assert.equal(appium.calls.filter(call => call.path.endsWith('/click')).length, 1);
+    assert.equal(appium.calls.some(call => /screenshot|source|execute|shell|logcat/.test(call.path)), false);
+    await driver.close();
+  } finally { await appium.close(); }
+});
+
+test('snapshot-absent search changes direction and is limited to six swipes without replaying the requested action', async () => {
+  for (const count of [3, Infinity]) {
+    const appium = await fixture();
+    try {
+      const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), assertOwned: () => true });
+      appium.absentUntilSwipes(count);
+      if (count === Infinity) await assert.rejects(driver.click('selected-id'), { code: 'NATIVE_DRIVER_ELEMENT_TIMEOUT' });
+      else await driver.click('selected-id');
+      const gestures = appium.calls.filter(call => call.path.endsWith('/actions'));
+      assert.equal(gestures.length, count === Infinity ? 6 : count);
+      assert.deepEqual(gestures.slice(0, 3).map(call => call.body.actions[0].actions[0].y), [600, 200, 200]);
+      assert.equal(appium.calls.filter(call => call.path.endsWith('/window/rect')).length, 1);
+      assert.equal(appium.calls.filter(call => call.path.endsWith('/click')).length, count === Infinity ? 0 : 1);
+      await driver.close();
+    } finally { await appium.close(); }
+  }
+});
+
+test('visibility lookup and gestures share one absolute ten-second window while requests remain at most five seconds', async t => {
+  let now = 0, searching = false; const calls = [];
+  t.mock.method(performance, 'now', () => now);
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const route = new URL(url).pathname; calls.push(route);
+    if (searching && route.endsWith('/context')) now += now === 0 ? 1000 : 2000;
+    if (searching && route.endsWith('/element')) { now += 3000; return new Response(JSON.stringify({ value: { error: 'no such element' } }), { status: 404 }); }
+    if (searching && route.endsWith('/window/rect')) now += 3000;
+    if (searching && route.endsWith('/actions')) now += 1001;
+    const value = route === '/session' ? { sessionId: 'owned-ios-session' } : route.endsWith('/context') ? 'NATIVE_APP' :
+      route.endsWith('/window/rect') ? { x: 0, y: 0, width: 400, height: 800 } : null;
+    return new Response(JSON.stringify({ value }));
+  });
+  const driver = await createNativeDriver({ deviceBinding: binding(), url: 'http://127.0.0.1:4723', capabilities: caps(), assertOwned: () => true });
+  searching = true;
+  await assert.rejects(driver.click('anonymous-check'), { code: 'NATIVE_DRIVER_ELEMENT_TIMEOUT' });
+  assert.equal(calls.filter(route => route.endsWith('/actions')).length, 1);
+  assert.equal(calls.filter(route => route.endsWith('/element')).length, 1, 'an expired visibility window cannot start another lookup');
+  assert.equal(calls.some(route => route.endsWith('/click')), false);
+  searching = false; await driver.close();
+});
+
+test('phase cancellation during a visibility swipe prevents another lookup and the requested action', async () => {
+  const appium = await fixture(), run = new AbortController(), phase = new AbortController();
+  try {
+    const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), signal: run.signal, assertOwned: () => true });
+    appium.absentUntilSwipes(Infinity); appium.onGesture(() => phase.abort());
+    await assert.rejects(driver.withSignal(phase.signal).click('anonymous-check'), { code: 'NATIVE_DRIVER_CANCELLED' });
+    assert.equal(appium.calls.filter(call => call.path.endsWith('/actions')).length, 1);
+    assert.equal(appium.calls.filter(call => call.path.endsWith('/element')).length, 1);
+    assert.equal(appium.calls.some(call => call.path.endsWith('/click')), false);
+    assert.equal(run.signal.aborted, false); await driver.close();
   } finally { await appium.close(); }
 });
 

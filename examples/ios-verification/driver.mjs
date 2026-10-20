@@ -143,27 +143,52 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT');
   }
   async function visible(id, activeSignal = signal) {
-    let element = await find(id, activeSignal);
-    const deadline = Date.now() + 10_000;
-    for (let swipe = 0; swipe <= 6 && Date.now() < deadline; swipe++) {
-      const shown = (await request('GET', route('/element/' + encodeURIComponent(element) + '/displayed'), undefined, activeSignal)).value;
-      if (shown === true) return element;
-      if (shown !== false) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
-      if (swipe === 6) break;
-      await nativeContext(activeSignal);
-      const frame = (await request('GET', route('/window/rect'), undefined, activeSignal)).value;
-      const rect = (await request('GET', route('/element/' + encodeURIComponent(element) + '/rect'), undefined, activeSignal)).value;
-      if (![frame, rect].every(value => value && ['x', 'y', 'width', 'height'].every(key => Number.isFinite(value[key]))) ||
-        frame.width < 20 || frame.height < 40 || frame.width > 5000 || frame.height > 5000) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
-      const x = Math.round(frame.x + frame.width / 2), top = Math.round(frame.y + frame.height * 0.25), bottom = Math.round(frame.y + frame.height * 0.75);
-      const upward = rect.y >= frame.y + frame.height / 2;
-      await request('POST', route('/actions'), { actions: [{ type: 'pointer', id: 'owned-native-scroll', parameters: { pointerType: 'touch' }, actions: [
-        { type: 'pointerMove', duration: 0, x, y: upward ? bottom : top }, { type: 'pointerDown', button: 0 },
-        { type: 'pause', duration: 80 }, { type: 'pointerMove', duration: 200, x, y: upward ? top : bottom }, { type: 'pointerUp', button: 0 },
-      ] }] }, activeSignal);
-      element = await find(id, activeSignal);
+    if (closed || !identifier(id)) throw fail('NATIVE_DRIVER_ELEMENT_INVALID');
+    const deadline = performance.now() + 10_000;
+    const remaining = () => {
+      const value = deadline - performance.now();
+      if (value <= 0) throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT');
+      return Math.min(5000, value);
+    };
+    const bounded = (method, suffix, body) => request(method, route(suffix), body, activeSignal, remaining(), deadline);
+    let frame;
+    // A missing snapshot target cannot be made visible by repeatedly finding it.
+    // Search both directions within the same ten-second/six-swipe allowance.
+    // This fixed finite span can still fail; it is not an exhaustive UI search.
+    const missingDirections = [true, false, false, true, true, true];
+    try {
+      await nativeContext(activeSignal, remaining(), deadline);
+      for (let swipe = 0; swipe <= 6; swipe++) {
+        const found = await bounded('POST', '/element', { using: 'accessibility id', value: id });
+        let rect;
+        if (!found.missing) {
+          const element = elementId(found);
+          const shown = (await bounded('GET', '/element/' + encodeURIComponent(element) + '/displayed')).value;
+          if (shown === true) { remaining(); return element; }
+          if (shown !== false) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
+          rect = (await bounded('GET', '/element/' + encodeURIComponent(element) + '/rect')).value;
+          if (!rect || !['x', 'y', 'width', 'height'].every(key => Number.isFinite(rect[key]))) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
+        }
+        if (swipe === 6) break;
+        if (!frame) {
+          frame = (await bounded('GET', '/window/rect')).value;
+          if (!frame || !['x', 'y', 'width', 'height'].every(key => Number.isFinite(frame[key])) ||
+            frame.width < 20 || frame.height < 40 || frame.width > 5000 || frame.height > 5000) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
+        }
+        await nativeContext(activeSignal, remaining(), deadline);
+        const upward = rect ? rect.y >= frame.y + frame.height / 2 : missingDirections[swipe];
+        const x = Math.round(frame.x + frame.width / 2), top = Math.round(frame.y + frame.height * 0.25), bottom = Math.round(frame.y + frame.height * 0.75);
+        await bounded('POST', '/actions', { actions: [{ type: 'pointer', id: 'owned-native-scroll', parameters: { pointerType: 'touch' }, actions: [
+          { type: 'pointerMove', duration: 0, x, y: upward ? bottom : top }, { type: 'pointerDown', button: 0 },
+          { type: 'pause', duration: 80 }, { type: 'pointerMove', duration: 200, x, y: upward ? top : bottom }, { type: 'pointerUp', button: 0 },
+        ] }] });
+      }
+      throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT');
+    } catch (error) {
+      if (activeSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
+      if (performance.now() >= deadline) throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT');
+      throw error;
     }
-    throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT');
   }
   const actions = {
     async waitFor(id, activeSignal = signal) { try { await find(id, activeSignal); } catch (error) { if (['NATIVE_DRIVER_TIMEOUT', 'NATIVE_DRIVER_ELEMENT_TIMEOUT'].includes(error.code)) throw fail('NATIVE_DRIVER_READINESS_TIMEOUT'); throw error; } },
