@@ -140,7 +140,7 @@ test('actual inline workflow never reads proof diagnostics for an earlier failed
 test('optional scan facts are exact data-only match or incomplete variants',()=>{
   const secret=randomBytes(32).toString('base64')+' /+?',match={scope:'captured',kind:'match',code:'LEAK_DETECTED',secret:'canary',encoding:'base64url'},
     incomplete={scope:'private-runtime',kind:'incomplete',code:'OUTPUT_LIMIT'};
-  for(const scanFact of [match,incomplete]){
+  for(const scanFact of [match,incomplete,{...incomplete,code:'SCAN_TIMEOUT'},{...incomplete,code:'ABORTED'}]){
     assert.deepEqual(validateHostedRuntimeScanFact(scanFact),scanFact);
     assert.deepEqual(validateHostedAndroidRuntimeFailure({...valid(),scanFact}),{...valid(),scanFact});
     assert.equal(Object.isFrozen(validateHostedAndroidRuntimeFailure({...valid(),scanFact}).scanFact),true);
@@ -160,7 +160,7 @@ test('actual inline workflow preserves validated scan facts and refuses malforme
     file=path.join(f.output,'linux-runtime-failure.json'),match={scope:'proof-output',kind:'match',code:'LEAK_DETECTED',secret:'unlock',encoding:'uri'},
     incomplete={scope:'private-runtime',kind:'incomplete',code:'OUTPUT_LIMIT'};
   await writeFile(path.join(f.output,'public-failure.json'),JSON.stringify(native));
-  for(const scanFact of [match,incomplete]){
+  for(const scanFact of [match,incomplete,{...incomplete,code:'SCAN_TIMEOUT'},{...incomplete,code:'ABORTED'}]){
     await writeFile(file,JSON.stringify({...valid(),scanFact}));const result=await project(f);
     assert.deepEqual(result.runtimeDiagnostic,{...valid(),scanFact});assert.deepEqual(result.nativeDiagnostic,native);noLeaks(JSON.stringify(result),secret);
   }

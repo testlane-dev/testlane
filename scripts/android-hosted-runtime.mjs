@@ -2,10 +2,11 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { constants, realpathSync } from 'node:fs';
-import { access, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, open, opendir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { StringDecoder } from 'node:string_decoder';
 import { requireHostedAndroid, hostedAndroidEnvironment } from './android-hosted-setup.mjs';
 import { retainDetachedChild, stopRetainedGroup, confirmRetainedGroupAbsent } from '../examples/android-verification/process-group.mjs';
 import { validateHostedRuntimeScanFact } from './android-hosted-failure.mjs';
@@ -17,7 +18,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const stages = new Set(['host-validation', 'private-runtime', 'bus-start', 'keyring-start', 'keyring-canary', 'proof', 'cleanup']);
 const codes = new Set(['HOST_REFUSED', 'PATH_REFUSED', 'OWNERSHIP_REFUSED', 'PREREQUISITE_REFUSED', 'ABORTED',
   'START_FAILED', 'START_TIMEOUT', 'COMMAND_FAILED', 'COMMAND_TIMEOUT', 'OUTPUT_LIMIT', 'PROCESS_UNCONFIRMED',
-  'CANARY_FAILED', 'PROOF_FAILED', 'PROOF_RECEIPT_REFUSED', 'LISTENER_UNCONFIRMED', 'STORAGE_UNCONFIRMED', 'LEAK_DETECTED', 'FAILED']);
+  'CANARY_FAILED', 'PROOF_FAILED', 'PROOF_RECEIPT_REFUSED', 'LISTENER_UNCONFIRMED', 'STORAGE_UNCONFIRMED', 'LEAK_DETECTED', 'SCAN_TIMEOUT', 'FAILED']);
 function fixedCode(error) {
   const code = String(error?.message ?? '').slice(PREFIX.length);
   return String(error?.message ?? '').startsWith(PREFIX) && codes.has(code) ? code : 'FAILED';
@@ -55,11 +56,20 @@ export function assertRuntimeSecretsAbsent(text, secrets) {
   return true;
 }
 const scanFacts = new WeakMap();
+export const HOSTED_RUNTIME_SCAN_LIMITS = Object.freeze({ chunkBytes: 64 * 1024, totalBytes: 512 * 1024 * 1024, entriesPerTree: 10000, milliseconds: 30000 });
 /** Fixed facts only; readers and secrets remain private to the trusted parent. */
-export async function scanHostedRuntimeSecrets({ captured, overflow, readProofOutput, readPrivateRuntime }, { unlock, canary }) {
+export async function scanHostedRuntimeSecrets({ captured, overflow, readProofOutput, readPrivateRuntime, signal, now = () => performance.now() }, { unlock, canary }) {
   let scope = 'captured';
   try {
     if (overflow) throw fail('OUTPUT_LIMIT');
+    const deadline = now() + HOSTED_RUNTIME_SCAN_LIMITS.milliseconds;
+    let consumedBytes = 0;
+    const control = Object.freeze({ buffer: Buffer.alloc(HOSTED_RUNTIME_SCAN_LIMITS.chunkBytes),
+      checkpoint() { checkAbort(signal); if (now() >= deadline) throw fail('SCAN_TIMEOUT'); },
+      ensureBytes(bytes) { if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > HOSTED_RUNTIME_SCAN_LIMITS.totalBytes - consumedBytes) throw fail('OUTPUT_LIMIT'); },
+      takeBytes(bytes) { this.ensureBytes(bytes); consumedBytes += bytes; },
+    });
+    control.checkpoint();
     const variants = [];
     for (const [secret, value] of [['unlock',unlock],['canary',canary]]) {
       if (typeof value !== 'string' || value.length < 24) throw fail('LEAK_DETECTED');
@@ -69,7 +79,7 @@ export async function scanHostedRuntimeSecrets({ captured, overflow, readProofOu
       }
     }
     const retain = Math.max(...variants.map(row => row.encoded.length)) - 1;
-    let tail = '';
+    let tail = '', tailScopes = [];
     const inspect = text => {
       if (typeof text !== 'string') throw fail('LEAK_DETECTED');
       const recordMatch = (row, matchedScope) => {
@@ -81,16 +91,58 @@ export async function scanHostedRuntimeSecrets({ captured, overflow, readProofOu
       // Preserve matches spanning the old concatenation without building a
       // second full aggregate: at most two encoded-secret lengths are copied.
       const boundary = tail + text.slice(0, retain);
-      for (const row of variants) if (boundary.includes(row.encoded)) recordMatch(row, 'combined-boundary');
+      for (const row of variants) {
+        const start = boundary.indexOf(row.encoded); if (start < 0) continue;
+        const end = start + row.encoded.length, sources = new Set(); let offset = 0;
+        for (const part of [...tailScopes,{scope,length:Math.min(text.length,retain)}]) {
+          if (offset < end && offset + part.length > start) sources.add(part.scope);
+          offset += part.length;
+        }
+        recordMatch(row, sources.size > 1 ? 'combined-boundary' : [...sources][0]);
+      }
       tail = text.length >= retain ? text.slice(-retain) : (tail + text).slice(-retain);
+      if (text.length) {
+        if (tailScopes.at(-1)?.scope === scope) tailScopes.at(-1).length += text.length;
+        else tailScopes.push({scope,length:text.length});
+      }
+      let trim = tailScopes.reduce((total,part) => total + part.length, 0) - tail.length;
+      while (trim > 0) { const removed = Math.min(trim,tailScopes[0].length); tailScopes[0].length -= removed; trim -= removed; if (!tailScopes[0].length) tailScopes.shift(); }
     };
-    inspect(captured);
-    scope = 'proof-output'; inspect(await readProofOutput());
-    scope = 'private-runtime'; inspect(await readPrivateRuntime());
+    const inspectText = (text, countBytes = true) => {
+      if (typeof text !== 'string') throw fail('LEAK_DETECTED');
+      if (countBytes) control.takeBytes(Buffer.byteLength(text));
+      for (let offset = 0; offset < text.length; offset += HOSTED_RUNTIME_SCAN_LIMITS.chunkBytes) {
+        control.checkpoint(); inspect(text.slice(offset, offset + HOSTED_RUNTIME_SCAN_LIMITS.chunkBytes));
+      }
+    };
+    if (typeof captured !== 'string') throw fail('LEAK_DETECTED');
+    if (Buffer.byteLength(captured) > MAX_CAPTURE) throw fail('OUTPUT_LIMIT');
+    inspectText(captured);
+    for (const [name, reader] of [['proof-output',readProofOutput],['private-runtime',readPrivateRuntime]]) {
+      scope = name; control.checkpoint(); const input = await reader(control); control.checkpoint();
+      if (typeof input === 'string') { inspectText(input); continue; }
+      if (!input || typeof input[Symbol.asyncIterator] !== 'function') throw fail('STORAGE_UNCONFIRMED');
+      const iterator = input[Symbol.asyncIterator](); let primary;
+      try {
+        for (;;) {
+          control.checkpoint(); const result = await iterator.next(); control.checkpoint();
+          if (result.done) break;
+          if (typeof result.value !== 'string' || result.value.length > HOSTED_RUNTIME_SCAN_LIMITS.chunkBytes + 3) throw fail('OUTPUT_LIMIT');
+          inspectText(result.value, false);
+        }
+      } catch (error) { primary = error; throw error; }
+      finally {
+        let closeError; try { control.checkpoint(); } catch (error) { closeError = error; }
+        try { await iterator.return?.(); } catch (error) { closeError ??= error; }
+        try { control.checkpoint(); } catch (error) { closeError ??= error; }
+        if (!primary && closeError) throw closeError;
+      }
+    }
+    control.checkpoint();
     return true;
   } catch (error) {
     if (scanFacts.has(error)) throw error;
-    const observed = fixedCode(error), code = ['OUTPUT_LIMIT','STORAGE_UNCONFIRMED','OWNERSHIP_REFUSED','LEAK_DETECTED'].includes(observed) ? observed : 'FAILED';
+    const observed = fixedCode(error), code = ['OUTPUT_LIMIT','STORAGE_UNCONFIRMED','OWNERSHIP_REFUSED','LEAK_DETECTED','SCAN_TIMEOUT','ABORTED'].includes(observed) ? observed : 'FAILED';
     const wrapped = fail(code);
     scanFacts.set(wrapped, validateHostedRuntimeScanFact({scope,kind:'incomplete',code}));
     throw wrapped;
@@ -172,8 +224,8 @@ async function socketAbsent(file) {
     client.once('error', error => done(['ENOENT', 'ECONNREFUSED'].includes(error.code) ? undefined : fail('LISTENER_UNCONFIRMED')));
   });
 }
-async function walkOwned(root, uid, { text = false } = {}) {
-  const sockets = []; let content = '', total = 0, count = 0;
+async function walkOwned(root, uid) {
+  const sockets = []; let count = 0;
   async function walk(file) {
     if (++count > 10000) throw fail('STORAGE_UNCONFIRMED');
     const info = await lstat(file);
@@ -183,19 +235,73 @@ async function walkOwned(root, uid, { text = false } = {}) {
       // may create ordinary 0755 descendants; they remain inside that boundary.
       for (const name of await readdir(file)) await walk(path.join(file, name));
     } else if (info.isSocket()) sockets.push(file);
-    else if (info.isFile()) {
-      if (text) {
-        total += info.size;
-        if (total > 64 * 1024 * 1024) throw fail('OUTPUT_LIMIT');
-        content += (await readFile(file)).toString('utf8') + '\n';
-      }
-    } else throw fail('STORAGE_UNCONFIRMED');
+    else if (!info.isFile()) throw fail('STORAGE_UNCONFIRMED');
   }
   await walk(root);
-  return { sockets, content };
+  return { sockets };
 }
-/** Read-only collector; callers bind its root before use. Limits stay fixed. */
-export async function readHostedRuntimeScanText(root, uid) { return (await walkOwned(root, uid, { text: true })).content; }
+/** Complete bounded inventory; the caller binds roots and supplies one shared byte/deadline control. */
+export async function* streamHostedRuntimeScanTree(root, uid, control) {
+  let entries = 1;
+  const checked = async action => { control.checkpoint(); const result = await action(); control.checkpoint(); return result; };
+  const same = (left, right) => ['dev','ino','uid','size','mtimeNs','ctimeNs'].every(key => left[key] === right[key]);
+  const canonical = async file => { if (await checked(() => realpath(file)) !== file) throw fail('STORAGE_UNCONFIRMED'); };
+  async function closeOwned(handle, primary) {
+    let failure; try { control.checkpoint(); } catch (error) { failure = error; }
+    try { await handle.close(); } catch (error) { failure ??= error; }
+    try { control.checkpoint(); } catch (error) { failure ??= error; }
+    if (!primary && failure) throw failure;
+  }
+  async function* visit(file) {
+    await canonical(file);
+    const before = await checked(() => lstat(file, {bigint:true}));
+    if (before.isSymbolicLink() || before.uid !== BigInt(uid)) throw fail('STORAGE_UNCONFIRMED');
+    if (before.isDirectory()) {
+      control.checkpoint(); const directory = await opendir(file, {bufferSize:32,encoding:'buffer'}); let primary;
+      try {
+        control.checkpoint();
+        const names = [];
+        for (;;) {
+          const item = await checked(() => directory.read()); if (!item) break;
+          if (++entries > HOSTED_RUNTIME_SCAN_LIMITS.entriesPerTree) throw fail('OUTPUT_LIMIT');
+          if (!Buffer.isBuffer(item.name)) throw fail('STORAGE_UNCONFIRMED');
+          const name = item.name.toString('utf8');
+          if (!Buffer.from(name).equals(item.name) || path.basename(name) !== name || name === '.' || name === '..') throw fail('STORAGE_UNCONFIRMED');
+          names.push({name,bytes:item.name});
+        }
+        names.sort((left,right) => Buffer.compare(left.bytes,right.bytes));
+        for (const {name} of names) yield* visit(path.join(file, name));
+        await canonical(file);
+        if (!same(before, await checked(() => lstat(file, {bigint:true})))) throw fail('STORAGE_UNCONFIRMED');
+      } catch (error) { primary = error; throw error; }
+      finally { await closeOwned(directory, primary); }
+    } else if (before.isFile()) {
+      if (before.size > BigInt(Number.MAX_SAFE_INTEGER)) throw fail('OUTPUT_LIMIT');
+      control.ensureBytes(Number(before.size));
+      control.checkpoint(); const handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)); let primary;
+      try {
+        control.checkpoint();
+        const opened = await checked(() => handle.stat({bigint:true}));
+        if (!opened.isFile() || !same(before, opened)) throw fail('STORAGE_UNCONFIRMED');
+        const decoder = new StringDecoder('utf8'); let offset = 0;
+        for (;;) {
+          const result = await checked(() => handle.read(control.buffer, 0, control.buffer.length, offset));
+          if (!Number.isSafeInteger(result.bytesRead) || result.bytesRead < 0 || result.bytesRead > control.buffer.length) throw fail('STORAGE_UNCONFIRMED');
+          if (!result.bytesRead) break;
+          control.takeBytes(result.bytesRead); offset += result.bytesRead;
+          if (BigInt(offset) > opened.size) throw fail('STORAGE_UNCONFIRMED');
+          yield decoder.write(control.buffer.subarray(0, result.bytesRead));
+        }
+        await canonical(file);
+        const after = await checked(() => lstat(file, {bigint:true})), end = await checked(() => handle.stat({bigint:true}));
+        if (!after.isFile() || after.isSymbolicLink() || !same(opened, after) || !same(opened, end) || BigInt(offset) !== opened.size) throw fail('STORAGE_UNCONFIRMED');
+        yield decoder.end() + '\n';
+      } catch (error) { primary = error; throw error; }
+      finally { await closeOwned(handle, primary); }
+    } else if (!before.isSocket()) throw fail('STORAGE_UNCONFIRMED');
+  }
+  yield* visit(root);
+}
 
 export async function runHostedAndroidRuntime({ root, proofOutput, signal, onStage = () => {} }) {
   checkAbort(signal);
@@ -384,9 +490,9 @@ export async function runHostedAndroidRuntime({ root, proofOutput, signal, onSta
       for (const file of new Set([socket, ...sockets])) await socketAbsent(file);
     },
     scan: async () => {
-      await scanHostedRuntimeSecrets({ captured, overflow,
-        readProofOutput: async () => await absent(proofOutput) ? '' : readHostedRuntimeScanText(proofOutput, uid),
-        readPrivateRuntime: () => readHostedRuntimeScanText(privateRoot, uid) }, {unlock,canary});
+      await scanHostedRuntimeSecrets({ captured, overflow, signal,
+        readProofOutput: async control => await absent(proofOutput) ? '' : streamHostedRuntimeScanTree(proofOutput, uid, control),
+        readPrivateRuntime: control => streamHostedRuntimeScanTree(privateRoot, uid, control) }, {unlock,canary});
     },
     removeStorage: async () => {
       await assertOwned();

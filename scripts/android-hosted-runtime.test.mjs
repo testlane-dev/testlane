@@ -2,11 +2,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomBytes } from 'node:crypto';
-import { lstat, mkdtemp, open, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { lstat, mkdtemp, open, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
+import { pathToFileURL } from 'node:url';
 import { exerciseHostedSecretService, assertRuntimeSecretsAbsent, retainedHostedServiceLive, runHostedAndroidRuntime,
-  verifyHostedServiceOwners, scanHostedRuntimeSecrets, readHostedRuntimeScanText } from './android-hosted-runtime.mjs';
+  verifyHostedServiceOwners, scanHostedRuntimeSecrets, streamHostedRuntimeScanTree, HOSTED_RUNTIME_SCAN_LIMITS } from './android-hosted-runtime.mjs';
 
 function fixture(overrides = {}) {
   const calls = [], failures = [];
@@ -185,7 +188,7 @@ function noServiceSecrets(value, secrets) {
   for(const secret of Object.values(secrets))for(const encoded of Object.values(encodedSecrets(secret)))assert.equal(text.includes(encoded),false);
 }
 function scanningFixture(sources, secrets, overrides={}) {
-  return fixture({ ...overrides, scan: () => scanHostedRuntimeSecrets({captured:sources.captured??'',overflow:sources.overflow??false,
+  return fixture({ ...overrides, scan: () => scanHostedRuntimeSecrets({captured:sources.captured??'',overflow:sources.overflow??false,signal:sources.signal,now:sources.now,
     readProofOutput:sources.readProofOutput??(async()=>sources['proof-output']??''),
     readPrivateRuntime:sources.readPrivateRuntime??(async()=>sources['private-runtime']??'')},secrets) });
 }
@@ -245,15 +248,126 @@ test('complete sequential scans still gate success and storage removal',async()=
   assert.equal(f.calls.includes('removeStorage'),true);assert.deepEqual(f.failures,[]);
 });
 
-test('the real read-only collector retains the 64 MiB bound and symlink refusal',async t=>{
+async function streamFixture(t) {
   const parent=await realpath(os.tmpdir()),root=await mkdtemp(path.join(parent,'tld-scan-tree-'));
   t.after(async()=>{assert.equal(path.dirname(root),parent);assert.match(path.basename(root),/^tld-scan-tree-[A-Za-z0-9]+$/);assert.equal(await realpath(root),root);assert.equal((await lstat(root)).isSymbolicLink(),false);await rm(root,{recursive:true});});
-  const uid=(await lstat(root)).uid,secrets=serviceSecrets(),file=path.join(root,'ordinary');
-  await writeFile(file,'synthetic');assert.equal(await readHostedRuntimeScanText(root,uid),'synthetic\n');
-  const handle=await open(file,'r+');try{await handle.truncate(64*1024*1024+1);}finally{await handle.close();}
-  const f=scanningFixture({readPrivateRuntime:()=>readHostedRuntimeScanText(root,uid)},secrets);
+  return {root,uid:(await lstat(root)).uid,file:path.join(root,'ordinary')};
+}
+const treeReader = ({root,uid}) => control => streamHostedRuntimeScanTree(root,uid,control);
+
+test('a real file above the old 64 MiB limit completes; a late-chunk secret still prevents success',async t=>{
+  const owned=await streamFixture(t),secrets=serviceSecrets(),size=65*1024*1024,handle=await open(owned.file,'wx');
+  try{await handle.truncate(size);}finally{await handle.close();}
+  const clean=scanningFixture({readPrivateRuntime:treeReader(owned)},secrets);
+  assert.equal((await exerciseHostedSecretService(clean.ops)).unlockSecretLeakScanPassed,true);assert.equal(clean.calls.includes('removeStorage'),true);
+  const writer=await open(owned.file,'r+');try{await writer.write(Buffer.from(secrets.canary),0,Buffer.byteLength(secrets.canary),size-Buffer.byteLength(secrets.canary));}finally{await writer.close();}
+  const late=scanningFixture({readPrivateRuntime:treeReader(owned)},secrets);await rejected(exerciseHostedSecretService(late.ops),'LEAK_DETECTED');
+  assert.deepEqual(late.failures[0].scanFact,{scope:'private-runtime',kind:'match',code:'LEAK_DETECTED',secret:'canary',encoding:'raw'});assert.equal(late.calls.includes('removeStorage'),false);
+});
+
+test('a >64 MiB clean inventory scans in a controlled Node child with a 32 MiB JS heap limit',async t=>{
+  const owned=await streamFixture(t),handle=await open(owned.file,'wx');try{await handle.truncate(65*1024*1024);}finally{await handle.close();}
+  const source=`import {randomBytes} from 'node:crypto';import {lstat} from 'node:fs/promises';
+    import {scanHostedRuntimeSecrets,streamHostedRuntimeScanTree} from ${JSON.stringify(new URL('./android-hosted-runtime.mjs',import.meta.url).href)};
+    const root=process.argv[1],uid=(await lstat(root)).uid;
+    await scanHostedRuntimeSecrets({captured:'',readProofOutput:async()=>'',readPrivateRuntime:control=>streamHostedRuntimeScanTree(root,uid,control)},
+      {unlock:randomBytes(48).toString('base64url'),canary:randomBytes(48).toString('base64url')});process.stdout.write('COMPLETE');`;
+  const result=await promisify(execFile)(process.execPath,['--max-old-space-size=32','--input-type=module','--eval',source,owned.root],
+    {env:process.platform==='win32'?{SystemRoot:process.env.SystemRoot}:{},windowsHide:true,timeout:30000,maxBuffer:4096});
+  assert.equal(result.stdout,'COMPLETE');assert.equal(result.stderr,'');
+});
+
+test('chunk boundaries, UTF-8 decoding, file newlines and scope boundaries retain original matches',async t=>{
+  const owned=await streamFixture(t),secrets=serviceSecrets();
+  for(const [encoding,value]of Object.entries(encodedSecrets(secrets.canary))){
+    await writeFile(owned.file,Buffer.concat([Buffer.alloc(65536-11,65),Buffer.from(value),Buffer.from('suffix')]));
+    const chunk=scanningFixture({readPrivateRuntime:treeReader(owned)},secrets);await rejected(exerciseHostedSecretService(chunk.ops),'LEAK_DETECTED');
+    assert.deepEqual(chunk.failures[0].scanFact,{scope:'private-runtime',kind:'match',code:'LEAK_DETECTED',secret:'canary',encoding});
+    await writeFile(owned.file,value.slice(13));const boundary=scanningFixture({captured:value.slice(0,13),readPrivateRuntime:treeReader(owned)},secrets);
+    await rejected(exerciseHostedSecretService(boundary.ops),'LEAK_DETECTED');assert.equal(boundary.failures[0].scanFact.scope,'combined-boundary');
+  }
+  await writeFile(owned.file,Buffer.concat([Buffer.alloc(65535,65),Buffer.from('😀'+secrets.canary)]));
+  const utf8=scanningFixture({readPrivateRuntime:treeReader(owned)},secrets);await rejected(exerciseHostedSecretService(utf8.ops),'LEAK_DETECTED');assert.equal(utf8.failures[0].scanFact.encoding,'raw');
+  await rm(owned.file);const first=secrets.canary.slice(0,21),second=secrets.canary.slice(21);
+  await writeFile(path.join(owned.root,'a'),first);await writeFile(path.join(owned.root,'b'),second);
+  const separated=scanningFixture({readPrivateRuntime:treeReader(owned)},secrets);assert.equal((await exerciseHostedSecretService(separated.ops)).unlockSecretLeakScanPassed,true);
+  const withNewline={...secrets,canary:first+'\n'+second};const joined=scanningFixture({readPrivateRuntime:treeReader(owned)},withNewline);
+  await rejected(exerciseHostedSecretService(joined.ops),'LEAK_DETECTED');assert.equal(joined.failures[0].scanFact.scope,'private-runtime');assert.equal(joined.failures[0].scanFact.encoding,'raw');
+});
+
+test('the new aggregate byte cap, UID and symlink guards fail closed',async t=>{
+  const owned=await streamFixture(t),secrets=serviceSecrets(),handle=await open(owned.file,'wx');
+  try{await handle.truncate(HOSTED_RUNTIME_SCAN_LIMITS.totalBytes+1);}finally{await handle.close();}
+  const f=scanningFixture({readPrivateRuntime:treeReader(owned)},secrets);
   await rejected(exerciseHostedSecretService(f.ops),'LEAK_DETECTED');
   assert.deepEqual(f.failures[0].scanFact,{scope:'private-runtime',kind:'incomplete',code:'OUTPUT_LIMIT'});assert.equal(f.calls.includes('removeStorage'),false);
-  await rm(file);await symlink(root,path.join(root,'link'),process.platform==='win32'?'junction':'dir');
-  await assert.rejects(readHostedRuntimeScanText(root,uid),{message:'ANDROID_HOSTED_RUNTIME_STORAGE_UNCONFIRMED'});
+  await rm(owned.file);await writeFile(owned.file,'synthetic');
+  const foreign=scanningFixture({readPrivateRuntime:treeReader({...owned,uid:owned.uid+1})},secrets);await rejected(exerciseHostedSecretService(foreign.ops),'LEAK_DETECTED');
+  assert.equal(foreign.failures[0].scanFact.code,'STORAGE_UNCONFIRMED');
+  await symlink(owned.root,path.join(owned.root,'link'),process.platform==='win32'?'junction':'dir');
+  const linked=scanningFixture({readPrivateRuntime:treeReader(owned)},secrets);await rejected(exerciseHostedSecretService(linked.ops),'LEAK_DETECTED');assert.equal(linked.failures[0].scanFact.code,'STORAGE_UNCONFIRMED');
+});
+
+test('the total-byte cap is shared by both complete trees',async t=>{
+  const proof=await streamFixture(t),privateRuntime=await streamFixture(t),secrets=serviceSecrets();
+  for(const owned of [proof,privateRuntime]){const handle=await open(owned.file,'wx');try{await handle.truncate(300*1024*1024);}finally{await handle.close();}}
+  const f=scanningFixture({readProofOutput:treeReader(proof),readPrivateRuntime:treeReader(privateRuntime)},secrets);
+  await rejected(exerciseHostedSecretService(f.ops),'LEAK_DETECTED');
+  assert.deepEqual(f.failures[0].scanFact,{scope:'private-runtime',kind:'incomplete',code:'OUTPUT_LIMIT'});assert.equal(f.calls.includes('removeStorage'),false);
+});
+
+test('same-size mutation is refused after the retained file read',async t=>{
+  const owned=await streamFixture(t),secrets=serviceSecrets();await writeFile(owned.file,'synthetic data');let changed=false;
+  const reader=control=>(async function*(){for await(const text of streamHostedRuntimeScanTree(owned.root,owned.uid,control)){
+    if(!changed){changed=true;await new Promise(resolve=>setTimeout(resolve,5));const writer=await open(owned.file,'r+');try{await writer.write(Buffer.from('X'),0,1,0);}finally{await writer.close();}}
+    yield text;}})();
+  const f=scanningFixture({readPrivateRuntime:reader},secrets);await rejected(exerciseHostedSecretService(f.ops),'LEAK_DETECTED');
+  assert.equal(changed,true);assert.deepEqual(f.failures[0].scanFact,{scope:'private-runtime',kind:'incomplete',code:'STORAGE_UNCONFIRMED'});assert.equal(f.calls.includes('removeStorage'),false);
+});
+
+test('cooperative timeout and cancellation settle awaited reads without a passing receipt',async()=>{
+  const secrets=serviceSecrets();let tick=0;
+  const timed=scanningFixture({now:()=>tick,readPrivateRuntime:async()=>{await new Promise(resolve=>setImmediate(resolve));tick=HOSTED_RUNTIME_SCAN_LIMITS.milliseconds;return '';}},secrets);
+  await rejected(exerciseHostedSecretService(timed.ops),'LEAK_DETECTED');assert.deepEqual(timed.failures[0].scanFact,{scope:'private-runtime',kind:'incomplete',code:'SCAN_TIMEOUT'});
+  const controller=new AbortController();let finish,settled=false;
+  const cancelled=scanningFixture({signal:controller.signal,readPrivateRuntime:()=>new Promise(resolve=>{finish=resolve;})},secrets);
+  const result=exerciseHostedSecretService(cancelled.ops).finally(()=>{settled=true;}),failure=rejected(result,'LEAK_DETECTED');
+  while(!finish)await new Promise(resolve=>setImmediate(resolve));controller.abort();await new Promise(resolve=>setImmediate(resolve));assert.equal(settled,false);
+  finish('');await failure;assert.deepEqual(cancelled.failures[0].scanFact,{scope:'private-runtime',kind:'incomplete',code:'ABORTED'});assert.equal(cancelled.calls.includes('removeStorage'),false);
+});
+
+test('FIFO, read, entry-limit and acquired-handle cancellation failures close controlled handles',async t=>{
+  const owned=await streamFixture(t);await writeFile(owned.file,'synthetic');
+  const helper=new URL('./android-hosted-runtime.mjs',import.meta.url).href,constantsFile=path.join(owned.root,'constants.mjs'),filesystemFile=path.join(owned.root,'filesystem.mjs'),loaderFile=path.join(owned.root,'loader.mjs'),marker=path.join(owned.root,'state.json');
+  await writeFile(constantsFile,"export {realpathSync} from 'node:fs';import {constants as original} from 'node:fs';export const constants={...original,O_NONBLOCK:2048,O_NOFOLLOW:131072};");
+  for(const mode of ['fifo','read-error','entry-cap','open-aborted','invalid-name']){
+    await writeFile(filesystemFile,`export {access,lstat,mkdir,readFile,readdir,realpath,rm,writeFile} from 'node:fs/promises';
+      import {open as originalOpen,opendir as originalDirectory,writeFile} from 'node:fs/promises';
+      export async function opendir(file,options){
+        if(!['entry-cap','invalid-name'].includes(${JSON.stringify(mode)})||file!==${JSON.stringify(owned.root)})return originalDirectory(file,options);
+        let entries=0;return {async read(){entries++;return {name:${JSON.stringify(mode)}==='invalid-name'?Buffer.from([255]):Buffer.from('entry'+entries)};},async close(){await writeFile(${JSON.stringify(marker)},JSON.stringify({entries,closed:true}));}};
+      }
+      export async function open(file,flags,...args){
+        if(file!==${JSON.stringify(owned.file)})return originalOpen(file,flags,...args);
+        if((flags&2048)===0){setInterval(()=>{},1000);return new Promise(()=>{});}
+        const marker=${JSON.stringify(marker)};await writeFile(marker,JSON.stringify({nonblocking:true,closed:false}));
+        if(${JSON.stringify(mode)}==='open-aborted'){globalThis.__testAbort();return {async close(){await writeFile(marker,JSON.stringify({nonblocking:true,closed:true}));}};}
+        if(${JSON.stringify(mode)}==='fifo')return {async stat(){return {isFile:()=>false};},async close(){await writeFile(marker,JSON.stringify({nonblocking:true,closed:true}));}};
+        const handle=await originalOpen(file,0,...args);return {stat:options=>handle.stat(options),async read(){throw Error('unreviewed fixture read');},
+          async close(){await handle.close();await writeFile(marker,JSON.stringify({nonblocking:true,closed:true}));}};
+      }`);
+    await writeFile(loaderFile,`export async function resolve(specifier,context,next){
+      if(context.parentURL===${JSON.stringify(helper)}&&specifier==='node:fs')return {url:${JSON.stringify(pathToFileURL(constantsFile).href)},shortCircuit:true};
+      if(context.parentURL===${JSON.stringify(helper)}&&specifier==='node:fs/promises')return {url:${JSON.stringify(pathToFileURL(filesystemFile).href)},shortCircuit:true};return next(specifier,context);}`);
+    const source=`import {randomBytes} from 'node:crypto';import {lstat} from 'node:fs/promises';
+      import {scanHostedRuntimeSecrets,streamHostedRuntimeScanTree} from ${JSON.stringify(helper)};
+      const root=process.argv[1],uid=(await lstat(root)).uid,controller=new AbortController();globalThis.__testAbort=()=>controller.abort();try{
+        await scanHostedRuntimeSecrets({captured:'',signal:controller.signal,readProofOutput:async()=>'',readPrivateRuntime:control=>streamHostedRuntimeScanTree(root,uid,control)},
+          {unlock:randomBytes(48).toString('base64url'),canary:randomBytes(48).toString('base64url')});throw Error('FIXTURE_REFUSAL_REQUIRED');
+      }catch(error){if(error.message!==${JSON.stringify('ANDROID_HOSTED_RUNTIME_'+({fifo:'STORAGE_UNCONFIRMED','read-error':'FAILED','entry-cap':'OUTPUT_LIMIT','open-aborted':'ABORTED','invalid-name':'STORAGE_UNCONFIRMED'}[mode]))})throw Error('FIXTURE_WRONG_FAILURE');process.stdout.write('REFUSED');}`;
+    const result=await promisify(execFile)(process.execPath,['--no-warnings','--experimental-loader',pathToFileURL(loaderFile).href,'--input-type=module','--eval',source,owned.root],
+      {env:process.platform==='win32'?{SystemRoot:process.env.SystemRoot}:{},windowsHide:true,timeout:15000,maxBuffer:4096});
+    assert.equal(result.stdout,'REFUSED');assert.equal(result.stderr,'');assert.deepEqual(JSON.parse(await readFile(marker,'utf8')),mode==='entry-cap'?{entries:10000,closed:true}:mode==='invalid-name'?{entries:1,closed:true}:{nonblocking:true,closed:true});
+    await rm(marker);
+  }
 });

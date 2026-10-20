@@ -7,12 +7,12 @@ import { types } from 'node:util';
 const STAGES = new Set(['host-validation', 'private-runtime', 'bus-start', 'keyring-start', 'keyring-canary', 'proof', 'cleanup']);
 const CODES = new Set(['HOST_REFUSED', 'PATH_REFUSED', 'OWNERSHIP_REFUSED', 'PREREQUISITE_REFUSED', 'ABORTED',
   'START_FAILED', 'START_TIMEOUT', 'COMMAND_FAILED', 'COMMAND_TIMEOUT', 'OUTPUT_LIMIT', 'PROCESS_UNCONFIRMED',
-  'CANARY_FAILED', 'PROOF_FAILED', 'PROOF_RECEIPT_REFUSED', 'LISTENER_UNCONFIRMED', 'STORAGE_UNCONFIRMED', 'LEAK_DETECTED', 'FAILED']);
+  'CANARY_FAILED', 'PROOF_FAILED', 'PROOF_RECEIPT_REFUSED', 'LISTENER_UNCONFIRMED', 'STORAGE_UNCONFIRMED', 'LEAK_DETECTED', 'SCAN_TIMEOUT', 'FAILED']);
 const KEYS = ['schemaVersion', 'purpose', 'stage', 'code', 'proofExitCode', 'recoveryRetained'];
 const MAX_BYTES = 8192;
 const invalid = () => new Error('ANDROID_HOSTED_RUNTIME_DIAGNOSTIC_INVALID');
 const SCOPES = new Set(['captured', 'proof-output', 'private-runtime', 'combined-boundary']);
-const INCOMPLETE_CODES = new Set(['OUTPUT_LIMIT', 'STORAGE_UNCONFIRMED', 'OWNERSHIP_REFUSED', 'LEAK_DETECTED', 'FAILED']);
+const INCOMPLETE_CODES = new Set(['OUTPUT_LIMIT', 'STORAGE_UNCONFIRMED', 'OWNERSHIP_REFUSED', 'LEAK_DETECTED', 'SCAN_TIMEOUT', 'ABORTED', 'FAILED']);
 
 function ownData(value, keys) {
   if (!value || typeof value !== 'object' || types.isProxy(value) || Array.isArray(value) || Reflect.ownKeys(value).length !== keys.length) throw invalid();

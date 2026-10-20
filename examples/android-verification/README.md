@@ -220,3 +220,26 @@ the feature assertions or cleanup checks.
 This proof does not cover iOS, physical devices, WebViews, push notifications,
 biometrics, camera permissions, offline sync, purchases, deep links or device fleets.
 It adds no dashboard, hosted service or native MCP tools.
+
+The hosted Linux wrapper scans captured diagnostics and every regular file in
+both the proof output and private runtime, including its npm cache, before
+removing private storage. Reads use 64 KiB chunks and carry encoded-secret
+suffixes across chunks, file newlines and scope boundaries. The resource policy
+allows a combined 512 MiB of raw file bytes and the captured text's UTF-8 bytes
+across both trees, with at most 10,000 entries in each tree. This replaces the
+earlier 64 MiB buffered-text limit. Generated file separators do not count as
+on-disk bytes; no cache or credential-bearing file is excluded or deleted first.
+Canonical paths, ownership and retained-file identity are checked; symlinks,
+ambiguous non-UTF-8 names, changing files and unsupported file types are refused.
+The existing Unix-socket inventory remains metadata-only and requires the
+separate listener-absence checks; sockets are never opened as scan input.
+
+A 30-second monotonic scan deadline and cancellation are checked before and after
+awaited operations. This is a cooperative bound on a trusted local filesystem,
+not OS preemption of a blocked filesystem call: outstanding reads and handle
+closure must settle before the scanner returns. Incomplete reads, identity
+changes, limits, cancellation, timeout or a secret match fail the outer proof and
+retain private runtime storage. Fixed scan facts distinguish an observed match
+from an incomplete inventory; neither a child exit of zero nor a partial scan
+can substitute for the complete acceptance gate. Service ownership, listener
+checks and native assertion budgets are unchanged.
