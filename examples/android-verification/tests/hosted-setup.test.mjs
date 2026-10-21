@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ANDROID_EXTRACT_PYTHON, ANDROID_HOSTED_ARCHIVES, ANDROID_HOSTED_BUILD_PACKAGES, hostedAndroidEnvironment,
@@ -83,8 +83,17 @@ function fixtureChild(executable, args, input) {
 async function python(script, input) {
   // Use the configured interpreter on macOS rather than a fixed system path.
   // This fixture choice does not alter the Linux production installer.
-  return fixtureChild(process.platform === 'win32' ? 'python' : process.platform === 'darwin' ? 'python3' : '/usr/bin/python3',
-    ['-I', '-c', script], input);
+  let executable = process.platform === 'win32' ? 'python' : process.platform === 'darwin' ? 'python3' : '/usr/bin/python3';
+  if (process.platform === 'win32' && Object.hasOwn(process.env, 'TESTLANE_SOURCE_FIXTURE_PYTHON')) {
+    const configured = process.env.TESTLANE_SOURCE_FIXTURE_PYTHON;
+    try {
+      if (!path.isAbsolute(configured) || /[\u0000-\u001f\u007f]/.test(configured)) throw Error();
+      const file = await lstat(configured);
+      if (!file.isFile() || file.isSymbolicLink() || await realpath(configured) !== configured) throw Error();
+      executable = configured;
+    } catch { throw Error('fixture Python path refused'); }
+  }
+  return fixtureChild(executable, ['-I', '-c', script], input);
 }
 async function extractionInput(archive, parent) {
   // Windows hosted TEMP can be an alias, and Python and Node can report different

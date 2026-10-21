@@ -82,8 +82,51 @@ jobs:
       - name: Release artifact integrity contracts
         run: node --test scripts/release-artifact.test.mjs
 
+      - name: Select Python for Windows source fixtures
+        if: runner.os == 'Windows'
+        id: source-fixture-python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        timeout-minutes: 2
+        with:
+          python-version: '3.12.10'
+          architecture: x64
+          check-latest: false
+          update-environment: false
+
+      - name: Prepare the exact Windows Python source interpreter
+        if: runner.os == 'Windows'
+        timeout-minutes: 1
+        shell: pwsh
+        env:
+          TESTLANE_SOURCE_FIXTURE_PYTHON: ${{ steps.source-fixture-python.outputs.python-path }}
+        run: |
+          @'
+          import assert from 'node:assert/strict';
+          import {spawnSync} from 'node:child_process';
+          import {lstatSync,realpathSync} from 'node:fs';
+          import path from 'node:path';
+          try {
+            const executable=process.env.TESTLANE_SOURCE_FIXTURE_PYTHON;
+            assert.ok(path.isAbsolute(executable)&&!/[\u0000-\u001f\u007f]/.test(executable));
+            const file=lstatSync(executable);
+            assert.ok(file.isFile()&&!file.isSymbolicLink());assert.equal(realpathSync(executable),executable);
+            const script="import json,os,pathlib,stat,sys,zipfile\nr=json.load(sys.stdin)\nassert r=={'purpose':'testlane-source-fixture-readiness'}\nprint(json.dumps({'ready':True,'executable':sys.executable,'version':list(sys.version_info[:3])}))";
+            const result=spawnSync(executable,['-I','-c',script],{
+              input:JSON.stringify({purpose:'testlane-source-fixture-readiness'}),encoding:'utf8',
+              timeout:30000,killSignal:'SIGKILL',maxBuffer:16384,windowsHide:true,shell:false});
+            assert.ok(!result.error&&result.signal===null&&result.status===0);
+            const identity=JSON.parse(result.stdout);
+            assert.deepEqual(Object.keys(identity).sort(),['executable','ready','version']);
+            assert.equal(identity.ready,true);assert.deepEqual(identity.version,[3,12,10]);
+            assert.equal(realpathSync(identity.executable),executable);
+            console.log('WINDOWS_SOURCE_PYTHON_READY');
+          } catch {console.error('FAIL Windows source Python readiness');process.exitCode=1;}
+          '@ | node --input-type=module
+
       - name: Native mobile contracts, ownership and worker bounds
         run: npm run test:mobile
+        env:
+          TESTLANE_SOURCE_FIXTURE_PYTHON: ${{ steps.source-fixture-python.outputs.python-path }}
 
       - run: npx vitest run --reporter=default
         env:
