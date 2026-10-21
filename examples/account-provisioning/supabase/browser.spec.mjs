@@ -16,6 +16,8 @@ async function action(page, name, status) {
 test('Created sandbox accounts use browser roles and are revoked in the same live app', {
   annotation: { type: 'testlane-case', description: 'provisioned-browser-lifecycle' },
 }, async ({ testlane, browser }, info) => {
+  // Includes broker setup, persisted-state cleanup and live account revocation.
+  test.setTimeout(90_000);
   let editor, reviewer, recordId, creation, actionPromise;
   const startedAt = performance.now(), elapsed = () => Math.floor(performance.now() - startedAt);
   const diagnostic = { creationStarted: false, responseObserved: false, responseCreated: null, bodyDecoded: null,

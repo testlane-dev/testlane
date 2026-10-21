@@ -169,9 +169,19 @@ does not establish that path is absent. Inspect it before recovery or removal.
 The separate source-only browser controller is **not yet accepted by a real browser
 run**. Its contract tests do not start Docker, a broker, Chromium or a provider.
 After review, the real proof requires the same private parent, pinned local tools,
-Docker and isolated native store described above, plus the consumer's Playwright
-1.64.0 Chromium executable already installed. It never downloads a browser during
-the proof. From a built checkout, use a new output directory:
+Docker and isolated native store described above. Install the matching browser
+explicitly from the repository root before the proof:
+
+```powershell
+npm.cmd --prefix examples/playwright ci --ignore-scripts
+node examples/playwright/node_modules/@playwright/test/cli.js install chromium
+```
+
+This setup downloads Playwright 1.64.0's Chromium into the current user's browser
+cache. Run setup and the proof as the same OS user. The proof installs the consumer's
+pinned Playwright dependency but never downloads a browser. On Linux, Chromium's
+system libraries must also already be available. From a built checkout, use a new
+output directory:
 
 ```powershell
 npm.cmd run proof:account-provisioning:browser -- --tools-root "$proofParent/tools" --output-dir "$proofParent/browser-proof"
@@ -191,6 +201,12 @@ plan/spec/helper bytes. They create six accounts total, within the unchanged tar
 quota, in a fresh stack separate from the existing ten-attempt abuse proof. Only
 the specifically located injected assertion is an expected failure; timeout, missing
 cleanup, fixture teardown or another assertion failure cannot substitute for it.
+
+This single integration case allows 90 seconds for broker setup, browser checks,
+persisted-state cleanup and live account revocation. Its verification suite retains
+the 175-second global deadline and the controller's CLI wrapper retains 210 seconds.
+The provider fetch deadline remains eight seconds and the browser's revocation
+barrier remains 15 seconds. These limits do not change the account quotas or retries.
 
 The parent owns a loopback Playwright BrowserServer and its retained process handle.
 A settled runner does not prove that browser stopped. Its close acknowledgement and
