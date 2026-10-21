@@ -3,17 +3,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {spawn} from 'node:child_process';
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {publicAndroidFailure} from '../failure.mjs';
+import {writeNativeProofReceipt} from '../../../scripts/native-proof-support.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const IDs = ['editor-native-total', 'editor-cannot-approve', 'reviewer-native-approval', 'duplicate-approval-unchanged', 'anonymous-denied'];
 
-async function fixture(mode = 'passed') {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'tld-android-readiness-'));
+async function fixture(mode = 'passed', temporaryParent = os.tmpdir()) {
+  const root = await realpath(await mkdtemp(path.join(temporaryParent, 'tld-android-readiness-')));
   const packageRoot = path.join(root, 'package'), controllerRoot = path.join(root, 'controller');
   const outputDir = path.join(root, 'output'), sessionTemp = path.join(root, 'sessions'), apkFile = path.join(root, 'proof.apk');
   async function file(base, relative, source) {
@@ -265,6 +266,42 @@ test('controller reuses identical immutable options after acknowledged close and
     await assert.rejects(readFile(path.join(owned.outputDir, 'preauth-device.log')), { code: 'ENOENT' });
     await assert.rejects(readFile(path.join(owned.outputDir, 'readiness-failure.json')), { code: 'ENOENT' });
   } finally { await owned.close(); }
+});
+
+test('controller fixture canonicalizes an owned temporary alias while the production receipt writer still refuses raw aliases', { timeout: 10000 }, async () => {
+  const parent = await realpath(os.tmpdir()), container = await mkdtemp(path.join(parent, 'tld-readiness-alias-'));
+  const target = path.join(container, 'target'), alias = path.join(container, 'alias');
+  let owned, linked = false;
+  try {
+    await mkdir(target); await symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir'); linked = true;
+    const rawOutput = path.join(target, 'raw-output'); await mkdir(rawOutput);
+    const aliasedOutput = path.join(alias, 'raw-output');
+    assert.notEqual(aliasedOutput, await realpath(aliasedOutput));
+    await assert.rejects(writeNativeProofReceipt({ outputDir: aliasedOutput,
+      receipt: { passed: true, cleanupVerified: true, credentialLeakScanPassed: true }, cancelCode: 'ANDROID_CANCELLED' }),
+      error => error.message === 'NATIVE_PROOF_FINALIZATION_FAILED');
+    await assert.rejects(readFile(path.join(rawOutput, 'receipt.json')), { code: 'ENOENT' });
+    owned = await fixture('passed', alias);
+    const receipt = await owned.run();
+    assert.equal(owned.root, await realpath(owned.root)); assert.equal(path.dirname(owned.root), target);
+    assert.equal(receipt.passed, true); assert.equal(receipt.cleanupVerified, true); assert.equal(receipt.credentialLeakScanPassed, true);
+    assert.equal(receipt.androidReadiness.sessionCleanup, 'deleted'); assert.equal(owned.state.deviceCloses, 1);
+    assert.equal(owned.state.workers.length, 3);
+    assert.ok(owned.state.events.indexOf('installed-driver-close') < owned.state.events.indexOf('account-backend-start'));
+    assert.equal(JSON.parse(await readFile(path.join(owned.outputDir, 'receipt.json'), 'utf8')).passed, true);
+  } finally {
+    if (owned) {
+      assert.equal(path.dirname(await realpath(owned.root)), target); await owned.close();
+    }
+    if (linked) {
+      assert.equal((await lstat(alias)).isSymbolicLink(), true); assert.equal(await realpath(alias), target);
+      await rm(alias, { recursive: false });
+    }
+    assert.equal(path.dirname(container), parent); assert.ok(path.basename(container).startsWith('tld-readiness-alias-'));
+    assert.equal(await realpath(container), container); assert.equal((await lstat(container)).isSymbolicLink(), false);
+    await rm(container, { recursive: true, force: true });
+    await assert.rejects(lstat(container), { code: 'ENOENT' });
+  }
 });
 
 test('raw diagnostic allocation boundary excludes even an early backend failure after password creation, and all worker failures', async () => {
