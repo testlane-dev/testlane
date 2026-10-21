@@ -237,7 +237,7 @@ keychain disposal and consumer removal remain blocked, with recovery state retai
 Setup launches only the fixed proof bundle on the owned Simulator before the
 application backend, broker or bootstrap credentials exist. WDA attaches to that
 running app with forced relaunch disabled and one startup attempt. This separates
-cold app startup from the five-second ordinary request budget; it does not test
+cold app startup from ordinary driver requests; it does not test
 cold-start performance or prove the app is ready merely because launch was
 acknowledged. Role loading, identity checks and all business assertions still run
 through the native controls.
@@ -300,8 +300,19 @@ shared `budgets.mjs` declares these bounds and the 600-second outer worker ceili
 cases run once without retries. Appium/WebDriverAgent session creation has
 its own 240-second ceiling within that outer limit. After receiving a valid session
 ID, setup performs one live ownership check within the remaining startup budget,
-capped at 20 seconds. Each ordinary driver request shares one five-second ceiling
-between its live ownership check and HTTP operation. An unconfirmed setup check prevents subsequent native actions;
+capped at 20 seconds. Each ordinary driver request allows up to five seconds for
+fresh live ownership confirmation, followed by up to five seconds for HTTP and the
+complete response body, with a ten-second aggregate ceiling. Both phases are
+clipped by any enclosing monotonic deadline. Session creation retains its original
+240-second aggregate ceiling, including ownership; it does not gain five seconds.
+Visibility remains one ten-second window with at most six swipes. The read-only
+presence lookup now includes its initial native-context check within that same
+ten-second allowance, and keyboard dismissal confirmation retains one five-second
+window. These windows do not promise six swipes or a full transport allowance for
+each request. Appium's ordinary WDA transport limit remains five seconds.
+If cancellation or a timeout returns while an ownership callback remains pending,
+the driver permanently refuses further guards, HTTP requests and session deletion,
+even if that callback later acknowledges ownership. An unconfirmed setup check also prevents subsequent native actions;
 session deletion is reported unknown if the prior operation cannot be confirmed
 settled, and the controller fences it through owned-device teardown.
 The separate 600-second WDA

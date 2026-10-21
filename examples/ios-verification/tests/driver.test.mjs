@@ -16,7 +16,7 @@ const caps = () => ({ platformName: 'iOS', 'appium:automationName': 'XCUITest', 
   'appium:showIOSLog': false, 'appium:showXcodeLog': false, 'appium:printPageSourceOnFindFailure': false,
   'appium:disableAutomaticScreenshots': true, 'appium:shutdownOtherSimulators': false, 'appium:resetLocationService': false, 'appium:noReset': true });
 
-test('fixed request facts distinguish slow ownership, HTTP, response and command failure without extending budgets or late HTTP', async t => {
+test('fixed request facts distinguish ownership, HTTP and response deadlines with permanent pending-owner fencing', async t => {
   const originalTimer=globalThis.setTimeout,originalClear=globalThis.clearTimeout,active=new Map();
   let now=0,mode,testing=false,owners=0,entered,gate;const routes=[];
   const secret=randomBytes(32).toString('base64url'),session='session-'+randomBytes(16).toString('hex');
@@ -52,12 +52,23 @@ test('fixed request facts distinguish slow ownership, HTTP, response and command
     assert.equal(Object.isFrozen(fact),true);
     for(const value of [secret,encodeURIComponent(secret),Buffer.from(secret).toString('base64'),session])assert.equal(JSON.stringify(fact).includes(value),false);
     if(['ownership','cancelled'].includes(mode))assert.equal(routes.some(route=>route.endsWith('/element')),false,'failed ownership cannot send the element request');
-    const beforeClose=routes.length;testing=false;await driver.close();await driver.close();
-    assert.equal(routes.length,beforeClose+1);assert.equal(routes.at(-1),'/session/'+session);
+    const beforeClose=routes.length,ownerCount=owners;testing=false;
+    if(['ownership','cancelled'].includes(mode)) {
+      await assert.rejects(driver.close(),{code:'NATIVE_DRIVER_OWNERSHIP_REFUSED'});
+      await assert.rejects(driver.click('anonymous-check'),{code:'NATIVE_DRIVER_OWNERSHIP_REFUSED'});
+      assert.equal(routes.length,beforeClose);assert.equal(owners,ownerCount);
+    } else {
+      await driver.close();await driver.close();
+      assert.equal(routes.length,beforeClose+1);assert.equal(routes.at(-1),'/session/'+session);
+    }
     gate.resolve(mode==='http'?new Response(JSON.stringify({value:secret})):mode==='response'?{done:false,value:Buffer.from(secret)}:true);
     await Promise.resolve();await Promise.resolve();
-    assert.equal(routes.length,beforeClose+1,'a late callback/HTTP response cannot revive the failed operation');
-    assert.equal(active.size,0,'all request and owner timers are cleared after independent exact-session close');
+    if(['ownership','cancelled'].includes(mode)) {
+      await assert.rejects(driver.close(),{code:'NATIVE_DRIVER_OWNERSHIP_REFUSED'});
+      assert.equal(owners,ownerCount,'a late ownership ACK cannot permit a fresh guard or DELETE');
+    }
+    assert.equal(routes.length,beforeClose+(['ownership','cancelled'].includes(mode)?0:1),'a late callback/HTTP response cannot revive the failed operation');
+    assert.equal(active.size,0,'all request and owner timers are cleared');
   }
 });
 async function fixture() {
@@ -163,7 +174,7 @@ test('snapshot-absent search changes direction and is limited to six swipes with
   }
 });
 
-test('visibility lookup and gestures share one absolute ten-second window while requests remain at most five seconds', async t => {
+test('visibility lookup and gestures share one absolute ten-second window with five-second HTTP phases', async t => {
   let now = 0, searching = false; const calls = [];
   t.mock.method(performance, 'now', () => now);
   t.mock.method(globalThis, 'fetch', async (url, options) => {
@@ -348,8 +359,10 @@ test('iOS phase cancellation interrupts ownership inspection before it can send 
     const count = appium.calls.length, refused = assert.rejects(driver.withSignal(body.signal).click('save'), { code: 'NATIVE_DRIVER_CANCELLED' });
     await promptly(entered.promise); body.abort(); await promptly(refused);
     assert.equal(run.signal.aborted, false); assert.equal(appium.calls.length, count);
-    blocked = false; owner.resolve(true); await driver.close();
-    assert.equal(appium.calls.filter(call => call.method === 'DELETE').length, 1);
+    await assert.rejects(driver.close(), { code: 'NATIVE_DRIVER_OWNERSHIP_REFUSED' });
+    blocked = false; owner.resolve(true); await Promise.resolve(); await Promise.resolve();
+    await assert.rejects(driver.close(), { code: 'NATIVE_DRIVER_OWNERSHIP_REFUSED' });
+    assert.equal(appium.calls.filter(call => call.method === 'DELETE').length, 0);
   } finally { owner.resolve(true); await appium.close(); }
 });
 

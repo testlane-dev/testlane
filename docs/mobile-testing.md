@@ -91,8 +91,15 @@ generated runner/test artifacts and measured source inputs, then rechecks them
 before sessions and between phases. Session creation requires the prebuilt runner;
 uncertain compilation blocks authentication. Setup launches the unauthenticated
 proof app before WDA attaches, with one startup attempt and no forced relaunch.
-The 240-second session and ordinary five-second command limits remain separate
-from compilation. One live ownership check after session creation belongs to the
+The 240-second session ceiling remains separate from compilation. Ordinary driver
+requests allow five seconds for a fresh ownership check, then five seconds for
+HTTP and the complete response body, with a ten-second aggregate ceiling clipped
+by the caller's monotonic deadline. Appium's ordinary WDA transport limit remains
+five seconds. Visibility and read-only presence retain ten-second windows;
+presence includes its initial native-context check. Keyboard confirmation retains
+one five-second window. A pending ownership callback interrupted by timeout or
+cancellation permanently fences further driver guards, HTTP and session deletion,
+including after a late acknowledgement. One live ownership check after session creation belongs to the
 remaining startup budget, capped at 20 seconds; later checks retain their ordinary
 limits. Repeated inventory responses are validated in full without retaining their
 raw payloads in the bounded diagnostic log. The proof checks authenticated workflows after that setup;

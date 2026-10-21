@@ -78,36 +78,57 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     capabilities = { ...structuredClone(supplied), 'appium:isHeadless': true, 'appium:wdaStartupRetries': 1,
       'appium:wdaConnectionTimeout': 5000, 'appium:forceAppLaunch': false, 'appium:shouldTerminateApp': false, 'appium:usePrebuiltWDA': true };
   } catch { throw fail('NATIVE_DRIVER_CONFIGURATION_INVALID'); }
-  let session, closed = false, setupActive = true, setupFenced = false;
+  let session, closed = false;
+  const ownershipFence = new AbortController();
   async function request(method, route, body, requestSignal = signal, timeoutMs = 5000, outerDeadline) {
     const operation = requestOperation(method, route); let phase = 'ownership';
-    if (setupFenced) throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED');
+    if (ownershipFence.signal.aborted) throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED');
     if (requestSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
-    const began = performance.now(), deadline = outerDeadline === undefined ? began + timeoutMs : Math.min(began + timeoutMs, outerDeadline);
-    const budget = Math.min(timeoutMs, deadline - began);
-    if (budget <= 0) throw fail('NATIVE_DRIVER_TIMEOUT', { operation, phase });
-    const timer = new AbortController(), timeout = setTimeout(() => timer.abort(), budget);
-    const operationSignal = requestSignal ? AbortSignal.any([requestSignal, timer.signal]) : timer.signal;
-    const checkDeadline = () => { if (performance.now() >= deadline) { timer.abort(); throw fail('NATIVE_DRIVER_TIMEOUT'); } };
-    let ownerTimer, ownerCompleted = false;
-    try {
-      const allowed = await withDriverSignal(() => Promise.race([Promise.resolve().then(() => { checkDeadline(); return assertOwned(); }), new Promise((_, reject) => {
-        ownerTimer = setTimeout(() => reject(fail('NATIVE_DRIVER_OWNERSHIP_REFUSED')), 5000);
-      })]), operationSignal, () => fail('NATIVE_DRIVER_CANCELLED')).catch(() => { throw fail(operationSignal.aborted ? 'NATIVE_DRIVER_CANCELLED' : 'NATIVE_DRIVER_OWNERSHIP_REFUSED'); });
-      clearTimeout(ownerTimer);
-      if (allowed !== true) throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED');
-      ownerCompleted = true;
+    const began = performance.now(), sessionCreate = operation === 'session-create';
+    // Ordinary requests have two settled phases, not a shared transport timer.
+    // Session creation still spends at most its original 240 seconds in total.
+    const deadline = Math.min(began + (sessionCreate ? 240_000 : 10_000), outerDeadline ?? Infinity);
+    let phaseDeadline = Math.min(began + 5000, deadline), timeout, timedOut = false, ownerStarted = false, ownerSettled = false;
+    const timer = new AbortController();
+    const operationSignal = AbortSignal.any([timer.signal, ownershipFence.signal, ...(requestSignal ? [requestSignal] : [])]);
+    const fencePendingOwner = () => { if (ownerStarted && !ownerSettled) ownershipFence.abort(); };
+    operationSignal.addEventListener('abort', fencePendingOwner, { once: true });
+    const checkDeadline = () => {
       if (requestSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
-      if (timer.signal.aborted) throw fail('NATIVE_DRIVER_TIMEOUT');
-      checkDeadline();
+      if (timedOut || performance.now() >= phaseDeadline || performance.now() >= deadline) {
+        timedOut = true; timer.abort(); throw fail('NATIVE_DRIVER_TIMEOUT');
+      }
+      if (ownershipFence.signal.aborted) throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED');
+    };
+    const armDeadline = () => {
+      clearTimeout(timeout); checkDeadline();
+      timeout = setTimeout(() => { timedOut = true; timer.abort(); }, Math.max(0, phaseDeadline - performance.now()));
+    };
+    try {
+      armDeadline();
+      const allowed = await withDriverSignal(() => {
+        checkDeadline(); ownerStarted = true;
+        try {
+          return Promise.resolve(assertOwned()).then(value => { ownerSettled = true; return value; }, error => { ownerSettled = true; throw error; });
+        } catch (error) { ownerSettled = true; throw error; }
+      }, operationSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
+      checkDeadline(); clearTimeout(timeout);
+      if (allowed !== true) throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED');
       phase = 'http';
-      const response = await withDriverSignal(() => fetch(origin + route, { method, redirect: 'error', signal: operationSignal,
-        headers: { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), operationSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
-      phase = 'response';
+      phaseDeadline = Math.min(performance.now() + (sessionCreate ? timeoutMs : Math.min(timeoutMs, 5000)), deadline);
+      armDeadline();
+      const response = await withDriverSignal(() => {
+        checkDeadline(); const encoded = body === undefined ? undefined : JSON.stringify(body); checkDeadline();
+        return fetch(origin + route, { method, redirect: 'error', signal: operationSignal,
+          headers: { 'Content-Type': 'application/json' }, ...(encoded === undefined ? {} : { body: encoded }) });
+      }, operationSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
+      checkDeadline(); phase = 'response';
       const reader = response.body?.getReader(); if (!reader) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
       let length = 0; const chunks = [];
       for (;;) {
-        const { value, done } = await withDriverSignal(() => reader.read(), operationSignal, () => fail('NATIVE_DRIVER_CANCELLED')); if (done) break;
+        checkDeadline();
+        const { value, done } = await withDriverSignal(() => { checkDeadline(); return reader.read(); }, operationSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
+        checkDeadline(); if (done) break;
         length += value.byteLength;
         if (length > 64 * 1024) { await withDriverSignal(() => reader.cancel(), operationSignal, () => fail('NATIVE_DRIVER_CANCELLED')); throw fail('NATIVE_DRIVER_RESPONSE_INVALID'); }
         chunks.push(Buffer.from(value));
@@ -121,12 +142,13 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
       }
       return { value: decoded.value };
     } catch (error) {
-      if (setupActive && session && !ownerCompleted) setupFenced = true;
+      fencePendingOwner();
       if (requestSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED', { operation, phase });
-      if (timer.signal.aborted) throw fail('NATIVE_DRIVER_TIMEOUT', { operation, phase });
+      if (timedOut || performance.now() >= phaseDeadline || performance.now() >= deadline) throw fail('NATIVE_DRIVER_TIMEOUT', { operation, phase });
+      if (ownershipFence.signal.aborted || phase === 'ownership') throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED', { operation, phase });
       if (error instanceof NativeDriverError) throw retainRequestFact(error, { operation, phase });
       throw fail('NATIVE_DRIVER_COMMAND_FAILED', { operation, phase });
-    } finally { clearTimeout(timeout); clearTimeout(ownerTimer); }
+    } finally { clearTimeout(timeout); operationSignal.removeEventListener('abort', fencePendingOwner); }
   }
   const setupDeadline = performance.now() + 240_000;
   let created;
@@ -142,19 +164,18 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
   try {
     const owned = await stabilizeIosSetupOwnership({ assertOwned, signal, deadline: setupDeadline });
     if (!owned.completed) {
-      setupFenced = true;
+      ownershipFence.abort();
       throw fail(owned.status === 'cancelled' ? 'NATIVE_DRIVER_CANCELLED' : performance.now() >= setupDeadline ? 'NATIVE_DRIVER_SESSION_TIMEOUT' : 'NATIVE_DRIVER_OWNERSHIP_REFUSED');
     }
     const remaining = setupDeadline - performance.now();
-    if (remaining <= 0) { setupFenced = true; throw fail('NATIVE_DRIVER_SESSION_TIMEOUT'); }
+    if (remaining <= 0) { ownershipFence.abort(); throw fail('NATIVE_DRIVER_SESSION_TIMEOUT'); }
     try { await nativeContext(signal, Math.min(5000, remaining), setupDeadline); }
     catch (error) { if (performance.now() >= setupDeadline) throw fail('NATIVE_DRIVER_SESSION_TIMEOUT'); throw error; }
     if (performance.now() >= setupDeadline) throw fail('NATIVE_DRIVER_SESSION_TIMEOUT');
-    setupActive = false;
   } catch (error) {
     // A failed setup callback may still run in the parent. Never start another
     // ownership callback or native request after that uncertain outcome.
-    if (!setupFenced) await request('DELETE', route(''), undefined, null).catch(() => {});
+    if (!ownershipFence.signal.aborted) await request('DELETE', route(''), undefined, null).catch(() => {});
     throw error;
   }
   function elementId(result) {
@@ -164,11 +185,16 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
   }
   async function find(id, activeSignal = signal) {
     if (closed || !identifier(id)) throw fail('NATIVE_DRIVER_ELEMENT_INVALID');
-    await nativeContext(activeSignal); const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline) {
-      const result = await request('POST', route('/element'), { using: 'accessibility id', value: id }, activeSignal, Math.max(1, Math.min(5000, deadline - Date.now())));
-      if (!result.missing) return elementId(result);
-      await waitDriverSignal(Math.min(200, Math.max(0, deadline - Date.now())), activeSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
+    const deadline = performance.now() + 10_000;
+    const remaining = () => {
+      const value = deadline - performance.now(); if (value <= 0) throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT'); return Math.min(5000, value);
+    };
+    // The presence window includes its initial native-context check as well.
+    await nativeContext(activeSignal, remaining(), deadline);
+    while (performance.now() < deadline) {
+      const result = await request('POST', route('/element'), { using: 'accessibility id', value: id }, activeSignal, remaining(), deadline);
+      remaining(); if (!result.missing) return elementId(result);
+      await waitDriverSignal(Math.min(200, Math.max(0, deadline - performance.now())), activeSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
     }
     throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT');
   }
@@ -238,8 +264,8 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     },
     async hideKeyboard(activeSignal = signal) {
       if (closed) throw fail('NATIVE_DRIVER_SESSION_INVALID'); await nativeContext(activeSignal);
-      const isShown = async (timeoutMs = 5000) => {
-        const shown = (await request('GET', route('/appium/device/is_keyboard_shown'), undefined, activeSignal, timeoutMs)).value;
+      const isShown = async (timeoutMs = 5000, outerDeadline) => {
+        const shown = (await request('GET', route('/appium/device/is_keyboard_shown'), undefined, activeSignal, timeoutMs, outerDeadline)).value;
         if (shown !== true && shown !== false) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
         return shown;
       };
@@ -248,10 +274,12 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
       // configured app-owned control; issue that action once, then observe.
       if (keyboardDismissId !== undefined) await actions.click(keyboardDismissId, activeSignal);
       else await request('POST', route('/appium/device/hide_keyboard'), {}, activeSignal);
-      const deadline = Date.now() + 5000;
-      while (Date.now() < deadline) {
-        if (!await isShown(Math.max(1, deadline - Date.now()))) return;
-        await waitDriverSignal(Math.min(100, Math.max(0, deadline - Date.now())), activeSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
+      const deadline = performance.now() + 5000;
+      while (performance.now() < deadline) {
+        const shown = await isShown(Math.min(5000, deadline - performance.now()), deadline);
+        if (performance.now() >= deadline) throw fail('NATIVE_DRIVER_TIMEOUT');
+        if (!shown) return;
+        await waitDriverSignal(Math.min(100, Math.max(0, deadline - performance.now())), activeSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
       }
       throw fail('NATIVE_DRIVER_TIMEOUT');
     },
