@@ -11,6 +11,7 @@ import {createRealBrokerHarness,realBrokerSupport} from '../examples/workflows/t
 
 import {sha,tree,digestTree,installedModule,proofProfiles,runProofPhases,writeNativeProofReceipt} from './native-proof-support.mjs';
 import {createAndroidFailureFact,retainAndroidFailureFact,publicAndroidFailure} from '../examples/android-verification/failure.mjs';
+import {readAndroidOwnershipFailure,retainAndroidOwnershipFailure} from '../examples/android-verification/ownership-facts.mjs';
 const PACKAGE='dev.testlane.androidproof';
 export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHome,toolsRoot,systemImagePath,signal,onStage=()=>{}}) {
   signal?.throwIfAborted();
@@ -38,7 +39,7 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
   for(const file of publicFiles)assert.equal(build.publicSourceSHA256[file],sha(await readFile(path.join(consumer.packageRoot,'examples/mobile-approval-app',file))),'APK build inputs match installed public app source');
   const namespace='android-'+randomBytes(8).toString('hex');
   let accounts={},identities,preauthDiagnosticsAllowed=true;
-  let app,harness,device,cli,captured='',receipt,androidReadiness,cleanupOK=true,stage='setup',workerUnconfirmed=false,deviceStartUnconfirmed=false,originalFailure;const attempted=new Set();
+  let app,harness,device,cli,captured='',receipt,androidReadiness,cleanupOK=true,stage='setup',workerUnconfirmed=false,deviceStartUnconfirmed=false,originalFailure,ownershipFailure;const attempted=new Set();
   const at=name=>{stage=name;onStage(name);};
   try {
     at('owned-device-start');
@@ -99,6 +100,7 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
     // Arm preservation before diagnostic work, which may itself fail.
     if(!device&&error?.message==='ANDROID_DEVICE_CLEANUP_UNCONFIRMED')deviceStartUnconfirmed=true;
     if(/TERMINATION_UNCONFIRMED|STOP_UNCONFIRMED/.test(String(error?.code??error?.message??'')))workerUnconfirmed=true;
+    ownershipFailure=readAndroidOwnershipFailure(error);
     originalFailure=createAndroidFailureFact({stage,error});retainAndroidFailureFact(error,originalFailure);
     if(typeof error?.capturedText==='function')captured+=error.capturedText();
     // Only setup before even generating passwords may retain existing bounded
@@ -137,6 +139,7 @@ export async function runAndroidProof({consumer,apkFile,outputDir,sdkRoot,javaHo
     try{await app?.close();}catch{errors.push('backend-stop');}
     if(errors.length) {
       const error=retainAndroidFailureFact(Error('ANDROID_PROOF_CLEANUP_INCOMPLETE'),originalFailure);error.preserveConsumer=true;
+      retainAndroidOwnershipFailure(error,ownershipFailure);
       try{await writeFile(path.join(output,'cleanup-status.json'),JSON.stringify({status:'incomplete',steps:errors,consumerRoot:consumer.root})+'\n',{mode:0o600});}
       catch{/* Metadata failure cannot revoke preservation of uncertain owned state. */}
       throw error;

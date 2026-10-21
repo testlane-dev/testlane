@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import { validateHostedAndroidRuntimeFailure, readHostedAndroidRuntimeFailure, validateHostedRuntimeScanFact } from './android-hosted-failure.mjs';
 import { exerciseHostedSecretService } from './android-hosted-runtime.mjs';
 import { publicAndroidFailure } from '../examples/android-verification/failure.mjs';
+import {retainAndroidOwnershipFailure} from '../examples/android-verification/ownership-facts.mjs';
 
 const INVALID = 'ANDROID_HOSTED_RUNTIME_DIAGNOSTIC_INVALID';
 const valid = () => ({ schemaVersion: 1, purpose: 'fixed-hosted-runtime-failure', stage: 'proof',
@@ -81,7 +82,7 @@ async function workflowFixture(t) {
   const inline = /node --input-type=module <<'NODE'\r?\n([\s\S]*?)\r?\n\s+NODE/.exec(section)?.[1].replace(/^ {10}/gm, '');
   assert.equal(typeof inline, 'string');
   for (const file of ['scripts/android-hosted-failure.mjs','examples/mobile-approval-app/build-diagnostics.mjs',
-    'examples/android-verification/failure.mjs','examples/android-verification/contracts.mjs','examples/android-verification/proof-cases.mjs']) {
+    'examples/android-verification/failure.mjs','examples/android-verification/contracts.mjs','examples/android-verification/proof-cases.mjs','examples/android-verification/ownership-facts.mjs']) {
     const target = path.join(root, file); await mkdir(path.dirname(target), { recursive: true });
     await copyFile(new URL('../' + file, import.meta.url), target);
   }
@@ -168,5 +169,19 @@ test('actual inline workflow preserves validated scan facts and refuses malforme
     await writeFile(file,JSON.stringify({...valid(),scanFact}));const result=await project(f);
     assert.equal(result.runtimeDiagnosticStatus,'unavailable');assert.equal(Object.hasOwn(result,'runtimeDiagnostic'),false);
     assert.deepEqual(result.nativeDiagnostic,native);noLeaks(JSON.stringify(result),secret);
+  }
+});
+
+
+test('actual workflow carries only validated fresh ownership facts and refuses unknown query fields',async t=>{
+  const f=await workflowFixture(t),secret=randomBytes(32).toString('base64')+' /+?';
+  const error=retainAndroidOwnershipFailure(Error('ANDROID_OWNERSHIP_REFUSED'),{gate:'marker'});
+  const native=await publicAndroidFailure({output:f.output,stage:'device-owned-emulator-booted',error});
+  await writeFile(path.join(f.output,'linux-runtime-failure.json'),JSON.stringify(valid()));
+  await writeFile(path.join(f.output,'public-failure.json'),JSON.stringify(native));
+  const result=await project(f);assert.deepEqual(result.nativeDiagnostic.ownershipFailure,{gate:'marker'});assert.deepEqual(result.runtimeDiagnostic,valid());
+  for(const ownershipFailure of [{gate:'marker',query:secret},...variants(secret).map(gate=>({gate})),{gate:'guest-identity',checks:{stateDevice:true}}]){
+    await writeFile(path.join(f.output,'public-failure.json'),JSON.stringify({...native,ownershipFailure}));
+    const refused=await project(f);assert.equal(refused.nativeDiagnosticStatus,'unavailable');assert.equal(Object.hasOwn(refused,'nativeDiagnostic'),false);noLeaks(JSON.stringify(refused),secret);
   }
 });

@@ -153,6 +153,13 @@ The fixed `readiness-failure.json` contains only an allowlisted diagnosis. No ra
 native failure log is retained after credential creation, and Appium verbosity,
 logcat capture, retries and request/case budgets are unchanged.
 
+A fixed ownership refusal may also identify the refusing gate and the failing
+check's immutable boolean observations. Root or marker refusals omit query facts;
+an earlier successful check is never reused. These fields contain no identifiers,
+paths or command output. They locate the refusal without establishing its cause
+or granting permission to continue. Existing cleanup errors and preservation
+requirements still apply.
+
 The [initial Android evidence](../../docs/mobile-evidence/android-emulator-2026-10-19.public.json)
 and the [shared iOS-change regression](../../docs/verification/native-2026-10-19/android-ios-regression.public.json)
 record separate source revisions and installed package trees. The latter rebuilt the

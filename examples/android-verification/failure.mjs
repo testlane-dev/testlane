@@ -5,6 +5,7 @@ import path from 'node:path';
 import {types,isDeepStrictEqual} from 'node:util';
 import {sanitizeNativeReport,validateNativePlan,NATIVE_DRIVER_FAILURE_CODES} from './contracts.mjs';
 import {APPROVAL_REQUIREMENTS} from './proof-cases.mjs';
+import {normalizeAndroidOwnershipFailure,readAndroidOwnershipFailure} from './ownership-facts.mjs';
 
 const MAX_BYTES=512*1024;
 const PHASES=['positive','fault','corrected'];
@@ -26,6 +27,8 @@ const CODES=new Set(['ANDROID_PROOF_FAILED','ANDROID_PROOF_ASSERTION_FAILED','AN
   'NATIVE_WORKER_FAILED','NATIVE_WORKER_TIMEOUT','NATIVE_WORKER_PROTOCOL_INVALID','NATIVE_WORKER_OUTPUT_LIMIT',
   'NATIVE_WORKER_TERMINATION_UNCONFIRMED','NATIVE_WORKER_RPC_UNSETTLED','NATIVE_DRIVER_CANCELLED',...NATIVE_DRIVER_FAILURE_CODES]);
 const nativeError=value=>value!==null&&typeof value==='object'&&!types.isProxy(value)&&types.isNativeError(value);
+const ownershipContext=summary=>['ANDROID_OWNERSHIP_REFUSED','ANDROID_DEVICE_CLEANUP_UNCONFIRMED'].includes(summary.code)||
+  summary.code==='ANDROID_PROOF_CLEANUP_INCOMPLETE'&&['ANDROID_OWNERSHIP_REFUSED','ANDROID_DEVICE_CLEANUP_UNCONFIRMED'].includes(summary.originalFailure?.code);
 function own(value,key){try{const d=Object.getOwnPropertyDescriptor(value,key);return d&&Object.hasOwn(d,'value')?d.value:undefined;}catch{return undefined;}}
 function errorCode(error){
   if(!nativeError(error))return 'ANDROID_PROOF_FAILED';
@@ -101,10 +104,12 @@ export function projectPublicAndroidFailure(value){
   try{
     const input=data(value),names=['schemaVersion','status','stage','code','reports'];
     if(Object.hasOwn(input,'originalFailure'))names.push('originalFailure');
+    if(Object.hasOwn(input,'ownershipFailure'))names.push('ownershipFailure');
     if(!exact(input,names)||input.schemaVersion!==1||input.status!=='failed'||!STAGES.has(input.stage)||!CODES.has(input.code)||
       !Array.isArray(input.reports)||input.reports.length>3)return undefined;
     const summary={schemaVersion:1,status:'failed',stage:input.stage,code:input.code,reports:[]};
     if(Object.hasOwn(input,'originalFailure')){const original=fact(input.originalFailure);if(!original)return undefined;summary.originalFailure=original;}
+    if(Object.hasOwn(input,'ownershipFailure')){const ownership=normalizeAndroidOwnershipFailure(input.ownershipFailure);if(!ownership||!ownershipContext(summary))return undefined;summary.ownershipFailure=ownership;}
     let prior=-1;
     for(const row of input.reports){
       const index=PHASES.indexOf(row.phase);if(index<=prior||index<0) return undefined;prior=index;
@@ -125,6 +130,7 @@ export async function readPublicAndroidFailure(file){
 export async function publicAndroidFailure({output,stage,error}){
   const summary={schemaVersion:1,status:'failed',...createAndroidFailureFact({stage,error}),reports:[]};
   const original=readAndroidFailureFact(error);if(original)summary.originalFailure=original;
+  const ownership=readAndroidOwnershipFailure(error);if(ownership&&ownershipContext(summary))summary.ownershipFailure=ownership;
   try{
     const plan=checkedPlan(await jsonFile(path.join(output,'plan.json')));
     for(const phase of PHASES)try{

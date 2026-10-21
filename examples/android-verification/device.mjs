@@ -8,12 +8,14 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { androidDeviceDirectories, createAndroidControlEnvironment, createAndroidDeviceEnvironment, requireAndroidProofHost } from './environment.mjs';
 import { confirmRetainedGroupAbsent, requireRetainedProcessGroupHost, retainDetachedChild, stopRetainedGroup } from './process-group.mjs';
+import { readAndroidOwnershipFailure, retainAndroidOwnershipFailure } from './ownership-facts.mjs';
 
 const PREFIX = 'tld-android-';
 const MARKER = 'testlane-owned-device.json';
 const CAPTURE_LIMIT = 8 * 1024 * 1024;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const fail = code => new Error(code);
+const ownershipRefusal = (gate, checks) => retainAndroidOwnershipFailure(fail('ANDROID_OWNERSHIP_REFUSED'), { gate, ...(checks ? { checks } : {}) });
 const inside = (root, file) => { const rel = path.relative(root, file); return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel); };
 const same = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 const safePath = value => typeof value === 'string' && path.isAbsolute(value) && !/[\r\n\0]/.test(value);
@@ -238,13 +240,15 @@ export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemIm
   const rawAdb = (args, options) => raw(adbPath, ['-H', '127.0.0.1', '-P', String(ports.adbPort), '-s', serial, ...args], options);
   async function assertRoot() {
     const current = await realpath(root);
-    if (!same(current, root) || path.dirname(current) !== parent || !/^tld-android-[a-zA-Z0-9]+$/.test(path.basename(root)) || (await lstat(root)).isSymbolicLink()) throw fail('ANDROID_OWNERSHIP_REFUSED');
+    if (!same(current, root) || path.dirname(current) !== parent || !/^tld-android-[a-zA-Z0-9]+$/.test(path.basename(root)) || (await lstat(root)).isSymbolicLink()) throw ownershipRefusal('root-path');
     const actual = JSON.parse(await readFile(markerPath, 'utf8'));
     if (actual.schemaVersion !== 1 || actual.nonce !== nonce || actual.ownerPid !== process.pid || actual.avdName !== avdName || actual.serial !== serial ||
-        actual.adbPort !== marker.adbPort || actual.adbPid !== marker.adbPid || actual.emulatorPid !== marker.emulatorPid || actual.appiumPid !== marker.appiumPid) throw fail('ANDROID_OWNERSHIP_REFUSED');
+        actual.adbPort !== marker.adbPort || actual.adbPid !== marker.adbPid || actual.emulatorPid !== marker.emulatorPid || actual.appiumPid !== marker.appiumPid) throw ownershipRefusal('marker');
     return actual;
   }
   async function assertOwned(allowClosing = false) {
+    // Every invocation starts empty; a later early refusal cannot reuse success.
+    ownershipChecks = undefined;
     ensureLive(allowClosing); const actual = await assertRoot();
     ensureLive(allowClosing);
     const [state, qemu, name] = await Promise.all([
@@ -254,13 +258,18 @@ export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemIm
     // The system image exposes the random AVD name through this boot property.
     // It binds the guest to the same 96-bit nonce as our new marker and retained
     // process handles; arbitrary custom qemu properties are filtered by Android.
-    ownershipChecks = { stateDevice: state.stdout.trim() === 'device', allQueriesSucceeded: [state, qemu, name].every(result => result.code === 0),
+    const checks = Object.freeze({ stateDevice: state.stdout.trim() === 'device', allQueriesSucceeded: [state, qemu, name].every(result => result.code === 0),
       qemuMatches: qemu.stdout.trim() === '1', avdNamePresent: Boolean(name.stdout.trim()), avdNameMatches: name.stdout.trim() === avdName,
       avdNameNonceMatches: name.stdout.trim() === 'testlane_' + nonce,
-      markerPidMatches: actual.emulatorPid === marker.emulatorPid, markerNonceMatches: actual.nonce === nonce };
-    if ([state, qemu, name].some(result => result.code !== 0) || state.stdout.trim() !== 'device') throw fail('ANDROID_OWNERSHIP_REFUSED');
-    verifyOwnedIdentity({ expected: marker, marker: actual, alive: !emulator.closed && !adbServer.closed,
-      qemu: qemu.stdout.trim(), avdName: name.stdout.trim() });
+      markerPidMatches: actual.emulatorPid === marker.emulatorPid, markerNonceMatches: actual.nonce === nonce,
+      retainedProcessesAlive: !emulator.closed && !adbServer.closed });
+    ownershipChecks = checks;
+    if ([state, qemu, name].some(result => result.code !== 0)) throw ownershipRefusal('adb-query-status', checks);
+    if (state.stdout.trim() !== 'device') throw ownershipRefusal('adb-device-state', checks);
+    try {
+      verifyOwnedIdentity({ expected: marker, marker: actual, alive: checks.retainedProcessesAlive,
+        qemu: qemu.stdout.trim(), avdName: name.stdout.trim() });
+    } catch (error) { throw retainAndroidOwnershipFailure(error, { gate: 'guest-identity', checks }); }
     ensureLive(allowClosing);
     return true;
   }
@@ -378,9 +387,11 @@ export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemIm
       close,
     });
   } catch (error) {
+    const ownershipFailure = readAndroidOwnershipFailure(error);
     let code = /^ANDROID_[A-Z_]+$/.test(error.message) ? error.message : 'ANDROID_DEVICE_START_FAILED';
     try { await close(); } catch { code = 'ANDROID_DEVICE_CLEANUP_UNCONFIRMED'; }
     const result = fail(code);
+    retainAndroidOwnershipFailure(result, ownershipFailure);
     // Private in-memory diagnostics only. Error serialization keeps the fixed code;
     // a controller can inspect/scan this buffer without publishing raw tool logs.
     Object.defineProperty(result, 'capturedText', { value: () => captured });

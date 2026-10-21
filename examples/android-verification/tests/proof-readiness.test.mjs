@@ -31,7 +31,7 @@ async function fixture(mode = 'passed', temporaryParent = os.tmpdir()) {
   await file(controllerRoot, 'scripts/android-proof.mjs', controller);
   assert.equal(sha(await readFile(path.join(controllerRoot, 'scripts/android-proof.mjs'))), sha(controller));
   await file(controllerRoot, 'scripts/native-proof-support.mjs', await readFile(new URL('../../../scripts/native-proof-support.mjs', import.meta.url)));
-  for(const name of ['failure.mjs','contracts.mjs','proof-cases.mjs'])await file(controllerRoot,'examples/android-verification/'+name,await readFile(new URL('../'+name,import.meta.url)));
+  for(const name of ['failure.mjs','contracts.mjs','proof-cases.mjs','ownership-facts.mjs'])await file(controllerRoot,'examples/android-verification/'+name,await readFile(new URL('../'+name,import.meta.url)));
   await file(controllerRoot, 'examples/playwright/tests/consumer.mjs', stateImport + `
     export function consumerProject(){throw Error('FIXTURE_CONSUMER_NOT_EXPECTED');}
     export function assertNoLeaks(text,secrets){state.scans.push(secrets.length);}
@@ -62,13 +62,14 @@ async function fixture(mode = 'passed', temporaryParent = os.tmpdir()) {
     import {mkdir,rmdir,writeFile} from 'node:fs/promises';
     import path from 'node:path';
     export async function startOwnedAndroid(options){state.events.push('device-start');
-      if(['factory-cleanup-failed','factory-cleanup-diagnostics-failed','factory-cleanup-status-failed'].includes(state.mode)){
+      if(['factory-cleanup-failed','factory-cleanup-diagnostics-failed','factory-cleanup-status-failed','factory-ownership-cleanup-failed','factory-ownership-cleanup-diagnostics-failed'].includes(state.mode)){
         await mkdir(options.outputDir,{recursive:true});
         await writeFile(path.join(options.outputDir,'android-device-recovery.json'),JSON.stringify({status:'manual-inspection-required',retainedOwnedState:true}));
         if(state.mode==='factory-cleanup-status-failed')await mkdir(path.join(path.dirname(options.outputDir),'cleanup-status.json'));
         const error=Error('ANDROID_DEVICE_CLEANUP_UNCONFIRMED');
+        if(state.mode.startsWith('factory-ownership-'))Object.defineProperty(error,'ownershipFailure',{value:{gate:'marker'}});
         Object.defineProperty(error,'capturedText',{value:()=>{
-          if(state.mode==='factory-cleanup-diagnostics-failed')throw Error('private-diagnostics-canary');
+          if(state.mode==='factory-cleanup-diagnostics-failed'||state.mode==='factory-ownership-cleanup-diagnostics-failed')throw Error('private-diagnostics-canary');
           return 'private-factory-preauth-canary';}});throw error;
       }
       return {
@@ -365,4 +366,32 @@ test('actual controller main writes only fixed failure evidence and keeps consum
       else assert.equal(await readFile(path.join(owned.root,'consumer-disposed'),'utf8'),'disposed');
     }finally{await owned.close();}
   }
+});
+
+
+test('fresh ownership fact survives factory and controller cleanup wrapping without permitting credentials or disposal',async()=>{
+  for(const mode of ['factory-ownership-cleanup-failed','factory-ownership-cleanup-diagnostics-failed']){
+    const owned=await fixture(mode);
+    try{
+      let failure;await assert.rejects(owned.run(),error=>{failure=error;return error.message==='ANDROID_PROOF_CLEANUP_INCOMPLETE'&&error.preserveConsumer===true;});
+      const summary=await publicAndroidFailure({output:owned.outputDir,stage:'cleanup',error:failure});
+      assert.deepEqual(summary.ownershipFailure,{gate:'marker'});assert.equal(summary.code,'ANDROID_PROOF_CLEANUP_INCOMPLETE');
+      assert.deepEqual(summary.originalFailure,{stage:'owned-device-start',code:'ANDROID_DEVICE_CLEANUP_UNCONFIRMED'});
+      assert.equal(owned.state.accounts,0);assert.equal(owned.state.broker,0);assert.equal(owned.state.seeds,0);
+      assert.equal(owned.state.deviceCloses,0);assert.equal(owned.state.driverCloses,0);assert.equal(owned.state.workers.length,0);
+      assert.deepEqual(JSON.parse(await readFile(path.join(owned.outputDir,'device/android-device-recovery.json'),'utf8')),{status:'manual-inspection-required',retainedOwnedState:true});
+      await assert.rejects(readFile(path.join(owned.outputDir,'receipt.json')),{code:'ENOENT'});
+    }finally{await owned.close();}
+  }
+});
+
+test('actual main preserves consumer and fixed ownership fact after no-handle factory cleanup uncertainty',async()=>{
+  const owned=await fixture('factory-ownership-cleanup-failed');
+  try{
+    const result=await owned.runMain();assert.equal(result.code,1);
+    const summary=JSON.parse(await readFile(path.join(owned.outputDir,'public-failure.json'),'utf8'));
+    assert.deepEqual(summary.ownershipFailure,{gate:'marker'});assert.equal(summary.code,'ANDROID_PROOF_CLEANUP_INCOMPLETE');
+    await assert.rejects(readFile(path.join(owned.root,'consumer-disposed')),{code:'ENOENT'});
+    await assert.rejects(readFile(path.join(owned.outputDir,'readiness.json')),{code:'ENOENT'});
+  }finally{await owned.close();}
 });
