@@ -164,6 +164,47 @@ does not establish that path is absent. Inspect it before recovery or removal.
 
 ## Integrating a real application next
 
+### Browser lifecycle candidate
+
+The separate source-only browser controller is **not yet accepted by a real browser
+run**. Its contract tests do not start Docker, a broker, Chromium or a provider.
+After review, the real proof requires the same private parent, pinned local tools,
+Docker and isolated native store described above, plus the consumer's Playwright
+1.64.0 Chromium executable already installed. It never downloads a browser during
+the proof. From a built checkout, use a new output directory:
+
+```powershell
+npm.cmd run proof:account-provisioning:browser -- --tools-root "$proofParent/tools" --output-dir "$proofParent/browser-proof"
+```
+
+This candidate covers only the synthetic local Supabase **form-post** app. It creates
+Editor and Reviewer accounts through the local controller and transfers their
+sessions through the installed broker's unmodified Playwright fixture. The browser
+receives the existing opaque HttpOnly app cookie; passwords and provider JWTs remain
+outside browser code. Fixed DOM controls exercise both allowed and denied roles,
+an Editor-owned database record, and rejection in the original contexts after account
+revocation while the same app is live. The record is deleted and independently
+checked before revocation. Original cookies must remain present and unchanged.
+
+Positive, deliberately failed-after-persistence and corrected runs use unchanged
+plan/spec/helper bytes. They create six accounts total, within the unchanged target
+quota, in a fresh stack separate from the existing ten-attempt abuse proof. Only
+the specifically located injected assertion is an expected failure; timeout, missing
+cleanup, fixture teardown or another assertion failure cannot substitute for it.
+
+The parent owns a loopback Playwright BrowserServer and its retained process handle.
+A settled runner does not prove that browser stopped. Its close acknowledgement and
+retained process closure are required before vault/files disposal; this is not an
+independent claim that every descendant or listener is absent. The private WebSocket
+endpoint is a browser-control credential and is removed from private configuration
+before the credential scans. Screenshots, video, tracing and raw error reporting
+remain disabled. A final application request drain precedes fallback data deletion.
+Unknown runner/browser/request outcomes preserve backend data, native homes and
+consumer recovery instead of deleting uncertain state or publishing a passing receipt.
+
+No existing-app installer, NextAuth browser acceptance, agent-authored test acceptance,
+CLI/MCP account-creation tool or native-provider bridge is established by this candidate.
+
 Keep creation in a reviewed local app-owned adapter, behind the trusted controller.
 Give it an explicit disposable auth/database target, fixed tenant/roles, immutable
 ownership and provider-side bounds. Use the app's real authentication/session path

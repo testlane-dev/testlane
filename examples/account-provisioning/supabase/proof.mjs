@@ -24,6 +24,7 @@ const FILES = ['examples/account-provisioning/contracts.mjs', 'examples/account-
   'examples/account-provisioning/app.mjs', 'examples/account-provisioning/proof.mjs', 'examples/account-provisioning/proof-finalization.mjs',
   'examples/account-provisioning/supabase/app.mjs', 'examples/account-provisioning/supabase/runtime.mjs',
   'examples/account-provisioning/supabase/request-drain.mjs',
+  'examples/account-provisioning/supabase/browser-fixture.mjs',
   'examples/account-provisioning/supabase/authority.mjs', 'examples/account-provisioning/supabase/nextauth-app.mjs',
   'examples/account-provisioning/supabase/ledger.sql', 'examples/account-provisioning/supabase/proof.mjs',
   'examples/account-provisioning/supabase/tools/package.json', 'examples/account-provisioning/supabase/tools/package-lock.json',

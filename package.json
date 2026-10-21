@@ -107,6 +107,7 @@
     "test:account-provisioning": "node --test examples/account-provisioning/tests/*.test.mjs examples/account-provisioning/supabase/tests/*.test.mjs",
     "proof:account-provisioning": "node examples/account-provisioning/proof.mjs",
     "proof:account-provisioning:supabase": "node examples/account-provisioning/supabase/proof.mjs",
+    "proof:account-provisioning:browser": "node examples/account-provisioning/supabase/browser-proof.mjs",
     "dev": "tsx src/cli.ts",
     "check": "npm run typecheck && npm run test",
     "export:public": "node scripts/export-public.mjs",
