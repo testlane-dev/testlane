@@ -164,11 +164,27 @@ does not establish that path is absent. Inspect it before recovery or removal.
 
 ## Integrating a real application next
 
-### Browser lifecycle candidate
+### Browser lifecycle acceptance
 
-The separate source-only browser controller is **not yet accepted by a real browser
-run**. Its contract tests do not start Docker, a broker, Chromium or a provider.
-After review, the real proof requires the same private parent, pinned local tools,
+The source-only local Supabase **form-post** browser proof passed at
+`ded1019466962335b131f6a893062ebb01de1a5d`
+([sanitized evidence](../../../docs/verification/provisioning-2026-10-21/supabase-browser.public.json)).
+The positive case passed, the deliberate post-persistence assertion failed, then the
+corrected case passed. Each phase made one attempt and completed required cleanup.
+The 138 observed `expect` steps include one intended failure; they are not 138 passes.
+
+This is a prewritten synthetic test using newly created Editor and Reviewer accounts
+and the installed broker's unchanged Playwright fixture. The original contexts kept
+their cookies while protected requests returned 401 and the UI cleared identity and
+records after revocation, with the same app still live. Producer checks cover owned
+record/account and native-store cleanup and credential scans. A separate review
+checked the three retained sanitized reports plus scoped resource/private-directory
+absence; it did not rerun DB, vault or browser checks. Private receipt, plan and
+installed-payload digests are cross-references or producer observations, not public
+rehashes of those omitted bytes.
+
+Its source-only contract tests do not start Docker, a broker, Chromium or a provider.
+Reproducing the real proof requires the same private parent, pinned local tools,
 Docker and isolated native store described above. Install the matching browser
 explicitly from the repository root before the proof:
 
@@ -187,7 +203,7 @@ output directory:
 npm.cmd run proof:account-provisioning:browser -- --tools-root "$proofParent/tools" --output-dir "$proofParent/browser-proof"
 ```
 
-This candidate covers only the synthetic local Supabase **form-post** app. It creates
+This proof covers only the synthetic local Supabase **form-post** app. It creates
 Editor and Reviewer accounts through the local controller and transfers their
 sessions through the installed broker's unmodified Playwright fixture. The browser
 receives the existing opaque HttpOnly app cookie; passwords and provider JWTs remain
@@ -219,7 +235,7 @@ Unknown runner/browser/request outcomes preserve backend data, native homes and
 consumer recovery instead of deleting uncertain state or publishing a passing receipt.
 
 No existing-app installer, NextAuth browser acceptance, agent-authored test acceptance,
-CLI/MCP account-creation tool or native-provider bridge is established by this candidate.
+CLI/MCP account-creation tool or native-provider bridge is established by this proof.
 
 Keep creation in a reviewed local app-owned adapter, behind the trusted controller.
 Give it an explicit disposable auth/database target, fixed tenant/roles, immutable
