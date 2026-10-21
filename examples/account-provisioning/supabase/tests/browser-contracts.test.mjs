@@ -101,7 +101,7 @@ async function finalizationFixture({unknown=false,drainFailure=false,writeFailur
   const body=controller.slice(start,end).replace(/\n  }\s*$/,'');
   const value={stage:'browser-lifecycle-p0',output,path,assert,canonical:JSON.stringify,at:()=>{},activeRunner:undefined,activeAbort:undefined,browser:undefined,
     terminationConfirmed:!unknown,accountCleanupConfirmed:false,handles:[{}],attempted:new Set(['owned-profile']),providerSessions:new Map([['0Editor',{accessToken:randomBytes(32).toString('base64url'),user:{id:randomUUID()}}]]),
-    credentials:[],endpoints:[],captured:'',failure:Error('fixed failure'),cleanupFailures:new Set(),
+    credentials:[],endpoints:[],captured:'',failure:Error('fixed failure'),cleanupFailures:new Set(),causeCode:undefined,retainCause:()=>{},
     issue:code=>{cleanupFailed=true;value.cleanupFailed=true;value.cleanupFailures.add(code);},cleanupFailed:false,
     app:{issuedSessionTokens:()=>[],stopAndDrainRequests:async()=>{events.push('drain-start');if(drainGate)await drainGate;if(drainFailure)throw Error('fixed drain failure');events.push('drain-settled');},close:async()=>{events.push('app-close');}},
     runtime:{rest:async()=>{events.push('record-read');return {status:200,body:[]};},summary:async()=>{events.push('summary');return {ownedAccounts:0,activeReservations:0,pendingDeliveries:0,proofRecords:0};},

@@ -34,6 +34,24 @@ const fail=code=>Object.assign(new Error(code),{code});
 const ID=/^[a-f0-9]{64}$/,token=value=>typeof value==='string'&&value.length>0&&value.length<=16384&&!/[\r\n\0]/.test(value);
 const safePassword=value=>typeof value==='string'&&/^[A-Za-z0-9_-]{32,128}$/.test(value);
 const CONTAINER_FORMAT='{"id":{{json .Id}},"imageId":{{json .Image}},"imageRef":{{json .Config.Image}},"labels":{{json .Config.Labels}},"running":{{json .State.Running}},"exitCode":{{json .State.ExitCode}},"mounts":{{json .Mounts}},"ports":{{json .NetworkSettings.Ports}},"portBindings":{{json .HostConfig.PortBindings}},"networks":{{json .NetworkSettings.Networks}},"user":{{json .Config.User}},"privileged":{{json .HostConfig.Privileged}},"readOnlyRoot":{{json .HostConfig.ReadonlyRootfs}},"capDrop":{{json .HostConfig.CapDrop}},"securityOpt":{{json .HostConfig.SecurityOpt}},"sysctls":{{json (index .HostConfig "Sysctls")}}}';
+/** Retention only: callers still execute and validate every fresh inspection. */
+export function createSupabaseCapture(){
+  const pieces=[],seen=new Set();let bytes=0,incomplete=false;
+  return Object.freeze({
+    retain(args,result,ownedInspections){
+      if(incomplete)return;
+      let inspection=result.code===0&&result.stderr===''&&ownedInspections.some(expected=>
+        expected.length===args.length&&expected.every((value,index)=>typeof value==='string'&&value===args[index]));
+      if(inspection)try{const value=JSON.parse(result.stdout);inspection=value!==null&&typeof value==='object'&&!Array.isArray(value);}catch{inspection=false;}
+      if(inspection&&seen.has(result.stdout))return;
+      const piece=result.stdout+result.stderr,size=Buffer.byteLength(piece);
+      if(bytes+size>2*1024*1024){incomplete=true;return;}
+      if(piece){pieces.push(piece);bytes+=size;if(inspection)seen.add(result.stdout);}
+    },
+    assertComplete(){if(incomplete)throw fail('SUPABASE_CAPTURE_LIMIT');},
+    incomplete:()=>incomplete,text:()=>pieces.join(''),byteLength:()=>bytes,
+  });
+}
 export function privateSubnetAddresses(subnet){
   if(typeof subnet!=='string'||!/^\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}$/.test(subnet))throw fail('SUPABASE_NETWORK_REFUSED');
   const [address,prefix]=subnet.split('/'),octets=address.split('.').map(Number),bits=Number(prefix);
@@ -109,15 +127,25 @@ export async function startOwnedSupabase({outputDir,toolsRoot,signal,onStage=()=
   const resources={network:null,gatewayNetwork:null,volume:false,database:null,auth:null,rest:null,gateway:null},attempted=new Set(),files=new Set(['.gitignore','owner.json']);
   const secrets=new Set(),secret=()=>{const value=randomBytes(32).toString('base64url');secrets.add(value);return value;};
   const password=secret(),jwtSecret=secret(),controlPassword=secret();
-  const issued=new Set(),imageIds={};let captured='',pool,authOrigin,restOrigin,controlId,closed=false,closing=false,closeResult,unknownChild=false,ready=false,createRequests=0,startDiagnostic,backendIps,gatewayPorts;
+  const issued=new Set(),imageIds={},capture=createSupabaseCapture();let pool,authOrigin,restOrigin,controlId,closed=false,closing=false,closeResult,unknownChild=false,ready=false,createRequests=0,startDiagnostic,backendIps,gatewayPorts;
   const env={...process.env,DEBUG:'',NODE_DEBUG:'',DOCKER_CLI_HINTS:'false'};delete env.NODE_OPTIONS;
   const live=()=>{if(closed||closing)throw fail('SUPABASE_RUNTIME_CLOSED');};
   const marker=()=>({schemaVersion:1,nonce,targetId,ownerPid:process.pid,context:docker.context,names,resources});
   const durable=()=>writeFile(markerFile,JSON.stringify(marker(),null,2)+'\n',{mode:0o600});
-  async function command(args,{timeoutMs=30000,acceptFailure=false}={}) {
+  async function command(args,{timeoutMs=30000,acceptFailure=false,teardown=false}={}) {
     try{
+      if(typeof teardown!=='boolean'||teardown&&!closing)throw fail('SUPABASE_OWNERSHIP_REFUSED');
+      // This call's mode cannot change while its retained child is awaited.
+      if(!teardown)capture.assertComplete();
       const result=await runOwnedCommand('docker',['--context',docker.context,...args],{cwd:root,env,timeoutMs,signal:!ready&&!closing?signal:undefined});
-      captured+=result.stdout+result.stderr;if(Buffer.byteLength(captured)>2*1024*1024)throw fail('SUPABASE_CAPTURE_LIMIT');
+      const inspections=[
+        ...['network','gatewayNetwork'].map(kind=>['network','inspect',resources[kind],'--format','{{json .}}']),
+        ['volume','inspect',names.volume,'--format','{{json .Labels}}'],
+        ...['gateway','rest','auth','database'].map(kind=>['container','inspect',resources[kind]??names[kind],'--format',CONTAINER_FORMAT]),
+      ];
+      capture.retain(args,result,inspections);
+      // Overflow blocks work, but cannot prevent validated owned teardown.
+      if(!teardown)capture.assertComplete();
       if(result.code!==0&&!acceptFailure)throw fail('SUPABASE_DOCKER_COMMAND_FAILED');return result;
     }catch(error){
       const mutation=args[0]==='run'||['create','rm'].includes(args[1]);
@@ -232,6 +260,7 @@ export async function startOwnedSupabase({outputDir,toolsRoot,signal,onStage=()=
   }
   function assertNoLeaks(text) {
     if(typeof text!=='string')throw fail('SUPABASE_PRIVACY_SCAN_FAILED');
+    capture.assertComplete();
     for(const value of [...secrets,...issued])for(const variant of [value,encodeURIComponent(value),Buffer.from(value).toString('base64'),Buffer.from(value).toString('base64url')])if(text.includes(variant))throw fail('SUPABASE_PRIVACY_SCAN_FAILED');
     return true;
   }
@@ -247,6 +276,7 @@ export async function startOwnedSupabase({outputDir,toolsRoot,signal,onStage=()=
   async function close({preserveData=false}={}) {
     if(typeof preserveData!=='boolean')throw fail('SUPABASE_INPUT_REFUSED');
     if(closed)return closeResult;if(closing)throw fail('SUPABASE_CLEANUP_INCOMPLETE');closing=true;
+    const closeCommand=(args,options={})=>command(args,{...options,teardown:true});
     let refused=false;
     try{
       await assertRoot();
@@ -255,23 +285,25 @@ export async function startOwnedSupabase({outputDir,toolsRoot,signal,onStage=()=
         catch{preserveData=true;refused=true;}}
       if(pool){let timer;try{await Promise.race([pool.end(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(fail('SUPABASE_DATABASE_STOP_UNCONFIRMED')),10000);})]);pool=undefined;}finally{clearTimeout(timer);}}
       for(const kind of ['gateway','rest','auth','database'])if(attempted.has(kind)){
-        const exists=await command(['container','inspect',resources[kind]??names[kind],'--format',CONTAINER_FORMAT],{acceptFailure:true});
+        const exists=await closeCommand(['container','inspect',resources[kind]??names[kind],'--format',CONTAINER_FORMAT],{acceptFailure:true});
         if(exists.code===0){const proof=JSON.parse(exists.stdout);validateResourceProof({nonce,id:proof.id,labels:proof.labels});if(resources[kind]&&proof.id!==resources[kind])throw fail('SUPABASE_OWNERSHIP_REFUSED');
-          await command(['container','rm','--force',proof.id]);}
-        const absent=await command(['container','ls','--all','--filter','name=^/'+names[kind]+'$','--format','{{.ID}}']);
+          await closeCommand(['container','rm','--force',proof.id]);}
+        const absent=await closeCommand(['container','ls','--all','--filter','name=^/'+names[kind]+'$','--format','{{.ID}}']);
         if(absent.stdout.trim()!=='')throw fail('SUPABASE_CLEANUP_INCOMPLETE');
       }
       if(attempted.has('volume')&&!preserveData){
-        const existing=await command(['volume','inspect',names.volume,'--format','{{json .Labels}}'],{acceptFailure:true});
-        if(existing.code===0){const labels=JSON.parse(existing.stdout);if(labels?.[LABEL]!==nonce)throw fail('SUPABASE_OWNERSHIP_REFUSED');await command(['volume','rm',names.volume]);}
-        const absent=await command(['volume','ls','--filter','name='+names.volume,'--format','{{.Name}}']);if(absent.stdout.trim()!=='')throw fail('SUPABASE_CLEANUP_INCOMPLETE');
+        const existing=await closeCommand(['volume','inspect',names.volume,'--format','{{json .Labels}}'],{acceptFailure:true});
+        if(existing.code===0){const labels=JSON.parse(existing.stdout);if(labels?.[LABEL]!==nonce)throw fail('SUPABASE_OWNERSHIP_REFUSED');await closeCommand(['volume','rm',names.volume]);}
+        const absent=await closeCommand(['volume','ls','--filter','name='+names.volume,'--format','{{.Name}}']);if(absent.stdout.trim()!=='')throw fail('SUPABASE_CLEANUP_INCOMPLETE');
       }
       for(const kind of ['gatewayNetwork','network'])if(attempted.has(kind)){
-        const existing=await command(['network','inspect',resources[kind]??names[kind],'--format','{{json .}}'],{acceptFailure:true});
-        if(existing.code===0){const proof=JSON.parse(existing.stdout);validateResourceProof({nonce,id:proof.Id,labels:proof.Labels});if(Object.keys(proof.Containers??{}).length)throw fail('SUPABASE_OWNERSHIP_REFUSED');await command(['network','rm',proof.Id]);}
-        const absent=await command(['network','ls','--filter','name=^'+names[kind]+'$','--format','{{.ID}}']);if(absent.stdout.trim()!=='')throw fail('SUPABASE_CLEANUP_INCOMPLETE');
+        const existing=await closeCommand(['network','inspect',resources[kind]??names[kind],'--format','{{json .}}'],{acceptFailure:true});
+        if(existing.code===0){const proof=JSON.parse(existing.stdout);validateResourceProof({nonce,id:proof.Id,labels:proof.Labels});if(Object.keys(proof.Containers??{}).length)throw fail('SUPABASE_OWNERSHIP_REFUSED');await closeCommand(['network','rm',proof.Id]);}
+        const absent=await closeCommand(['network','ls','--filter','name=^'+names[kind]+'$','--format','{{.ID}}']);if(absent.stdout.trim()!=='')throw fail('SUPABASE_CLEANUP_INCOMPLETE');
       }
       if(unknownChild)throw fail('SUPABASE_CLEANUP_INCOMPLETE');await assertRoot();
+      // Never remove the recovery root or report passing cleanup after lost capture.
+      capture.assertComplete();
       if(preserveData){await writeFile(path.join(root,'recovery.json'),JSON.stringify({...marker(),status:'data-preserved'})+'\n',{mode:0o600});
         closed=true;closeResult={cleanupVerified:false,preserved:true};if(refused)throw fail('SUPABASE_CLEANUP_INCOMPLETE');return closeResult;}
       const entries=await readdir(root);if(entries.some(file=>!files.has(file)))throw fail('SUPABASE_CLEANUP_INCOMPLETE');
@@ -279,7 +311,9 @@ export async function startOwnedSupabase({outputDir,toolsRoot,signal,onStage=()=
       for(const file of entries)await unlink(path.join(root,file));await rmdir(root);
       if(await lstat(root).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;}))throw fail('SUPABASE_CLEANUP_INCOMPLETE');
       closed=true;closeResult={cleanupVerified:true};return closeResult;
-    }catch{await writeFile(path.join(root,'recovery.json'),JSON.stringify({...marker(),status:'cleanup-incomplete'})+'\n',{mode:0o600}).catch(()=>{});throw fail('SUPABASE_CLEANUP_INCOMPLETE');}
+    }catch{const causeCode=capture.incomplete()?'SUPABASE_CAPTURE_LIMIT':undefined;
+      await writeFile(path.join(root,'recovery.json'),JSON.stringify({...marker(),status:'cleanup-incomplete',...(causeCode?{causeCode}:{})})+'\n',{mode:0o600}).catch(()=>{});
+      throw Object.assign(fail('SUPABASE_CLEANUP_INCOMPLETE'),causeCode?{causeCode}:{});}
   }
   try{
     await writeFile(path.join(root,'.gitignore'),'*\n',{flag:'wx',mode:0o600});await durable();
@@ -359,11 +393,11 @@ export async function startOwnedSupabase({outputDir,toolsRoot,signal,onStage=()=
         try{const response=await jsonRequest(restOrigin,method,route,body,accessToken,method==='POST'&&route==='/proof_records');return {status:response.status,
           body:response.status<400?response.body:response.body?.code==='42501'?{code:'42501'}:null};}catch(error){throw fail(/^SUPABASE_[A-Z_]+$/.test(error.code??'')?error.code:'SUPABASE_REST_REQUEST_FAILED');}},
       async summary(){await assertOwned();return summaryCounts();},
-      requestCounts:()=>({authCreate:createRequests}),assertNoLeaks,capturedText:()=>captured,close,
+      requestCounts:()=>({authCreate:createRequests}),assertNoLeaks,capturedText:()=>capture.text(),close,
     });
     registered.add(runtime);at('ready');return runtime;
   }catch(error){
     let code=/^SUPABASE_[A-Z_]+$/.test(error.code??'')?error.code:'SUPABASE_RUNTIME_START_FAILED';try{await close();}catch{code='SUPABASE_CLEANUP_INCOMPLETE';}
-    const failure=fail(code);Object.defineProperty(failure,'capturedText',{value:()=>captured});Object.defineProperty(failure,'recoveryRoot',{value:root});failure.stage=stage;if(startDiagnostic)failure.diagnostic=startDiagnostic;throw failure;
+    const failure=fail(code);if(capture.incomplete())failure.causeCode='SUPABASE_CAPTURE_LIMIT';Object.defineProperty(failure,'capturedText',{value:()=>capture.text()});Object.defineProperty(failure,'recoveryRoot',{value:root});failure.stage=stage;if(startDiagnostic)failure.diagnostic=startDiagnostic;throw failure;
   }
 }

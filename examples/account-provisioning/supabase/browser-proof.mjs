@@ -7,6 +7,7 @@ import { lstat, readFile, readdir, realpath, rm, unlink, writeFile } from 'node:
 import { setTimeout as pause } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { types } from 'node:util';
 import { consumerProject, assertNoLeaks } from '../../playwright/tests/consumer.mjs';
 import { createRealBrokerHarness, realBrokerSupport } from '../../workflows/test-support/real-broker.mjs';
 import { runDemoChild } from '../../verification-demo/native.mjs';
@@ -24,6 +25,17 @@ import { startOwnedBrowserServer } from './browser-server.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)), REPO = path.resolve(HERE, '..', '..', '..');
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+const FIXED_BROWSER_CAUSES = new Set(['SUPABASE_CAPTURE_LIMIT','SUPABASE_COMMAND_STOP_UNCONFIRMED','SUPABASE_COMMAND_TIMEOUT',
+  'SUPABASE_COMMAND_OUTPUT_LIMIT','SUPABASE_CANCELLED','SUPABASE_OWNERSHIP_REFUSED','SUPABASE_IMAGE_PREREQUISITE_FAILED',
+  'SUPABASE_NETWORK_REFUSED','SUPABASE_PORT_REFUSED','SUPABASE_GATEWAY_POLICY_REFUSED']);
+function fixedBrowserCause(error) {
+  if (!error || types.isProxy(error) || !types.isNativeError(error)) return undefined;
+  for (const key of ['causeCode','code']) {
+    const field = Object.getOwnPropertyDescriptor(error,key);
+    if (field && Object.hasOwn(field,'value') && typeof field.value === 'string' && FIXED_BROWSER_CAUSES.has(field.value)) return field.value;
+  }
+  return undefined;
+}
 const FILES = ['examples/account-provisioning/contracts.mjs', 'examples/account-provisioning/controller.mjs',
   'examples/account-provisioning/app.mjs', 'examples/account-provisioning/proof.mjs', 'examples/account-provisioning/proof-finalization.mjs',
   ...['app.mjs','authority.mjs','runtime.mjs','request-drain.mjs','nextauth-app.mjs','ledger.sql','proof.mjs','browser-proof.mjs',
@@ -74,7 +86,8 @@ export async function runSupabaseBrowserProof({ toolsRoot, outputDir, signal, on
   const credentials = [], endpoints = [], attempted = new Set(), handles = [], providerSessions = new Map(), runs = [];
   const cleanupFailures = new Set(); let cleanupFailed = false, terminationConfirmed = true, accountCleanupConfirmed = false;
   let runtime, app, manager, consumer, harness, env, before, receipt, failure, sessionRoot, scratchRoot, browserRoot, browser, activeRunner, activeAbort;
-  let captured = '', stage = 'setup', restore = () => {};
+  let captured = '', stage = 'setup', causeCode, restore = () => {};
+  const retainCause = error => { causeCode ??= fixedBrowserCause(error); };
   const at = value => { stage = value; onStage(value); };
   const issue = code => { cleanupFailed = true; cleanupFailures.add(code); };
   const execute = async (args, options = {}) => {
@@ -192,7 +205,7 @@ export async function runSupabaseBrowserProof({ toolsRoot, outputDir, signal, on
       nativeStore: support.store, provider: runtime.metadata, browser: 'Chromium via consumer-installed Playwright 1.64.0',
       planSha256, specSha256, copiedHashes, runs, controllerRoutesExposed: false, providerTokensDeliveredToBrowser: false,
       ownedAccountsRemaining: 0, foreignControlUnchanged: true, cleanupVerified: false, credentialLeakScanPassed: false };
-  } catch (error) { if (error?.preserveConsumer === true) terminationConfirmed = false; failure = error; }
+  } catch (error) { retainCause(error); if (error?.preserveConsumer === true) terminationConfirmed = false; failure = error; }
   finally {
     const failedStage = stage; at('cleanup');
     if (activeRunner) { activeAbort?.abort(); await activeRunner; activeRunner = undefined; }
@@ -221,10 +234,10 @@ export async function runSupabaseBrowserProof({ toolsRoot, outputDir, signal, on
     const material=credentials.map(value=>value.password).concat(endpoints,app?.issuedSessionTokens()??[]);
     try { await app?.close(); } catch { issue('application-close'); }
     try { const result=await runtime?.close({preserveData:!accountCleanupConfirmed||!terminationConfirmed});
-      if(runtime&&result?.cleanupVerified!==true)issue('provider-close'); } catch { issue('provider-close'); }
+      if(runtime&&result?.cleanupVerified!==true)issue('provider-close'); } catch (error) { retainCause(error); issue('provider-close'); }
     try { if(consumer&&(await readdir(consumer.sessionTemp)).length)issue('session-file-absence');if(sessionRoot&&(await readdir(sessionRoot)).length)issue('session-file-absence');
       const retained=captured+(runtime?.capturedText()??'')+await textTree(output)+(harness?await textTree(harness.root):'')+(consumer?await textTree(consumer.e2e):'');
-      assertNoLeaks(retained,material);runtime?.assertNoLeaks(retained); } catch { issue('retained-artifact-scan'); }
+      assertNoLeaks(retained,material);runtime?.assertNoLeaks(retained); } catch (error) { retainCause(error); issue('retained-artifact-scan'); }
     if(!cleanupFailed){try{await harness?.dispose();}catch{issue('native-home-disposal');}if(!cleanupFailed)try{await consumer?.dispose();}catch{issue('consumer-disposal');}}
     if(!cleanupFailed&&browserRoot)try{
       assert.equal(await realpath(browserRoot),browserRoot);assert.equal(path.dirname(browserRoot),output);assert.equal(path.basename(browserRoot),'browser');
@@ -235,8 +248,8 @@ export async function runSupabaseBrowserProof({ toolsRoot, outputDir, signal, on
     if(cleanupFailed){const error=Object.assign(Error('SUPABASE_BROWSER_CLEANUP_INCOMPLETE'),{preserveConsumer:true});
       await writeFile(path.join(output,'recovery.json'),canonical({schemaVersion:1,status:'manual-inspection-required',stage:failedStage,
         nativeHome:harness?.root??null,consumerRoot:consumer?.root??null,childTerminationConfirmed:terminationConfirmed,accountCleanupConfirmed,
-        attemptedProfiles:[...attempted],cleanupFailures:[...cleanupFailures].sort()})+'\n',{flag:'wx',mode:0o600}).catch(()=>{});throw error;}
-    if(failure)await writeFile(path.join(output,'failure.json'),canonical({schemaVersion:1,stage:failedStage,code:'SUPABASE_BROWSER_PROOF_FAILED',cleanupVerified:true})+'\n',{flag:'wx',mode:0o600});
+        attemptedProfiles:[...attempted],cleanupFailures:[...cleanupFailures].sort(),...(causeCode?{causeCode}:{})})+'\n',{flag:'wx',mode:0o600}).catch(()=>{});throw error;}
+    if(failure)await writeFile(path.join(output,'failure.json'),canonical({schemaVersion:1,stage:failedStage,code:'SUPABASE_BROWSER_PROOF_FAILED',cleanupVerified:true,...(causeCode?{causeCode}:{})})+'\n',{flag:'wx',mode:0o600});
   }
   if(failure)throw Error('SUPABASE_BROWSER_PROOF_FAILED');
   receipt.cleanupVerified=true;receipt.credentialLeakScanPassed=true;
