@@ -15,7 +15,7 @@ async function records(report=true){const response=await request('/api/records',
 function bind(id,run){element(id).addEventListener('click',()=>{run().catch(()=>{element('operation-status').textContent='REQUEST_FAILED';});});}
 bind('refresh-identity',()=>identity());bind('refresh-records',()=>records());
 bind('check-editor',()=>request('/api/editor-only'));bind('check-reviewer',()=>request('/api/reviewer-only'));
-bind('create-record',async()=>{const response=await request('/api/records',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:'synthetic'})});if(response.status===201)await records(false);});
+bind('create-record',async()=>{const response=await request('/api/records',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:'synthetic'})});if(response.status===201){await response.json();await records(false);}});
 identity(false).then(()=>records(false)).catch(()=>{element('operation-status').textContent='REQUEST_FAILED';});`;
 
 export function browserAsset(route) {
