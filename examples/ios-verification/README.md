@@ -102,7 +102,23 @@ session. This optional diagnostic scrolls to eight fixed synthetic controls,
 focuses the quantity input without typing, checks keyboard dismissal and restores
 the session-status control. Failure blocks account and broker setup. Its
 `preauth-controls.json` contains only fixed control IDs, step categories, completion
-booleans and allowlisted error codes. Session-deletion acknowledgement does not
+booleans and allowlisted error codes/request categories. A failed step may also
+retain one immutable `requestProgress` snapshot from a settled, confirmed owner
+followed by an HTTP or response failure. Its six fields are `ownershipElapsedMs`,
+`effectiveHttpBudgetMs`, `httpBodyElapsedMs`, `budgetSource`, `fetchInvoked` and
+`responseHeadersObserved`. The two elapsed stages partition request elapsed time
+at HTTP-phase entry. Milliseconds remain finite, bounded and fractional so an
+early timer is not rounded into an observed deadline expiry. Effective allowance
+and source are captured when the HTTP deadline is selected, not inferred from
+the eventual error. `budgetSource` is `http-body`, `caller-outer` or
+`request-total`; exact ties select the caller bound, then the total bound, and
+do not identify a unique cause. Dispatch means the client actually invoked fetch;
+headers means its awaited fetch returned a response before the snapshot. Neither
+flag establishes wire receipt, remote settlement or a cause. Pending ownership
+adds no such snapshot, and late callbacks cannot change a frozen failure fact.
+These fields add no routes, values, IDs, raw errors or logs; case reports and the
+top-level public failure's existing request facts are unchanged.
+Session-deletion acknowledgement does not
 establish final device cleanup or replace the required business-case outcomes.
 
 The equivalent commands below belong in that opted-in ephemeral hosted job, from

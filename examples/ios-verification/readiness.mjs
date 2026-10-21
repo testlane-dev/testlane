@@ -2,17 +2,17 @@
 import { IOS_DEVICE_SCOPE, validateIosDeviceBinding } from './device-scope.mjs';
 import { NATIVE_DRIVER_FAILURE_CODES } from '../android-verification/contracts.mjs';
 import { probeIosPreauthControls } from './preauth-controls.mjs';
-import { NativeDriverError, readIosRequestFailure } from './driver.mjs';
+import { NativeDriverError, readIosRequestFailure, readIosRequestProgress } from './driver.mjs';
 import { types } from 'node:util';
 
 const codes = new Set([...NATIVE_DRIVER_FAILURE_CODES, 'NATIVE_DRIVER_CANCELLED']);
-const fail = (code, request) => new NativeDriverError(code, request);
+const fail = (code, request, progress) => new NativeDriverError(code, request, progress);
 function fixedFailure(error) {
   if (error !== null && typeof error === 'object' && !types.isProxy(error) && types.isNativeError(error)) {
     try {
       const code = Object.getOwnPropertyDescriptor(error, 'code');
       if (Object.getPrototypeOf(error) === NativeDriverError.prototype && code && Object.hasOwn(code, 'value') &&
-          typeof code.value === 'string' && codes.has(code.value)) return fail(code.value, readIosRequestFailure(error));
+          typeof code.value === 'string' && codes.has(code.value)) return fail(code.value, readIosRequestFailure(error), readIosRequestProgress(error));
     } catch { /* Getters, proxies and arbitrary error data never become facts. */ }
   }
   return fail('NATIVE_DRIVER_COMMAND_FAILED');

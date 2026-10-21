@@ -1,12 +1,12 @@
 /** Optional fixed synthetic-control discriminator before any account or backend. */
 import { types } from 'node:util';
-import { NativeDriverError, readIosRequestFailure } from './driver.mjs';
+import { NativeDriverError, readIosRequestFailure, readIosRequestProgress } from './driver.mjs';
 import { NATIVE_DRIVER_FAILURE_CODES } from '../android-verification/contracts.mjs';
 
 const codes = new Set([...NATIVE_DRIVER_FAILURE_CODES, 'NATIVE_DRIVER_CANCELLED']);
 const visibility = Object.freeze(['run-marker', 'quantity', 'unit-price', 'create-request',
   'selected-id', 'load-request', 'approve-request', 'anonymous-check']);
-const fail = (code, request) => new NativeDriverError(code, request);
+const fail = (code, request, progress) => new NativeDriverError(code, request, progress);
 function fixedCode(error) {
   if (error === null || typeof error !== 'object' || types.isProxy(error) || !types.isNativeError(error)) return undefined;
   try {
@@ -28,8 +28,9 @@ export async function probeIosPreauthControls({ driver, signal, onStep = () => {
       const trustedCode = fixedCode(error);
       const code = signal?.aborted ? 'NATIVE_DRIVER_CANCELLED' : trustedCode ?? 'NATIVE_DRIVER_COMMAND_FAILED';
       const request = trustedCode ? readIosRequestFailure(error) : undefined;
-      onStep(Object.freeze({ controlId, step: kind, completed: false, code, ...(request ? { request } : {}) }));
-      throw fail(code, request);
+      const requestProgress = trustedCode ? readIosRequestProgress(error) : undefined;
+      onStep(Object.freeze({ controlId, step: kind, completed: false, code, ...(request ? { request } : {}), ...(requestProgress ? { requestProgress } : {}) }));
+      throw fail(code, request, requestProgress);
     }
     onStep(Object.freeze({ controlId, step: kind, completed: true }));
   }

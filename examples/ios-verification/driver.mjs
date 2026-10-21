@@ -18,7 +18,7 @@ function requestOperation(method, route) {
     'POST value': 'type', 'GET text': 'text-read', 'GET attribute/value': 'value-read' })[method + ' ' + element] ?? 'unclassified';
 }
 export class NativeDriverError extends Error {
-  constructor(code, requestFact) { super(code); this.name = 'NativeDriverError'; this.code = code; retainRequestFact(this, requestFact); }
+  constructor(code, requestFact, requestProgress) { super(code); this.name = 'NativeDriverError'; this.code = code; retainRequestFact(this, requestFact); retainRequestProgress(this, requestProgress); }
 }
 function retainRequestFact(error, fact) {
   const safe = normalizeIosRequestFact(fact);
@@ -35,7 +35,34 @@ export function readIosRequestFailure(error) {
     return descriptor && Object.hasOwn(descriptor, 'value') ? normalizeIosRequestFact(descriptor.value) : undefined;
   } catch { return undefined; }
 }
-const fail = (code, requestFact) => new NativeDriverError(code, requestFact);
+function normalizeRequestProgress(value) {
+  const names = ['ownershipElapsedMs', 'effectiveHttpBudgetMs', 'httpBodyElapsedMs', 'budgetSource', 'fetchInvoked', 'responseHeadersObserved'];
+  if (!value || typeof value !== 'object' || types.isProxy(value)) return;
+  try {
+    if (Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertyNames(value).length !== names.length || Object.getOwnPropertySymbols(value).length) return;
+    const data = {};
+    for (const name of names) { const property = Object.getOwnPropertyDescriptor(value, name); if (!property || !Object.hasOwn(property, 'value')) return; data[name] = property.value; }
+    if (!['ownershipElapsedMs', 'effectiveHttpBudgetMs', 'httpBodyElapsedMs'].every(name => typeof data[name] === 'number' && Number.isFinite(data[name]) && data[name] >= 0 && data[name] <= 3_600_000) ||
+      data.effectiveHttpBudgetMs > 240_000 || !['http-body', 'caller-outer', 'request-total'].includes(data.budgetSource) ||
+      typeof data.fetchInvoked !== 'boolean' || typeof data.responseHeadersObserved !== 'boolean' || (data.responseHeadersObserved && !data.fetchInvoked)) return;
+    return Object.freeze(data);
+  } catch { /* Only own primitive data becomes a progress snapshot. */ }
+}
+function retainRequestProgress(error, value) {
+  const progress = normalizeRequestProgress(value), fact = readIosRequestFailure(error);
+  if (progress && ['http', 'response'].includes(fact?.phase)) {
+    try { if (!Object.getOwnPropertyDescriptor(error, 'requestProgress')) Object.defineProperty(error, 'requestProgress', { value: progress }); } catch {}
+  }
+  return error;
+}
+export function readIosRequestProgress(error) {
+  if (!readIosRequestFailure(error)) return;
+  try {
+    const property = Object.getOwnPropertyDescriptor(error, 'requestProgress');
+    return property && Object.hasOwn(property, 'value') && ['http', 'response'].includes(readIosRequestFailure(error)?.phase) ? normalizeRequestProgress(property.value) : undefined;
+  } catch { return undefined; }
+}
+const fail = (code, requestFact, requestProgress) => new NativeDriverError(code, requestFact, requestProgress);
 const identifier = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && !/[\u0000-\u001f\u007f]/.test(value);
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
 const port = value => Number.isSafeInteger(value) && value >= 1024 && value <= 65535;
@@ -87,8 +114,9 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     const began = performance.now(), sessionCreate = operation === 'session-create';
     // Ordinary requests have two settled phases, not a shared transport timer.
     // Session creation still spends at most its original 240 seconds in total.
-    const deadline = Math.min(began + (sessionCreate ? 240_000 : 10_000), outerDeadline ?? Infinity);
+    const requestDeadline = began + (sessionCreate ? 240_000 : 10_000), deadline = Math.min(requestDeadline, outerDeadline ?? Infinity);
     let phaseDeadline = Math.min(began + 5000, deadline), timeout, timedOut = false, ownerStarted = false, ownerSettled = false;
+    let ownerAllowed = false, httpStarted, effectiveHttpBudgetMs, budgetSource, fetchInvoked = false, responseHeadersObserved = false;
     const timer = new AbortController();
     const operationSignal = AbortSignal.any([timer.signal, ownershipFence.signal, ...(requestSignal ? [requestSignal] : [])]);
     const fencePendingOwner = () => { if (ownerStarted && !ownerSettled) ownershipFence.abort(); };
@@ -114,14 +142,22 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
       }, operationSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
       checkDeadline(); clearTimeout(timeout);
       if (allowed !== true) throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED');
+      ownerAllowed = true;
       phase = 'http';
-      phaseDeadline = Math.min(performance.now() + (sessionCreate ? timeoutMs : Math.min(timeoutMs, 5000)), deadline);
+      httpStarted = performance.now();
+      phaseDeadline = Math.min(httpStarted + (sessionCreate ? timeoutMs : Math.min(timeoutMs, 5000)), deadline);
+      effectiveHttpBudgetMs = Math.max(0, phaseDeadline - httpStarted);
+      // Exact ties select caller-outer, then request-total; this identifies a
+      // limiting bound, not a uniquely established cause of expiry.
+      budgetSource = outerDeadline === phaseDeadline ? 'caller-outer' : requestDeadline === phaseDeadline ? 'request-total' : 'http-body';
       armDeadline();
       const response = await withDriverSignal(() => {
         checkDeadline(); const encoded = body === undefined ? undefined : JSON.stringify(body); checkDeadline();
+        fetchInvoked = true;
         return fetch(origin + route, { method, redirect: 'error', signal: operationSignal,
           headers: { 'Content-Type': 'application/json' }, ...(encoded === undefined ? {} : { body: encoded }) });
       }, operationSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
+      responseHeadersObserved = true;
       checkDeadline(); phase = 'response';
       const reader = response.body?.getReader(); if (!reader) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
       let length = 0; const chunks = [];
@@ -143,23 +179,26 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
       return { value: decoded.value };
     } catch (error) {
       fencePendingOwner();
-      if (requestSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED', { operation, phase });
-      if (timedOut || performance.now() >= phaseDeadline || performance.now() >= deadline) throw fail('NATIVE_DRIVER_TIMEOUT', { operation, phase });
+      const progress = failure => ownerAllowed && ownerSettled && !ownershipFence.signal.aborted && httpStarted !== undefined ?
+        retainRequestProgress(failure, { ownershipElapsedMs: httpStarted - began, effectiveHttpBudgetMs,
+          httpBodyElapsedMs: performance.now() - httpStarted, budgetSource, fetchInvoked, responseHeadersObserved }) : failure;
+      if (requestSignal?.aborted) throw progress(fail('NATIVE_DRIVER_CANCELLED', { operation, phase }));
+      if (timedOut || performance.now() >= phaseDeadline || performance.now() >= deadline) throw progress(fail('NATIVE_DRIVER_TIMEOUT', { operation, phase }));
       if (ownershipFence.signal.aborted || phase === 'ownership') throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED', { operation, phase });
-      if (error instanceof NativeDriverError) throw retainRequestFact(error, { operation, phase });
-      throw fail('NATIVE_DRIVER_COMMAND_FAILED', { operation, phase });
+      if (error instanceof NativeDriverError) throw progress(retainRequestFact(error, { operation, phase }));
+      throw progress(fail('NATIVE_DRIVER_COMMAND_FAILED', { operation, phase }));
     } finally { clearTimeout(timeout); operationSignal.removeEventListener('abort', fencePendingOwner); }
   }
   const setupDeadline = performance.now() + 240_000;
   let created;
   try { created = (await request('POST', '/session', { capabilities: { alwaysMatch: capabilities, firstMatch: [{}] } }, signal, 240_000, setupDeadline)).value; }
-  catch (error) { if (error.code === 'NATIVE_DRIVER_TIMEOUT') throw fail('NATIVE_DRIVER_SESSION_TIMEOUT', readIosRequestFailure(error)); throw error; }
+  catch (error) { if (error.code === 'NATIVE_DRIVER_TIMEOUT') throw fail('NATIVE_DRIVER_SESSION_TIMEOUT', readIosRequestFailure(error), readIosRequestProgress(error)); throw error; }
   if (!created || typeof created.sessionId !== 'string' || !/^[A-Za-z0-9-]{1,160}$/.test(created.sessionId)) throw fail('NATIVE_DRIVER_SESSION_INVALID');
   session = created.sessionId;
   const route = suffix => '/session/' + encodeURIComponent(session) + suffix;
   async function nativeContext(activeSignal = signal, timeoutMs = 5000, outerDeadline) {
     try { if ((await request('GET', route('/context'), undefined, activeSignal, timeoutMs, outerDeadline)).value !== 'NATIVE_APP') throw fail('NATIVE_DRIVER_CONTEXT_REFUSED'); }
-    catch (error) { if (error.code === 'NATIVE_DRIVER_TIMEOUT') throw fail('NATIVE_DRIVER_CONTEXT_TIMEOUT', readIosRequestFailure(error)); throw error; }
+    catch (error) { if (error.code === 'NATIVE_DRIVER_TIMEOUT') throw fail('NATIVE_DRIVER_CONTEXT_TIMEOUT', readIosRequestFailure(error), readIosRequestProgress(error)); throw error; }
   }
   try {
     const owned = await stabilizeIosSetupOwnership({ assertOwned, signal, deadline: setupDeadline });
@@ -170,7 +209,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     const remaining = setupDeadline - performance.now();
     if (remaining <= 0) { ownershipFence.abort(); throw fail('NATIVE_DRIVER_SESSION_TIMEOUT'); }
     try { await nativeContext(signal, Math.min(5000, remaining), setupDeadline); }
-    catch (error) { if (performance.now() >= setupDeadline) throw fail('NATIVE_DRIVER_SESSION_TIMEOUT'); throw error; }
+    catch (error) { if (performance.now() >= setupDeadline) throw fail('NATIVE_DRIVER_SESSION_TIMEOUT', readIosRequestFailure(error), readIosRequestProgress(error)); throw error; }
     if (performance.now() >= setupDeadline) throw fail('NATIVE_DRIVER_SESSION_TIMEOUT');
   } catch (error) {
     // A failed setup callback may still run in the parent. Never start another
@@ -241,13 +280,13 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
       }
       throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT');
     } catch (error) {
-      if (activeSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED', readIosRequestFailure(error));
-      if (performance.now() >= deadline) throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT', readIosRequestFailure(error));
+      if (activeSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED', readIosRequestFailure(error), readIosRequestProgress(error));
+      if (performance.now() >= deadline) throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT', readIosRequestFailure(error), readIosRequestProgress(error));
       throw error;
     }
   }
   const actions = {
-    async waitFor(id, activeSignal = signal) { try { await find(id, activeSignal); } catch (error) { if (['NATIVE_DRIVER_TIMEOUT', 'NATIVE_DRIVER_ELEMENT_TIMEOUT'].includes(error.code)) throw fail('NATIVE_DRIVER_READINESS_TIMEOUT', readIosRequestFailure(error)); throw error; } },
+    async waitFor(id, activeSignal = signal) { try { await find(id, activeSignal); } catch (error) { if (['NATIVE_DRIVER_TIMEOUT', 'NATIVE_DRIVER_ELEMENT_TIMEOUT'].includes(error.code)) throw fail('NATIVE_DRIVER_READINESS_TIMEOUT', readIosRequestFailure(error), readIosRequestProgress(error)); throw error; } },
     async scrollIntoView(id, activeSignal = signal) { await visible(id, activeSignal); },
     async click(id, activeSignal = signal) { const element = await visible(id, activeSignal); await request('POST', route('/element/' + encodeURIComponent(element) + '/click'), {}, activeSignal); },
     async text(id, activeSignal = signal) {

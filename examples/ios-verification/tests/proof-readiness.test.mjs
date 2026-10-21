@@ -63,6 +63,7 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
   await file('examples/ios-verification/driver.mjs', stateImport + `
     export class NativeDriverError extends Error{constructor(code){super('FIXTURE_NATIVE_FAILURE');this.code=code;}}
     export function readIosRequestFailure(){return undefined;}
+    export function readIosRequestProgress(){return undefined;}
     export async function createNativeDriver(options){state.events.push('installed-driver-create');
       state.privacy={showXcodeLog:options.capabilities['appium:showXcodeLog'],showIOSLog:options.capabilities['appium:showIOSLog'],
         skipLogCapture:options.capabilities['appium:skipLogCapture']};
