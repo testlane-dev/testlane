@@ -443,3 +443,5 @@ purchases, WebViews, device fleets or independent agent-authoring reliability.
 It adds no native MCP tool, dashboard or hosted Testlane service. Cancellation,
 setup/teardown failures and other native frameworks need their own actual trials
 before wider support claims. See the [mobile release criteria](../../docs/mobile-testing.md#release-gate).
+
+If the credential-free readiness factory rejects before returning a driver, the optional failed `preauth-controls.json` record may contain `setupFailure`: fixed code/request facts, existing numeric progress and a four-field `startupResponse` snapshot. HTTP status, observed response state, closed W3C bucket and a recognized pinned-source signature distinguish an incomplete body from a decoded rejection. They retain no response text, identifiers or paths, establish no underlying cause or cleanup authority, and do not alter successful evidence or command budgets.

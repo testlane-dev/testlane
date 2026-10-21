@@ -2,17 +2,17 @@
 import { IOS_DEVICE_SCOPE, validateIosDeviceBinding } from './device-scope.mjs';
 import { NATIVE_DRIVER_FAILURE_CODES } from '../android-verification/contracts.mjs';
 import { probeIosPreauthControls } from './preauth-controls.mjs';
-import { NativeDriverError, readIosRequestFailure, readIosRequestProgress } from './driver.mjs';
+import { NativeDriverError, readIosRequestFailure, readIosRequestProgress, readIosStartupResponse } from './driver.mjs';
 import { types } from 'node:util';
 
 const codes = new Set([...NATIVE_DRIVER_FAILURE_CODES, 'NATIVE_DRIVER_CANCELLED']);
-const fail = (code, request, progress) => new NativeDriverError(code, request, progress);
+const fail = (code, request, progress, startupResponse) => new NativeDriverError(code, request, progress, startupResponse);
 function fixedFailure(error) {
   if (error !== null && typeof error === 'object' && !types.isProxy(error) && types.isNativeError(error)) {
     try {
       const code = Object.getOwnPropertyDescriptor(error, 'code');
       if (Object.getPrototypeOf(error) === NativeDriverError.prototype && code && Object.hasOwn(code, 'value') &&
-          typeof code.value === 'string' && codes.has(code.value)) return fail(code.value, readIosRequestFailure(error), readIosRequestProgress(error));
+          typeof code.value === 'string' && codes.has(code.value)) return fail(code.value, readIosRequestFailure(error), readIosRequestProgress(error), readIosStartupResponse(error));
     } catch { /* Getters, proxies and arbitrary error data never become facts. */ }
   }
   return fail('NATIVE_DRIVER_COMMAND_FAILED');
@@ -47,11 +47,12 @@ export async function verifyInstalledIosReadiness({ createNativeDriver, driverOp
   if (typeof createNativeDriver !== 'function' || typeof assertOwned !== 'function' || appPrewarmed !== true ||
     driverOptions?.deviceBinding?.scope !== IOS_DEVICE_SCOPE || typeof preauthControls !== 'boolean' ||
     typeof onPreauthControls !== 'function') throw fail('NATIVE_DRIVER_CONFIGURATION_INVALID');
-  let driver, error, failed = false, sessionSetupMs, sessionCleanupAcknowledged = false;
+  let driver, error, failed = false, factoryRejected = false, sessionSetupMs, sessionCleanupAcknowledged = false;
   const steps = [];
   const began = performance.now();
   try {
-    driver = await createNativeDriver({ ...driverOptions, signal, assertOwned });
+    try { driver = await createNativeDriver({ ...driverOptions, signal, assertOwned }); }
+    catch (caught) { factoryRejected = true; throw caught; }
     sessionSetupMs = Math.max(0, Math.round(performance.now() - began));
     if (driver?.context !== 'NATIVE_APP') throw fail('NATIVE_DRIVER_CONTEXT_REFUSED');
     if (signal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
@@ -64,8 +65,13 @@ export async function verifyInstalledIosReadiness({ createNativeDriver, driverOp
     }
   }
   if (signal?.aborted && !failed) { error = fail('NATIVE_DRIVER_CANCELLED'); failed = true; }
+  let setupFailure;
+  if (factoryRejected && failed && !driver && steps.length === 0) {
+    const request = readIosRequestFailure(error), requestProgress = readIosRequestProgress(error), startupResponse = readIosStartupResponse(error);
+    setupFailure = Object.freeze({ code: error.code, ...(request ? { request } : {}), ...(requestProgress ? { requestProgress } : {}), ...(startupResponse ? { startupResponse } : {}) });
+  }
   if (preauthControls) onPreauthControls(Object.freeze({ schemaVersion: 1, purpose: 'credential-free-fixed-controls',
-    completed: !failed, sessionCleanupAcknowledged, steps: Object.freeze(steps) }));
+    completed: !failed, sessionCleanupAcknowledged, steps: Object.freeze(steps), ...(setupFailure ? { setupFailure } : {}) }));
   if (failed) throw error;
   return Object.freeze({
     schemaVersion: 1, purpose: 'credential-free-native-readiness', runner: 'ios-xcuitest', deviceScope: IOS_DEVICE_SCOPE,

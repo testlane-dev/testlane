@@ -18,7 +18,7 @@ function requestOperation(method, route) {
     'POST value': 'type', 'GET text': 'text-read', 'GET attribute/value': 'value-read' })[method + ' ' + element] ?? 'unclassified';
 }
 export class NativeDriverError extends Error {
-  constructor(code, requestFact, requestProgress) { super(code); this.name = 'NativeDriverError'; this.code = code; retainRequestFact(this, requestFact); retainRequestProgress(this, requestProgress); }
+  constructor(code, requestFact, requestProgress, startupResponse) { super(code); this.name = 'NativeDriverError'; this.code = code; retainRequestFact(this, requestFact); retainRequestProgress(this, requestProgress); retainStartupResponse(this, startupResponse); }
 }
 const remoteUnsettledErrors = new WeakSet();
 /** A private driver-created failure marker, never caller-supplied cleanup authority. */
@@ -68,9 +68,50 @@ export function readIosRequestProgress(error) {
     return property && Object.hasOwn(property, 'value') && ['http', 'response'].includes(readIosRequestFailure(error)?.phase) ? normalizeRequestProgress(property.value) : undefined;
   } catch { return undefined; }
 }
-const fail = (code, requestFact, requestProgress) => new NativeDriverError(code, requestFact, requestProgress);
+const STARTUP_STATES = ['not-observed', 'headers-observed', 'body-reading', 'body-ended', 'json-decoded'];
+const STARTUP_W3C = ['unavailable', 'none', 'unknown-error', 'session-not-created', 'invalid-argument', 'timeout', 'other'];
+const STARTUP_CATEGORIES = ['unmatched', 'startup-scope-signature', 'device-discovery-signature', 'wda-readiness-timeout-signature', 'downstream-proxy-signature', 'wda-session-signature', 'wda-launch-signature'];
+/** Fixed data only; this snapshot grants no session or cleanup authority. */
+export function normalizeIosStartupResponse(value) {
+  const names = ['httpStatus', 'responseState', 'w3cError', 'startupCategory'];
+  if (!value || typeof value !== 'object' || types.isProxy(value)) return;
+  try {
+    if (Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertyNames(value).length !== names.length || Object.getOwnPropertySymbols(value).length) return;
+    const data = {};
+    for (const name of names) { const field = Object.getOwnPropertyDescriptor(value, name); if (!field || !Object.hasOwn(field, 'value')) return; data[name] = field.value; }
+    if (!Number.isSafeInteger(data.httpStatus) || !STARTUP_STATES.includes(data.responseState) || !STARTUP_W3C.includes(data.w3cError) || !STARTUP_CATEGORIES.includes(data.startupCategory)) return;
+    if (data.responseState === 'not-observed' ? data.httpStatus !== 0 : data.httpStatus < 100 || data.httpStatus > 599) return;
+    if (data.responseState !== 'json-decoded' && (data.w3cError !== 'unavailable' || data.startupCategory !== 'unmatched')) return;
+    if (data.startupCategory !== 'unmatched' && data.w3cError === 'unavailable') return;
+    return Object.freeze(data);
+  } catch { /* No getter, proxy or arbitrary value becomes diagnostic data. */ }
+}
+function retainStartupResponse(error, value) {
+  const data = normalizeIosStartupResponse(value);
+  if (data && readIosRequestFailure(error)?.operation === 'session-create') {
+    try { if (!Object.getOwnPropertyDescriptor(error, 'startupResponse')) Object.defineProperty(error, 'startupResponse', { value: data }); } catch {}
+  }
+  return error;
+}
+export function readIosStartupResponse(error) {
+  if (readIosRequestFailure(error)?.operation !== 'session-create') return;
+  try { const field = Object.getOwnPropertyDescriptor(error, 'startupResponse'); return field && Object.hasOwn(field, 'value') ? normalizeIosStartupResponse(field.value) : undefined; }
+  catch { return undefined; }
+}
+function startupSignature(message) {
+  // These exact public pinned-source signatures classify a match, not its cause.
+  if (typeof message !== 'string' || message.length > 64 * 1024) return 'unmatched';
+  if (message.includes('TESTLANE_WDA_STARTUP_SCOPE_REFUSED')) return 'startup-scope-signature';
+  if (message.includes('Unknown device or simulator UDID: ')) return 'device-discovery-signature';
+  if (/WDA was not ready in [0-9]{1,9} ms\./.test(message)) return 'wda-readiness-timeout-signature';
+  if (message.includes('Could not proxy command to the remote server. Original error: ')) return 'downstream-proxy-signature';
+  if (message.includes('Unable to start WebDriverAgent session. Original error: ')) return 'wda-session-signature';
+  if (message.includes('Unable to launch WebDriverAgent. Original error: ')) return 'wda-launch-signature';
+  return 'unmatched';
+}
+const fail = (code, requestFact, requestProgress, startupResponse) => new NativeDriverError(code, requestFact, requestProgress, startupResponse);
 function reclassified(code, error) {
-  const result = fail(code, readIosRequestFailure(error), readIosRequestProgress(error));
+  const result = fail(code, readIosRequestFailure(error), readIosRequestProgress(error), readIosStartupResponse(error));
   if (readIosRemoteUnsettled(error)) remoteUnsettledErrors.add(result);
   return result;
 }
@@ -133,6 +174,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     const requestDeadline = began + (sessionCreate ? 240_000 : semanticAction ? 15_000 : 10_000), deadline = Math.min(requestDeadline, outerDeadline ?? Infinity);
     let phaseDeadline = Math.min(began + 5000, deadline), timeout, timedOut = false, ownerStarted = false, ownerSettled = false;
     let ownerAllowed = false, httpStarted, effectiveHttpBudgetMs, budgetSource, fetchInvoked = false, responseHeadersObserved = false;
+    const startupResponse = { httpStatus: 0, responseState: 'not-observed', w3cError: 'unavailable', startupCategory: 'unmatched' };
     const timer = new AbortController();
     const operationSignal = AbortSignal.any([timer.signal, ownershipFence.signal, remoteFence.signal, ...(requestSignal ? [requestSignal] : [])]);
     const fencePendingOwner = () => { if (ownerStarted && !ownerSettled) ownershipFence.abort(); };
@@ -175,18 +217,32 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
           headers: { 'Content-Type': 'application/json' }, ...(encoded === undefined ? {} : { body: encoded }) });
       }, operationSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
       responseHeadersObserved = true;
+      if (sessionCreate) { startupResponse.httpStatus = response.status; startupResponse.responseState = 'headers-observed'; }
       checkDeadline(); phase = 'response';
       const reader = response.body?.getReader(); if (!reader) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
       let length = 0; const chunks = [];
       for (;;) {
         checkDeadline();
-        const { value, done } = await withDriverSignal(() => { checkDeadline(); return reader.read(); }, operationSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
+        const { value, done } = await withDriverSignal(() => { checkDeadline(); if (sessionCreate) startupResponse.responseState = 'body-reading'; return reader.read(); }, operationSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
+        if (sessionCreate && done === true) startupResponse.responseState = 'body-ended';
         checkDeadline(); if (done) break;
         length += value.byteLength;
         if (length > 64 * 1024) { await withDriverSignal(() => reader.cancel(), operationSignal, () => fail('NATIVE_DRIVER_CANCELLED')); throw fail('NATIVE_DRIVER_RESPONSE_INVALID'); }
         chunks.push(Buffer.from(value));
       }
       let decoded; try { decoded = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw fail('NATIVE_DRIVER_RESPONSE_INVALID'); }
+      if (sessionCreate) {
+        startupResponse.responseState = 'json-decoded';
+        if (decoded && typeof decoded === 'object' && Object.hasOwn(decoded, 'value')) {
+          const value = decoded.value;
+          startupResponse.w3cError = 'none';
+          if (value && typeof value === 'object' && Object.hasOwn(value, 'error')) {
+            const errorCode = value.error;
+            startupResponse.w3cError = typeof errorCode === 'string' ? new Map([['unknown error', 'unknown-error'], ['session not created', 'session-not-created'], ['invalid argument', 'invalid-argument'], ['timeout', 'timeout']]).get(errorCode) ?? 'other' : 'other';
+          }
+          if ((!response.ok || (value && typeof value === 'object' && Object.hasOwn(value, 'error'))) && value && typeof value === 'object') startupResponse.startupCategory = startupSignature(value.message);
+        }
+      }
       checkDeadline();
       if (!decoded || typeof decoded !== 'object' || !Object.hasOwn(decoded, 'value')) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
       if (!response.ok || decoded.value?.error !== undefined) {
@@ -202,6 +258,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
           httpBodyElapsedMs: performance.now() - httpStarted, budgetSource, fetchInvoked, responseHeadersObserved }) : failure;
       const failed = failure => {
         const result = progress(failure);
+        if (sessionCreate) retainStartupResponse(result, startupResponse);
         // A returned local promise or proxy error does not prove the native
         // mutation stopped. Never replay or race DELETE/another action with it.
         if (semanticAction && fetchInvoked) { remoteUnsettledErrors.add(result); remoteFence.abort(); }
