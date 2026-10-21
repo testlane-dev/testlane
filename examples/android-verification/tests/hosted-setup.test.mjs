@@ -1,7 +1,7 @@
 /** Hosted policy and real Python archive extraction; no SDK/device/service commands. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -60,16 +60,31 @@ with zipfile.ZipFile(request['archive'],'w') as output:
   item=zipfile.ZipInfo(entry['name']);item.filename=entry['name'];item.create_system=3;item.external_attr=entry.get('mode',stat.S_IFREG|0o644)<<16
   output.writestr(item,entry.get('content','synthetic fixture'))
 `;
+function fixtureChild(executable, args, input) {
+  let result;
+  try {
+    // Fixed stdlib-only fixture commands create no descendants. spawnSync waits
+    // for child closure; 10s is the kill-signal deadline, not OS preemption.
+    result = spawnSync(executable, args, { input: JSON.stringify(input), encoding: 'utf8',
+      stdio: ['pipe','pipe','pipe'], windowsHide: true, shell: false, timeout: 10000, killSignal: 'SIGKILL', maxBuffer: 16384 });
+  } catch {
+    throw Object.assign(Error('fixture child outcome unconfirmed'), { preserveFixtureRoot: true });
+  }
+  const exited = Number.isInteger(result.status) && result.status >= 0;
+  const signalled = Number.isInteger(result.pid) && result.pid > 0 && typeof result.signal === 'string' && Object.hasOwn(os.constants.signals, result.signal);
+  const neverStarted = result.pid === 0 && ['ENOENT','EACCES','EPERM','EINVAL','ENOTDIR'].includes(result.error?.code);
+  if (result.error || result.signal !== null || !exited) {
+    const error = Error(result.error?.code === 'ETIMEDOUT' ? 'fixture child timeout' : 'fixture child failed');
+    if (!exited && !signalled && !neverStarted) error.preserveFixtureRoot = true;
+    throw error;
+  }
+  return { code: result.status, stderr: result.stderr, stdout: result.stdout };
+}
 async function python(script, input) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.platform === 'win32' ? 'python' : '/usr/bin/python3', ['-I', '-c', script],
-      { stdio: ['pipe','pipe','pipe'], windowsHide: true, shell: false });
-    let stderr = '', stdout = ''; child.stderr.on('data', value => { if (stderr.length < 16384) stderr += value; });
-    child.stdout.on('data', value => { if (stdout.length < 16384) stdout += value; });
-    child.stdin.on('error', () => {}); child.once('error', reject);
-    const timer = setTimeout(() => { child.kill(); reject(Error('fixture Python timeout')); }, 10000);
-    child.once('close', code => { clearTimeout(timer); resolve({ code, stderr, stdout }); }); child.stdin.end(JSON.stringify(input));
-  });
+  // Use the configured interpreter on macOS rather than a fixed system path.
+  // This fixture choice does not alter the Linux production installer.
+  return fixtureChild(process.platform === 'win32' ? 'python' : process.platform === 'darwin' ? 'python3' : '/usr/bin/python3',
+    ['-I', '-c', script], input);
 }
 async function extractionInput(archive, parent) {
   // Windows hosted TEMP can be an alias, and Python and Node can report different
@@ -84,6 +99,7 @@ async function extractionInput(archive, parent) {
 }
 test('verified archive extraction validates the whole manifest before writes and rejects traversal, links and device nodes', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'tld-hosted-zip-'));
+  let preserveRoot = false;
   try {
     const archive = path.join(root, 'fixture.zip');
     for (const entry of [{ name: '../outside' }, { name: '/absolute' }, { name: 'other/file' }, { name: 'emulator/../outside' },
@@ -99,8 +115,42 @@ test('verified archive extraction validates the whole manifest before writes and
     const extracted = await python(ANDROID_EXTRACT_PYTHON, await extractionInput(archive, root));
     assert.equal(extracted.code, 0, extracted.stderr);
     assert.equal(await readFile(path.join(root, 'emulator/bin/tool'), 'utf8'), 'public tool fixture');
+  } catch (error) {
+    preserveRoot = error?.preserveFixtureRoot === true; throw error;
   } finally {
-    const resolved = path.resolve(root); assert.equal(path.dirname(resolved), path.resolve(os.tmpdir()));
-    assert.match(path.basename(resolved), /^tld-hosted-zip-/); await rm(resolved, { recursive: true, force: true });
+    if (!preserveRoot) {
+      const resolved = path.resolve(root); assert.equal(path.dirname(resolved), path.resolve(os.tmpdir()));
+      assert.match(path.basename(resolved), /^tld-hosted-zip-/); await rm(resolved, { recursive: true, force: true });
+    }
+  }
+});
+
+test('fixture timeout settles its exact child before owned directory removal and never counts as an extractor refusal', async () => {
+  const parent = await realpath(os.tmpdir()), root = await mkdtemp(path.join(parent, 'tld-fixture-child-'));
+  const handshake = path.join(root, 'ready.json'); let preserveRoot = true;
+  const script = `import {writeFileSync} from 'node:fs';let input='';process.stdin.setEncoding('utf8');
+    process.stdin.on('data',part=>{input+=part;});process.stdin.on('end',()=>{
+      const request=JSON.parse(input);writeFileSync(request.handshake,JSON.stringify({pid:process.pid}),{flag:'wx',mode:0o600});
+      setInterval(()=>{},1000);
+    });`;
+  try {
+    let failure;
+    try { fixtureChild(process.execPath, ['--input-type=module', '-e', script], { handshake }); }
+    catch (error) { failure = error; }
+    assert.equal(failure?.message, 'fixture child timeout'); assert.notEqual(failure?.preserveFixtureRoot, true);
+    const child = JSON.parse(await readFile(handshake, 'utf8'));
+    assert.ok(Number.isInteger(child.pid) && child.pid > 0);
+    assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' }, 'retained direct child is absent before cleanup');
+    preserveRoot = false;
+    assert.equal(fixtureChild(process.execPath, ['-e', "process.stdin.resume();process.stdin.on('end',()=>process.exit(2));"], {}).code, 2,
+      'only an actual numeric exit can represent an intentional refusal');
+  } catch (error) {
+    preserveRoot ||= error?.preserveFixtureRoot === true; throw error;
+  } finally {
+    if (!preserveRoot) {
+      assert.equal(await realpath(root), root); assert.equal(path.dirname(root), parent); assert.match(path.basename(root), /^tld-fixture-child-/);
+      await rm(root, { recursive: true, force: true });
+      await assert.rejects(readFile(handshake), { code: 'ENOENT' });
+    }
   }
 });
