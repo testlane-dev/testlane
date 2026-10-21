@@ -330,7 +330,7 @@ async function promptly(promise) {
   finally { clearTimeout(timer); }
 }
 
-test('an iOS body abort cancels an in-flight request and its next action while fresh cleanup and close remain usable', async () => {
+test('an iOS body abort after semantic dispatch quarantines fresh native cleanup and session close', async () => {
   const appium = await fixture(), run = new AbortController(), body = new AbortController(), cleanup = new AbortController();
   try {
     const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), signal: run.signal, assertOwned: () => true });
@@ -341,10 +341,11 @@ test('an iOS body abort cancels an in-flight request and its next action while f
     assert.equal(run.signal.aborted, false);
     assert.equal(appium.calls.some(call => call.path.endsWith('/value') || call.path.endsWith('/click')), false);
     const count = appium.calls.length;
-    await assert.rejects(active.withSignal(cleanup.signal).click('create-request'), { code: 'NATIVE_DRIVER_CANCELLED' });
+    await assert.rejects(active.withSignal(cleanup.signal).click('create-request'), { code: 'NATIVE_DRIVER_REMOTE_UNSETTLED' });
     assert.equal(appium.calls.length, count, 'a nested facade cannot revive a cancelled body');
-    await driver.withSignal(cleanup.signal).waitFor('session-status'); await active.close();
-    assert.equal(appium.calls.filter(call => call.method === 'DELETE').length, 1);
+    await assert.rejects(driver.withSignal(cleanup.signal).waitFor('session-status'), { code: 'NATIVE_DRIVER_REMOTE_UNSETTLED' });
+    await assert.rejects(active.close(), { code: 'NATIVE_DRIVER_REMOTE_UNSETTLED' });
+    assert.equal(appium.calls.length, count); assert.equal(appium.calls.filter(call => call.method === 'DELETE').length, 0);
     assert.throws(() => driver.withSignal({}), { code: 'NATIVE_DRIVER_INPUT_INVALID' });
   } finally { await appium.close(); }
 });
@@ -375,7 +376,7 @@ test('iOS raw server and parent failures never enter fixed driver errors', async
       assert.ok(error instanceof NativeDriverError); assert.equal(error.code, 'NATIVE_DRIVER_COMMAND_FAILED');
       for (const value of [appium.secret, encodeURIComponent(appium.secret), Buffer.from(appium.secret).toString('base64')]) assert.equal(String(error.stack).includes(value), false);
       return true;
-    }); await driver.close();
+    }); await assert.rejects(driver.close(), { code: 'NATIVE_DRIVER_REMOTE_UNSETTLED' });
   } finally { await appium.close(); }
 });
 
@@ -384,7 +385,8 @@ test('iOS rejects oversized and malformed native responses', async () => {
     const appium = await fixture();
     try {
       const driver = await createNativeDriver({ deviceBinding: binding(), url: appium.url, capabilities: caps(), assertOwned: () => true }); appium[mode]();
-      await assert.rejects(driver.click('save'), { code: 'NATIVE_DRIVER_RESPONSE_INVALID' }); await driver.close();
+      await assert.rejects(driver.click('save'), { code: 'NATIVE_DRIVER_RESPONSE_INVALID' });
+      const count = appium.calls.length; await assert.rejects(driver.close(), { code: 'NATIVE_DRIVER_REMOTE_UNSETTLED' }); assert.equal(appium.calls.length, count);
     } finally { await appium.close(); }
   }
 });
@@ -448,10 +450,10 @@ test('iOS cold WDA setup alone gets 240 seconds and fixed session/context/readin
         for (const value of [secret, encodeURIComponent(secret), Buffer.from(secret).toString('base64')]) assert.equal(String(error.stack).includes(value), false);
         return true;
       });
-    } finally { if (driver) await driver.close(); }
+    } finally { if (driver) { if (stage === '/click') await assert.rejects(driver.close(), { code: 'NATIVE_DRIVER_REMOTE_UNSETTLED' }); else await driver.close(); } }
   }
   assert.ok(calls.some(call => call.route === '/session' && call.milliseconds > 239_900 && call.milliseconds <= 240_000));
-  assert.equal(calls.some(call => call.route !== '/session' && call.milliseconds > 5000), false); assert.equal(active.size, 0);
+  assert.ok(calls.some(call => call.route.endsWith('/click') && call.milliseconds > 9900 && call.milliseconds <= 10000)); assert.equal(calls.some(call => call.route !== '/session' && !call.route.endsWith('/click') && call.milliseconds > 5000), false); assert.equal(active.size, 0);
 });
 
 test('iOS setup accepts one seven-second logical ownership stabilization then performs a fresh ordinary context guard', async t => {

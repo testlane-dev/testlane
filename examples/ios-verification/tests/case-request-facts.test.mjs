@@ -63,7 +63,7 @@ async function httpDriver(t, runtime, secret, failurePhase = 'response') {
     else if (request.url.endsWith('/context')) value = 'NATIVE_APP';
     else if (request.url.endsWith('/element')) value = { 'element-6066-11e4-a52e-4f735466cecf': 'fixed-element' };
     else if (request.url.endsWith('/displayed')) value = true;
-    else if (request.url.endsWith('/click')) {
+    else if (request.url.endsWith('/attribute/value')) {
       if (failurePhase === 'http') { request.socket.destroy(); return; }
       status = 500; value = { error: secret, message: [secret, encodeURIComponent(secret), Buffer.from(secret).toString('base64'), Buffer.from(secret).toString('base64url')].join('|') };
     }
@@ -77,14 +77,14 @@ async function httpDriver(t, runtime, secret, failurePhase = 'response') {
   return { driver, calls, session, refuseOwnership: () => { refuseOwnership = true; } };
 }
 
-for (const placement of ['body', 'cleanup', 'both']) test('actual HTTP driver failure survives installed runner, JSON and public projection: ' + placement, async t => {
+for (const placement of ['body', 'cleanup', 'both']) test('actual read-only HTTP driver failure survives installed runner, JSON and public projection: ' + placement, async t => {
   const root = await owned(t), runtime = await installed(path.join(root, 'package')), secret = randomBytes(24).toString('hex') + '/+=';
   const { driver, calls, session } = await httpDriver(t, runtime, secret), input = plan(), cases = callbacks();
-  cases[0].run = async ({ check }) => { check(true, true); if (placement !== 'cleanup') await driver.click('synthetic-control'); };
-  cases[0].cleanup = async ({ check }) => { check(true, true); if (placement !== 'body') await driver.click('synthetic-control'); };
+  cases[0].run = async ({ check }) => { check(true, true); if (placement !== 'cleanup') await driver.text('synthetic-control'); };
+  cases[0].cleanup = async ({ check }) => { check(true, true); if (placement !== 'body') await driver.text('synthetic-control'); };
   const report = await runtime.runner.runNativeCases({ plan: input, cases });
   assert.equal(report.verdict, 'failed');
-  const expected = { stage: placement === 'cleanup' ? 'cleanup' : 'body', ...fact };
+  const expected = { stage: placement === 'cleanup' ? 'cleanup' : 'body', ...fact, operation: 'value-read' };
   assert.deepEqual(report.cases[0].requestFailure, expected); assert.equal(Object.isFrozen(report.cases[0].requestFailure), true);
   assert.equal(report.cases[0].reason, placement === 'cleanup' ? 'NATIVE_CLEANUP_FAILED' : 'NATIVE_BODY_FAILED');
   assert.deepEqual(report.cases[0].diagnostics.map(row => row.code), placement === 'both' ? ['NATIVE_BODY_FAILED', 'NATIVE_DRIVER_COMMAND_FAILED', 'NATIVE_CLEANUP_FAILED'] : [placement === 'cleanup' ? 'NATIVE_CLEANUP_FAILED' : 'NATIVE_BODY_FAILED', 'NATIVE_DRIVER_COMMAND_FAILED']);
@@ -94,7 +94,7 @@ for (const placement of ['body', 'cleanup', 'both']) test('actual HTTP driver fa
   await writeFile(path.join(root, 'plan.json'), JSON.stringify(input)); await writeFile(path.join(root, 'positive.json'), JSON.stringify(wire));
   const projected = await runtime.failure.publicIosFailure({ output: root, stage: 'positive', error: new Error('fixed') });
   assert.equal(projected.reports.length, 1); assert.deepEqual(projected.reports[0].cases[0].requestFailure, expected);
-  absent(projected, secret); absent(projected, session); assert.equal(calls.filter(route => route.endsWith('/click')).length, placement === 'both' ? 2 : 1);
+  absent(projected, secret); absent(projected, session); assert.equal(calls.filter(route => route.endsWith('/attribute/value')).length, placement === 'both' ? 2 : 1);
 });
 
 for (const phase of ['ownership', 'http']) test('fast installed case distinguishes ' + phase + ' failure through JSON and public projection', async t => {
@@ -102,13 +102,13 @@ for (const phase of ['ownership', 'http']) test('fast installed case distinguish
   const fixture = await httpDriver(t, runtime, secret, phase), input = plan(), cases = callbacks();
   const requestsBeforeBody = fixture.calls.length;
   if (phase === 'ownership') fixture.refuseOwnership();
-  cases[0].run = async ({ check }) => { check(true, true); await fixture.driver.click('synthetic-control'); };
+  cases[0].run = async ({ check }) => { check(true, true); await fixture.driver.text('synthetic-control'); };
   const report = await runtime.runner.runNativeCases({ plan: input, cases });
-  const expected = { stage: 'body', operation: phase === 'ownership' ? 'native-context' : 'click', phase };
+  const expected = { stage: 'body', operation: phase === 'ownership' ? 'native-context' : 'value-read', phase };
   assert.deepEqual(report.cases[0].requestFailure, expected);
   assert.deepEqual(report.cases[0].diagnostics.map(row => row.code), ['NATIVE_BODY_FAILED', phase === 'ownership' ? 'NATIVE_DRIVER_OWNERSHIP_REFUSED' : 'NATIVE_DRIVER_COMMAND_FAILED']);
   if (phase === 'ownership') assert.equal(fixture.calls.length, requestsBeforeBody, 'refused ownership sends no new HTTP');
-  else assert.equal(fixture.calls.filter(route => route.endsWith('/click')).length, 1, 'only the click connection was destroyed');
+  else assert.equal(fixture.calls.filter(route => route.endsWith('/attribute/value')).length, 1, 'only the read-only value connection was destroyed');
   const wire = JSON.parse(JSON.stringify(report)); assert.deepEqual(runtime.contracts.sanitizeNativeReport(wire, input), report); assert.deepEqual(sanitizeNativeReport(wire, input), report);
   await writeFile(path.join(root, 'plan.json'), JSON.stringify(input)); await writeFile(path.join(root, 'positive.json'), JSON.stringify(wire));
   const projected = await runtime.failure.publicIosFailure({ output: root, stage: 'positive', error: new Error('fixed') });

@@ -8,6 +8,7 @@ export const NATIVE_DRIVER_FAILURE_CODES = Object.freeze([
   'NATIVE_DRIVER_TIMEOUT', 'NATIVE_DRIVER_COMMAND_FAILED', 'NATIVE_DRIVER_SESSION_INVALID', 'NATIVE_DRIVER_RESPONSE_INVALID',
   'NATIVE_DRIVER_SESSION_TIMEOUT', 'NATIVE_DRIVER_CONTEXT_TIMEOUT', 'NATIVE_DRIVER_READINESS_TIMEOUT',
   'NATIVE_DRIVER_ELEMENT_INVALID', 'NATIVE_DRIVER_ELEMENT_TIMEOUT', 'NATIVE_DRIVER_INPUT_INVALID',
+  'NATIVE_DRIVER_REMOTE_UNSETTLED',
 ]);
 export const IOS_REQUEST_OPERATIONS = Object.freeze(['session-create', 'session-delete', 'native-context', 'element-find', 'element-displayed',
   'element-rect', 'window-rect', 'scroll', 'click', 'clear', 'type', 'text-read', 'value-read', 'keyboard-state', 'keyboard-hide', 'unclassified']);
@@ -27,7 +28,7 @@ export function normalizeIosRequestFact(value) {
   if (!data || !IOS_REQUEST_OPERATIONS.includes(data.operation) || !IOS_REQUEST_PHASES.includes(data.phase)) return;
   return Object.freeze({ operation: data.operation, phase: data.phase });
 }
-const unsafeRequestCodes = ['NATIVE_BODY_TIMEOUT', 'NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_TIMEOUT', 'NATIVE_CLEANUP_UNSETTLED', 'NATIVE_RUN_CANCELLED'];
+const unsafeRequestCodes = ['NATIVE_BODY_TIMEOUT', 'NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_TIMEOUT', 'NATIVE_CLEANUP_UNSETTLED', 'NATIVE_RUN_CANCELLED', 'NATIVE_DRIVER_REMOTE_UNSETTLED'];
 function caseRequestFact(value, row, report, runner) {
   const data = ownData(value, ['stage', 'operation', 'phase']);
   if (!data || !['body', 'cleanup'].includes(data.stage)) return;
@@ -121,6 +122,7 @@ const diagnoses = {
   NATIVE_DRIVER_READINESS_TIMEOUT: ['setup', 'The initial native readiness element did not become available within its budget.', 'Inspect the bound app startup and accessibility ID privately. No business action or case is retried by this readiness check.'],
   NATIVE_DRIVER_COMMAND_FAILED: ['execution', 'The owned native driver command failed.', 'Inspect the private Appium/device command outcome; HTTP errors and transport errors are not copied into reports.'],
   NATIVE_DRIVER_CANCELLED: ['execution', 'The native driver operation was cancelled.', 'Review the phase cancellation and owned cleanup outcome before a fresh run. No driver payload is retained.'],
+  NATIVE_DRIVER_REMOTE_UNSETTLED: ['execution', 'A dispatched native mutation has no confirmed successful terminal result.', 'Do not replay commands or delete its session. Stop the owned worker and Appium/device before inspecting owned recovery state.'],
   NATIVE_DRIVER_SESSION_INVALID: ['setup', 'The native driver did not obtain a valid owned session.', 'Check Appium session creation and the exact owned app/device capabilities privately.'],
   NATIVE_DRIVER_RESPONSE_INVALID: ['execution', 'The native driver response did not satisfy its bounded contract.', 'Inspect the private Appium response shape and size; arbitrary response values are not retained.'],
   NATIVE_DRIVER_ELEMENT_INVALID: ['execution', 'A native action used an invalid accessibility identifier or closed session.', 'Use the stable app-owned accessibility IDs and keep actions within the owned driver lifetime.'],
@@ -172,6 +174,7 @@ export function sanitizeNativeReport(value, inputPlan) {
   let plan;
   try { plan = validateNativePlan(inputPlan); } catch { return refuse(); }
   const validDiagnostic = item => {
+    if (item?.code === 'NATIVE_DRIVER_REMOTE_UNSETTLED' && plan.runner !== IOS_NATIVE_RUNNER) return false;
     if (!keys(item, ['code', 'phase', 'summary', 'remedy']) || Object.keys(item).length !== 4 ||
       typeof item.code !== 'string' || !Object.hasOwn(diagnoses, item.code)) return false;
     const expected = nativeDiagnostic(item.code, plan.runner);
@@ -207,7 +210,7 @@ export function sanitizeNativeReport(value, inputPlan) {
         !['completed', 'not-required'].includes(row.cleanup.status)) return refuse();
     } else if (!row.diagnostics.length || row.reason !== row.diagnostics[0].code) return refuse();
     if (row.attempts === 0 && (row.assertionsObserved !== 0 || row.cleanup.status !== 'unknown')) return refuse();
-    if (row.diagnostics.some(item => ['NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_UNSETTLED'].includes(item.code)) &&
+    if (row.diagnostics.some(item => ['NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_UNSETTLED', 'NATIVE_DRIVER_REMOTE_UNSETTLED'].includes(item.code)) &&
       (row.status !== 'blocked' || row.cleanup.status !== 'unknown')) return refuse();
     const requestFailure = requestDescriptor ? caseRequestFact(requestDescriptor.value, row, value, plan.runner) : undefined;
     if (requestDescriptor && !requestFailure) return refuse();

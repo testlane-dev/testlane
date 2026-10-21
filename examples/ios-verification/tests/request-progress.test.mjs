@@ -48,13 +48,13 @@ test('full HTTP wait records actual dispatch after settled ownership without cla
   h.owner(() => { if (++owners === 4) h.advance(4700); return true; });
   h.http(route => { if (route.endsWith('/click')) { entered.resolve(); return gate.promise; } });
   const rejected = assert.rejects(driver.click('create-request'), error => { failure = error; return error.code === 'NATIVE_DRIVER_TIMEOUT'; });
-  await entered.promise; h.advance(5000); h.expire(); await rejected;
+  await entered.promise; h.advance(10000); h.expire(); await rejected;
   const progress = readIosRequestProgress(failure);
-  assert.deepEqual(progress, { ownershipElapsedMs: 4700, effectiveHttpBudgetMs: 5000, httpBodyElapsedMs: 5000,
+  assert.deepEqual(progress, { ownershipElapsedMs: 4700, effectiveHttpBudgetMs: 10000, httpBodyElapsedMs: 10000,
     budgetSource: 'http-body', fetchInvoked: true, responseHeadersObserved: false });
   assert.equal(Object.isFrozen(progress), true); gate.resolve(h.json(null)); await Promise.resolve(); await Promise.resolve();
   assert.deepEqual(readIosRequestProgress(failure), progress);
-  h.http(undefined); await driver.close();
+  h.http(undefined); await assert.rejects(driver.close(), { code: 'NATIVE_DRIVER_REMOTE_UNSETTLED' });
 });
 
 test('caller clipping before dispatch survives visible reclassification with no invented fetch or headers', async t => {
@@ -77,26 +77,26 @@ test('caller clipping before dispatch survives visible reclassification with no 
 
 test('late observed headers remain distinguishable from a response-body failure', async t => {
   const h = harness(t), driver = await h.create();
-  h.http(route => { if (route.endsWith('/click')) { h.advance(5000.125); return h.json(null); } });
+  h.http(route => { if (route.endsWith('/click')) { h.advance(10000.125); return h.json(null); } });
   await assert.rejects(driver.click('create-request'), error => {
     assert.equal(error.code, 'NATIVE_DRIVER_TIMEOUT'); assert.deepEqual(readIosRequestFailure(error), { operation: 'click', phase: 'http' });
-    assert.deepEqual(readIosRequestProgress(error), { ownershipElapsedMs: 0, effectiveHttpBudgetMs: 5000, httpBodyElapsedMs: 5000.125,
+    assert.deepEqual(readIosRequestProgress(error), { ownershipElapsedMs: 0, effectiveHttpBudgetMs: 10000, httpBodyElapsedMs: 10000.125,
       budgetSource: 'http-body', fetchInvoked: true, responseHeadersObserved: true }); return true;
   });
-  h.http(undefined); await driver.close();
+  h.http(undefined); await assert.rejects(driver.close(), { code: 'NATIVE_DRIVER_REMOTE_UNSETTLED' });
 });
 
 test('body timeout freezes observed headers and elapsed time before a late uncooperative body returns', async t => {
   const h = harness(t), driver = await h.create(), entered = Promise.withResolvers(), gate = Promise.withResolvers(); let failure;
   h.http(route => route.endsWith('/click') ? { ok: true, status: 200, body: { getReader: () => ({ read() { entered.resolve(); return gate.promise; } }) } } : undefined);
   const rejected = assert.rejects(driver.click('create-request'), error => { failure = error; return error.code === 'NATIVE_DRIVER_TIMEOUT'; });
-  await entered.promise; h.advance(5000); h.expire(); await rejected;
+  await entered.promise; h.advance(10000); h.expire(); await rejected;
   const progress = readIosRequestProgress(failure);
   assert.deepEqual(readIosRequestFailure(failure), { operation: 'click', phase: 'response' });
-  assert.deepEqual(progress, { ownershipElapsedMs: 0, effectiveHttpBudgetMs: 5000, httpBodyElapsedMs: 5000,
+  assert.deepEqual(progress, { ownershipElapsedMs: 0, effectiveHttpBudgetMs: 10000, httpBodyElapsedMs: 10000,
     budgetSource: 'http-body', fetchInvoked: true, responseHeadersObserved: true });
   h.advance(1200); gate.resolve({ done: true }); await Promise.resolve(); await Promise.resolve();
-  assert.deepEqual(readIosRequestProgress(failure), progress); h.http(undefined); await driver.close();
+  assert.deepEqual(readIosRequestProgress(failure), progress); h.http(undefined); await assert.rejects(driver.close(), { code: 'NATIVE_DRIVER_REMOTE_UNSETTLED' });
 });
 
 test('settled-owner cancellation during encoding records no dispatch and keeps independently guarded close', async t => {
@@ -105,7 +105,7 @@ test('settled-owner cancellation during encoding records no dispatch and keeps i
   t.mock.method(JSON, 'stringify', (value, ...args) => { if (cancelEncoding) { cancelEncoding = false; phase.abort(); } return stringify(value, ...args); });
   await assert.rejects(driver.withSignal(phase.signal).click('create-request'), error => {
     assert.equal(error.code, 'NATIVE_DRIVER_CANCELLED');
-    assert.deepEqual(readIosRequestProgress(error), { ownershipElapsedMs: 0, effectiveHttpBudgetMs: 5000, httpBodyElapsedMs: 0,
+    assert.deepEqual(readIosRequestProgress(error), { ownershipElapsedMs: 0, effectiveHttpBudgetMs: 10000, httpBodyElapsedMs: 0,
       budgetSource: 'http-body', fetchInvoked: false, responseHeadersObserved: false }); return true;
   });
   assert.equal(h.routes.some(row => row.route.endsWith('/click')), false); h.owner(undefined); await driver.close();
@@ -117,7 +117,7 @@ test('serialization failure records a settled owner without implying an HTTP cal
   t.mock.method(JSON, 'stringify', (value, ...args) => { if (failEncoding) { failEncoding = false; throw Error(randomBytes(24).toString('base64url')); } return stringify(value, ...args); });
   await assert.rejects(driver.click('create-request'), error => {
     assert.equal(error.code, 'NATIVE_DRIVER_COMMAND_FAILED');
-    assert.deepEqual(readIosRequestProgress(error), { ownershipElapsedMs: 0, effectiveHttpBudgetMs: 5000, httpBodyElapsedMs: 0,
+    assert.deepEqual(readIosRequestProgress(error), { ownershipElapsedMs: 0, effectiveHttpBudgetMs: 10000, httpBodyElapsedMs: 0,
       budgetSource: 'http-body', fetchInvoked: false, responseHeadersObserved: false }); return true;
   });
   assert.equal(h.routes.some(row => row.route.endsWith('/click')), false); h.owner(undefined); await driver.close();
@@ -167,11 +167,11 @@ test('a cooperative scheduling gap can select the unchanged request-total bound'
   h.http(route => { if (route.endsWith('/click')) { entered.resolve(); return gate.promise; } });
   const rejected = assert.rejects(driver.click('create-request'), error => {
     assert.equal(error.code, 'NATIVE_DRIVER_TIMEOUT');
-    assert.deepEqual(readIosRequestProgress(error), { ownershipElapsedMs: 5000.25, effectiveHttpBudgetMs: 4999.75, httpBodyElapsedMs: 4999.75,
+    assert.deepEqual(readIosRequestProgress(error), { ownershipElapsedMs: 5000.25, effectiveHttpBudgetMs: 9999.75, httpBodyElapsedMs: 9999.75,
       budgetSource: 'request-total', fetchInvoked: true, responseHeadersObserved: false }); return true;
   });
-  await entered.promise; h.advance(4999.75); h.expire(); await rejected;
-  gate.resolve(h.json(null)); h.owner(undefined); h.http(undefined); await driver.close();
+  await entered.promise; h.advance(9999.75); h.expire(); await rejected;
+  gate.resolve(h.json(null)); h.owner(undefined); h.http(undefined); await assert.rejects(driver.close(), { code: 'NATIVE_DRIVER_REMOTE_UNSETTLED' });
 });
 
 test('session timeout keeps its original total and preserves the immutable progress through its wrapper', async t => {
@@ -209,10 +209,10 @@ test('cancellation while awaiting headers records dispatch without promoting a l
   const rejected = assert.rejects(driver.withSignal(phase.signal).click('create-request'), error => { failure = error; return error.code === 'NATIVE_DRIVER_CANCELLED'; });
   await entered.promise; h.advance(333.25); phase.abort(); await rejected;
   const progress = readIosRequestProgress(failure);
-  assert.deepEqual(progress, { ownershipElapsedMs: 0, effectiveHttpBudgetMs: 5000, httpBodyElapsedMs: 333.25,
+  assert.deepEqual(progress, { ownershipElapsedMs: 0, effectiveHttpBudgetMs: 10000, httpBodyElapsedMs: 333.25,
     budgetSource: 'http-body', fetchInvoked: true, responseHeadersObserved: false });
   gate.resolve(h.json(null)); await Promise.resolve(); await Promise.resolve(); assert.deepEqual(readIosRequestProgress(failure), progress);
-  h.http(undefined); await driver.close();
+  h.http(undefined); await assert.rejects(driver.close(), { code: 'NATIVE_DRIVER_REMOTE_UNSETTLED' });
 });
 
 test('readiness and preauth wrappers preserve an early fractional timer snapshot without changing top-level failure facts', async t => {

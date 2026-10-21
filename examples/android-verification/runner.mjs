@@ -2,7 +2,7 @@
 import { isDeepStrictEqual, types } from 'node:util';
 import { NATIVE_RUNNER, IOS_NATIVE_RUNNER, NATIVE_DRIVER_FAILURE_CODES, nativeLimits, NativeVerificationError, validateNativePlan, nativeDiagnostic } from './contracts.mjs';
 import { NativeDriverError as AndroidDriverError } from './driver.mjs';
-import { NativeDriverError as IosDriverError, readIosRequestFailure } from '../ios-verification/driver.mjs';
+import { NativeDriverError as IosDriverError, readIosRequestFailure, readIosRemoteUnsettled } from '../ios-verification/driver.mjs';
 
 const DRIVER_CAUSES = new Set([...NATIVE_DRIVER_FAILURE_CODES, 'NATIVE_DRIVER_CANCELLED']);
 function failureCause(error, runner) {
@@ -15,8 +15,11 @@ function failureCause(error, runner) {
     if (!descriptor || !Object.hasOwn(descriptor, 'value') || typeof descriptor.value !== 'string') return;
     if (prototype === NativeVerificationError.prototype && descriptor.value === 'NATIVE_UI_SETTLEMENT_TIMEOUT') return Object.freeze({ cause: descriptor.value });
     if (prototype === (runner === IOS_NATIVE_RUNNER ? IosDriverError.prototype : AndroidDriverError.prototype) && DRIVER_CAUSES.has(descriptor.value)) {
+      if (descriptor.value === 'NATIVE_DRIVER_REMOTE_UNSETTLED' && runner !== IOS_NATIVE_RUNNER) return;
       const requestFailure = runner === IOS_NATIVE_RUNNER && descriptor.value !== 'NATIVE_DRIVER_CANCELLED' ? readIosRequestFailure(error) : undefined;
-      return Object.freeze({ cause: descriptor.value, ...(requestFailure ? { requestFailure } : {}) });
+      const remoteUnsettled = runner === IOS_NATIVE_RUNNER && readIosRemoteUnsettled(error);
+      if (descriptor.value === 'NATIVE_DRIVER_REMOTE_UNSETTLED' && !remoteUnsettled) return;
+      return Object.freeze({ cause: descriptor.value, ...(requestFailure ? { requestFailure } : {}), ...(remoteUnsettled ? { remoteUnsettled: true } : {}) });
     }
   } catch { /* An unrecognized thrown value contributes no public metadata. */ }
 }
@@ -30,7 +33,7 @@ function wait(promise, milliseconds, signal) {
     };
     const cancel = () => finish({ kind: 'cancelled' });
     promise.then(value => finish({ kind: 'settled', ok: value.ok, ...(value.cause ? { cause: value.cause } : {}),
-      ...(value.requestFailure ? { requestFailure: value.requestFailure } : {}) }), () => finish({ kind: 'settled', ok: false }));
+      ...(value.requestFailure ? { requestFailure: value.requestFailure } : {}), ...(value.remoteUnsettled ? { remoteUnsettled: true } : {}) }), () => finish({ kind: 'settled', ok: false }));
     timer = setTimeout(() => finish({ kind: 'timeout' }), milliseconds);
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted) cancel();
@@ -60,7 +63,7 @@ async function phase(callback, context, state, timeoutMs, settleTimeoutMs, signa
   controller.abort();
   const settled = await wait(pending, settleTimeoutMs);
   state.open = false;
-  return { ...outcome, unsettled: settled.kind !== 'settled' };
+  return { ...outcome, unsettled: settled.kind !== 'settled', ...(settled.remoteUnsettled ? { remoteUnsettled: true, cause: settled.cause } : {}) };
 }
 const bounded = (value, max) => Number.isSafeInteger(value) && value >= 1 && value <= max;
 function rowFor(item, runner) {
@@ -106,7 +109,14 @@ export async function runNativeCases({ plan: input, cases, context = {}, signal,
     const body = counter(), cleanup = counter();
     const bodyResult = await phase(authored.run, context, body, timeoutMs, settleTimeoutMs, signal, plan.runner);
     const failures = []; let requestFailure;
-    if (bodyResult.unsettled) { failures.push('NATIVE_BODY_UNSETTLED'); stop = true; row.status = 'blocked'; }
+    if (bodyResult.remoteUnsettled) {
+      failures.push('NATIVE_DRIVER_REMOTE_UNSETTLED'); if (bodyResult.cause) failures.push(bodyResult.cause);
+      if (body.failed) failures.push('NATIVE_ASSERTION_FAILED');
+      if (bodyResult.kind === 'cancelled') failures.push('NATIVE_RUN_CANCELLED');
+      else if (bodyResult.kind === 'timeout') failures.push('NATIVE_BODY_TIMEOUT');
+      stop = true; row.status = 'blocked';
+    }
+    else if (bodyResult.unsettled) { failures.push('NATIVE_BODY_UNSETTLED'); stop = true; row.status = 'blocked'; }
     else if (bodyResult.kind === 'cancelled') { failures.push('NATIVE_RUN_CANCELLED'); row.status = 'cancelled'; stop = true; }
     else if (bodyResult.kind === 'timeout') { failures.push('NATIVE_BODY_TIMEOUT'); row.status = 'failed'; }
     else if (body.failed) { failures.push('NATIVE_ASSERTION_FAILED'); row.status = 'failed'; }
@@ -116,12 +126,15 @@ export async function runNativeCases({ plan: input, cases, context = {}, signal,
     }
     else if (body.observed === 0) { failures.push('NATIVE_NO_BODY_CHECKS'); row.status = 'blocked'; }
     else row.status = 'passed';
-    if (bodyResult.unsettled) row.cleanup.status = 'unknown';
+    if (bodyResult.unsettled || bodyResult.remoteUnsettled) row.cleanup.status = 'unknown';
     else if (authored.cleanup) {
       // Cleanup gets its own fresh cooperative signal, even after run cancellation.
       const cleaned = await phase(authored.cleanup, context, cleanup, cleanupTimeoutMs, settleTimeoutMs, undefined, plan.runner);
       let cleanupFailure;
-      if (cleaned.unsettled) { cleanupFailure = 'NATIVE_CLEANUP_UNSETTLED'; row.cleanup.status = 'unknown'; stop = true; row.status = 'blocked'; }
+      if (cleaned.remoteUnsettled) {
+        cleanupFailure = 'NATIVE_DRIVER_REMOTE_UNSETTLED'; row.cleanup.status = 'unknown'; stop = true; row.status = 'blocked';
+      }
+      else if (cleaned.unsettled) { cleanupFailure = 'NATIVE_CLEANUP_UNSETTLED'; row.cleanup.status = 'unknown'; stop = true; row.status = 'blocked'; }
       else if (cleaned.kind === 'timeout') cleanupFailure = 'NATIVE_CLEANUP_TIMEOUT';
       else if (!cleaned.ok || cleanup.failed) cleanupFailure = 'NATIVE_CLEANUP_FAILED';
       else if (cleanup.observed === 0) cleanupFailure = 'NATIVE_NO_CLEANUP_CHECKS';
@@ -133,7 +146,8 @@ export async function runNativeCases({ plan: input, cases, context = {}, signal,
           const separateCause = !failures.includes(cleaned.cause); failures.push(cleaned.cause);
           if (!requestFailure && separateCause && cleaned.requestFailure) requestFailure = Object.freeze({ stage: 'cleanup', ...cleaned.requestFailure });
         }
-        if (row.cleanup.status !== 'unknown' || !cleaned.unsettled) row.cleanup.status = 'failed';
+        if (cleaned.remoteUnsettled && cleaned.cause) failures.push(cleaned.cause);
+        if (row.cleanup.status !== 'unknown' || (!cleaned.unsettled && !cleaned.remoteUnsettled)) row.cleanup.status = 'failed';
         if (!['blocked', 'cancelled'].includes(row.status)) row.status = 'failed';
       } else row.cleanup.status = 'completed';
     } else row.cleanup.status = 'not-required';
@@ -142,7 +156,8 @@ export async function runNativeCases({ plan: input, cases, context = {}, signal,
     row.reason = failures[0] ?? 'NATIVE_CASE_PASSED';
     row.diagnostics = [...new Set(failures)].map(diagnosis);
     if (requestFailure && row.status === 'failed' && !failures.some(code =>
-      ['NATIVE_BODY_TIMEOUT', 'NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_TIMEOUT', 'NATIVE_CLEANUP_UNSETTLED', 'NATIVE_RUN_CANCELLED'].includes(code))) row.requestFailure = requestFailure;
+      ['NATIVE_BODY_TIMEOUT', 'NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_TIMEOUT', 'NATIVE_CLEANUP_UNSETTLED', 'NATIVE_RUN_CANCELLED', 'NATIVE_DRIVER_REMOTE_UNSETTLED'].includes(code))) row.requestFailure = requestFailure;
+    if (failures.includes('NATIVE_DRIVER_REMOTE_UNSETTLED')) report.reasonCodes.push('NATIVE_DRIVER_REMOTE_UNSETTLED');
     if (failures.includes('NATIVE_RUN_CANCELLED')) report.reasonCodes.push('NATIVE_RUN_CANCELLED');
     if (bodyResult.unsettled || failures.includes('NATIVE_CLEANUP_UNSETTLED')) report.reasonCodes.push('NATIVE_BODY_UNSETTLED' === row.reason ? row.reason : 'NATIVE_CLEANUP_UNSETTLED');
   }
@@ -152,7 +167,7 @@ export async function runNativeCases({ plan: input, cases, context = {}, signal,
   if (rows.some(row => row.status === 'cancelled') || report.reasonCodes.includes('NATIVE_RUN_CANCELLED')) report.verdict = 'cancelled';
   else if (rows.some(row => row.status === 'failed')) report.verdict = 'failed';
   else if (rows.some(row => row.status !== 'passed')) report.verdict = 'blocked';
-  if (report.reasonCodes.some(code => ['NATIVE_RUN_CANCELLED', 'NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_UNSETTLED'].includes(code))) {
+  if (report.reasonCodes.some(code => ['NATIVE_RUN_CANCELLED', 'NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_UNSETTLED', 'NATIVE_DRIVER_REMOTE_UNSETTLED'].includes(code))) {
     for (const row of rows) delete row.requestFailure;
   }
   return report;

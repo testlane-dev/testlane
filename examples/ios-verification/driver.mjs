@@ -20,6 +20,12 @@ function requestOperation(method, route) {
 export class NativeDriverError extends Error {
   constructor(code, requestFact, requestProgress) { super(code); this.name = 'NativeDriverError'; this.code = code; retainRequestFact(this, requestFact); retainRequestProgress(this, requestProgress); }
 }
+const remoteUnsettledErrors = new WeakSet();
+/** A private driver-created failure marker, never caller-supplied cleanup authority. */
+export function readIosRemoteUnsettled(error) {
+  return !!error && typeof error === 'object' && !types.isProxy(error) && types.isNativeError(error) &&
+    Object.getPrototypeOf(error) === NativeDriverError.prototype && remoteUnsettledErrors.has(error);
+}
 function retainRequestFact(error, fact) {
   const safe = normalizeIosRequestFact(fact);
   if (safe && error && typeof error === 'object' && !types.isProxy(error) && types.isNativeError(error) && Object.getPrototypeOf(error) === NativeDriverError.prototype) {
@@ -63,6 +69,11 @@ export function readIosRequestProgress(error) {
   } catch { return undefined; }
 }
 const fail = (code, requestFact, requestProgress) => new NativeDriverError(code, requestFact, requestProgress);
+function reclassified(code, error) {
+  const result = fail(code, readIosRequestFailure(error), readIosRequestProgress(error));
+  if (readIosRemoteUnsettled(error)) remoteUnsettledErrors.add(result);
+  return result;
+}
 const identifier = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && !/[\u0000-\u001f\u007f]/.test(value);
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
 const port = value => Number.isSafeInteger(value) && value >= 1024 && value <= 65535;
@@ -107,18 +118,23 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
   } catch { throw fail('NATIVE_DRIVER_CONFIGURATION_INVALID'); }
   let session, closed = false;
   const ownershipFence = new AbortController();
-  async function request(method, route, body, requestSignal = signal, timeoutMs = 5000, outerDeadline) {
+  const remoteFence = new AbortController();
+  const remoteFailure = requestFact => { const error = fail('NATIVE_DRIVER_REMOTE_UNSETTLED', requestFact); remoteUnsettledErrors.add(error); return error; };
+  async function request(method, route, body, requestSignal = signal, timeoutMs, outerDeadline) {
     const operation = requestOperation(method, route); let phase = 'ownership';
+    if (remoteFence.signal.aborted) throw remoteFailure();
     if (ownershipFence.signal.aborted) throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED');
     if (requestSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
     const began = performance.now(), sessionCreate = operation === 'session-create';
-    // Ordinary requests have two settled phases, not a shared transport timer.
+    const semanticAction = ['click', 'clear', 'type'].includes(operation), httpBudget = semanticAction ? 10_000 : 5000;
+    // Semantic element mutations retain the inner WDA5000 response ceiling and
+    // allow one additional5000 client observation/body window. Reads are unchanged.
     // Session creation still spends at most its original 240 seconds in total.
-    const requestDeadline = began + (sessionCreate ? 240_000 : 10_000), deadline = Math.min(requestDeadline, outerDeadline ?? Infinity);
+    const requestDeadline = began + (sessionCreate ? 240_000 : semanticAction ? 15_000 : 10_000), deadline = Math.min(requestDeadline, outerDeadline ?? Infinity);
     let phaseDeadline = Math.min(began + 5000, deadline), timeout, timedOut = false, ownerStarted = false, ownerSettled = false;
     let ownerAllowed = false, httpStarted, effectiveHttpBudgetMs, budgetSource, fetchInvoked = false, responseHeadersObserved = false;
     const timer = new AbortController();
-    const operationSignal = AbortSignal.any([timer.signal, ownershipFence.signal, ...(requestSignal ? [requestSignal] : [])]);
+    const operationSignal = AbortSignal.any([timer.signal, ownershipFence.signal, remoteFence.signal, ...(requestSignal ? [requestSignal] : [])]);
     const fencePendingOwner = () => { if (ownerStarted && !ownerSettled) ownershipFence.abort(); };
     operationSignal.addEventListener('abort', fencePendingOwner, { once: true });
     const checkDeadline = () => {
@@ -127,6 +143,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
         timedOut = true; timer.abort(); throw fail('NATIVE_DRIVER_TIMEOUT');
       }
       if (ownershipFence.signal.aborted) throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED');
+      if (remoteFence.signal.aborted) throw remoteFailure();
     };
     const armDeadline = () => {
       clearTimeout(timeout); checkDeadline();
@@ -145,7 +162,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
       ownerAllowed = true;
       phase = 'http';
       httpStarted = performance.now();
-      phaseDeadline = Math.min(httpStarted + (sessionCreate ? timeoutMs : Math.min(timeoutMs, 5000)), deadline);
+      phaseDeadline = Math.min(httpStarted + (sessionCreate ? timeoutMs : Math.min(timeoutMs ?? httpBudget, httpBudget)), deadline);
       effectiveHttpBudgetMs = Math.max(0, phaseDeadline - httpStarted);
       // Exact ties select caller-outer, then request-total; this identifies a
       // limiting bound, not a uniquely established cause of expiry.
@@ -173,32 +190,42 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
       checkDeadline();
       if (!decoded || typeof decoded !== 'object' || !Object.hasOwn(decoded, 'value')) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
       if (!response.ok || decoded.value?.error !== undefined) {
-        if (response.status === 404 && decoded.value?.error === 'no such element') return { missing: true };
+        if (operation === 'element-find' && response.status === 404 && decoded.value?.error === 'no such element') return { missing: true };
         throw fail('NATIVE_DRIVER_COMMAND_FAILED');
       }
+      if (semanticAction && decoded.value !== null) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
       return { value: decoded.value };
     } catch (error) {
       fencePendingOwner();
       const progress = failure => ownerAllowed && ownerSettled && !ownershipFence.signal.aborted && httpStarted !== undefined ?
         retainRequestProgress(failure, { ownershipElapsedMs: httpStarted - began, effectiveHttpBudgetMs,
           httpBodyElapsedMs: performance.now() - httpStarted, budgetSource, fetchInvoked, responseHeadersObserved }) : failure;
-      if (requestSignal?.aborted) throw progress(fail('NATIVE_DRIVER_CANCELLED', { operation, phase }));
-      if (timedOut || performance.now() >= phaseDeadline || performance.now() >= deadline) throw progress(fail('NATIVE_DRIVER_TIMEOUT', { operation, phase }));
-      if (ownershipFence.signal.aborted || phase === 'ownership') throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED', { operation, phase });
-      if (error instanceof NativeDriverError) throw progress(retainRequestFact(error, { operation, phase }));
-      throw progress(fail('NATIVE_DRIVER_COMMAND_FAILED', { operation, phase }));
+      const failed = failure => {
+        const result = progress(failure);
+        // A returned local promise or proxy error does not prove the native
+        // mutation stopped. Never replay or race DELETE/another action with it.
+        if (semanticAction && fetchInvoked) { remoteUnsettledErrors.add(result); remoteFence.abort(); }
+        else if (remoteFence.signal.aborted) remoteUnsettledErrors.add(result);
+        return result;
+      };
+      if (requestSignal?.aborted) throw failed(fail('NATIVE_DRIVER_CANCELLED', { operation, phase }));
+      if (timedOut || performance.now() >= phaseDeadline || performance.now() >= deadline) throw failed(fail('NATIVE_DRIVER_TIMEOUT', { operation, phase }));
+      if (remoteFence.signal.aborted) throw failed(remoteFailure({ operation, phase }));
+      if (ownershipFence.signal.aborted || phase === 'ownership') throw failed(fail('NATIVE_DRIVER_OWNERSHIP_REFUSED', { operation, phase }));
+      if (error instanceof NativeDriverError) throw failed(retainRequestFact(error, { operation, phase }));
+      throw failed(fail('NATIVE_DRIVER_COMMAND_FAILED', { operation, phase }));
     } finally { clearTimeout(timeout); operationSignal.removeEventListener('abort', fencePendingOwner); }
   }
   const setupDeadline = performance.now() + 240_000;
   let created;
   try { created = (await request('POST', '/session', { capabilities: { alwaysMatch: capabilities, firstMatch: [{}] } }, signal, 240_000, setupDeadline)).value; }
-  catch (error) { if (error.code === 'NATIVE_DRIVER_TIMEOUT') throw fail('NATIVE_DRIVER_SESSION_TIMEOUT', readIosRequestFailure(error), readIosRequestProgress(error)); throw error; }
+  catch (error) { if (error.code === 'NATIVE_DRIVER_TIMEOUT') throw reclassified('NATIVE_DRIVER_SESSION_TIMEOUT', error); throw error; }
   if (!created || typeof created.sessionId !== 'string' || !/^[A-Za-z0-9-]{1,160}$/.test(created.sessionId)) throw fail('NATIVE_DRIVER_SESSION_INVALID');
   session = created.sessionId;
   const route = suffix => '/session/' + encodeURIComponent(session) + suffix;
   async function nativeContext(activeSignal = signal, timeoutMs = 5000, outerDeadline) {
     try { if ((await request('GET', route('/context'), undefined, activeSignal, timeoutMs, outerDeadline)).value !== 'NATIVE_APP') throw fail('NATIVE_DRIVER_CONTEXT_REFUSED'); }
-    catch (error) { if (error.code === 'NATIVE_DRIVER_TIMEOUT') throw fail('NATIVE_DRIVER_CONTEXT_TIMEOUT', readIosRequestFailure(error), readIosRequestProgress(error)); throw error; }
+    catch (error) { if (error.code === 'NATIVE_DRIVER_TIMEOUT') throw reclassified('NATIVE_DRIVER_CONTEXT_TIMEOUT', error); throw error; }
   }
   try {
     const owned = await stabilizeIosSetupOwnership({ assertOwned, signal, deadline: setupDeadline });
@@ -209,7 +236,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     const remaining = setupDeadline - performance.now();
     if (remaining <= 0) { ownershipFence.abort(); throw fail('NATIVE_DRIVER_SESSION_TIMEOUT'); }
     try { await nativeContext(signal, Math.min(5000, remaining), setupDeadline); }
-    catch (error) { if (performance.now() >= setupDeadline) throw fail('NATIVE_DRIVER_SESSION_TIMEOUT', readIosRequestFailure(error), readIosRequestProgress(error)); throw error; }
+    catch (error) { if (performance.now() >= setupDeadline) throw reclassified('NATIVE_DRIVER_SESSION_TIMEOUT', error); throw error; }
     if (performance.now() >= setupDeadline) throw fail('NATIVE_DRIVER_SESSION_TIMEOUT');
   } catch (error) {
     // A failed setup callback may still run in the parent. Never start another
@@ -280,13 +307,14 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
       }
       throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT');
     } catch (error) {
-      if (activeSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED', readIosRequestFailure(error), readIosRequestProgress(error));
-      if (performance.now() >= deadline) throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT', readIosRequestFailure(error), readIosRequestProgress(error));
+      if (error.code === 'NATIVE_DRIVER_REMOTE_UNSETTLED' && readIosRemoteUnsettled(error)) throw error;
+      if (activeSignal?.aborted) throw reclassified('NATIVE_DRIVER_CANCELLED', error);
+      if (performance.now() >= deadline) throw reclassified('NATIVE_DRIVER_ELEMENT_TIMEOUT', error);
       throw error;
     }
   }
   const actions = {
-    async waitFor(id, activeSignal = signal) { try { await find(id, activeSignal); } catch (error) { if (['NATIVE_DRIVER_TIMEOUT', 'NATIVE_DRIVER_ELEMENT_TIMEOUT'].includes(error.code)) throw fail('NATIVE_DRIVER_READINESS_TIMEOUT', readIosRequestFailure(error), readIosRequestProgress(error)); throw error; } },
+    async waitFor(id, activeSignal = signal) { try { await find(id, activeSignal); } catch (error) { if (['NATIVE_DRIVER_TIMEOUT', 'NATIVE_DRIVER_ELEMENT_TIMEOUT'].includes(error.code)) throw reclassified('NATIVE_DRIVER_READINESS_TIMEOUT', error); throw error; } },
     async scrollIntoView(id, activeSignal = signal) { await visible(id, activeSignal); },
     async click(id, activeSignal = signal) { const element = await visible(id, activeSignal); await request('POST', route('/element/' + encodeURIComponent(element) + '/click'), {}, activeSignal); },
     async text(id, activeSignal = signal) {

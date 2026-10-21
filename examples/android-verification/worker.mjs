@@ -118,7 +118,7 @@ async function main(payload) {
       DriverError && error instanceof DriverError && NATIVE_DRIVER_FAILURE_CODES.includes(error.code) ? error.code : 'NATIVE_DRIVER_FAILED';
     report = nativeFailureReport(plan, code);
   } finally {
-    const unsettled = report?.cases.some(item => item.diagnostics.some(value => ['NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_UNSETTLED'].includes(value.code)));
+    const unsettled = report?.cases.some(item => item.diagnostics.some(value => ['NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_UNSETTLED', 'NATIVE_DRIVER_REMOTE_UNSETTLED'].includes(value.code)));
     // An unsettled callback cannot safely race session close. The host stops this
     // worker immediately; the parent owns Appium/emulator shutdown and recovery.
     if (driver && !unsettled) try { await driver.close(); }

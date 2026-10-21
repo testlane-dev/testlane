@@ -316,10 +316,20 @@ shared `budgets.mjs` declares these bounds and the 600-second outer worker ceili
 cases run once without retries. Appium/WebDriverAgent session creation has
 its own 240-second ceiling within that outer limit. After receiving a valid session
 ID, setup performs one live ownership check within the remaining startup budget,
-capped at 20 seconds. Each ordinary driver request allows up to five seconds for
-fresh live ownership confirmation, followed by up to five seconds for HTTP and the
-complete response body, with a ten-second aggregate ceiling. Both phases are
-clipped by any enclosing monotonic deadline. Session creation retains its original
+capped at 20 seconds. Every request allows up to five seconds for fresh live
+ownership confirmation. Reads, visibility-contained gestures, keyboard-state/hide
+fallback and session deletion retain five seconds for HTTP plus the complete
+response body, with a ten-second request aggregate. Only semantic element POST
+click/clear/value requests allow ten seconds for HTTP plus the complete body and
+a fifteen-second request aggregate. This is a declared response-observation
+policy: the unchanged inner WDA five-second transport ceiling leaves up to one
+additional five-second client window for dispatch, response propagation and body
+handling. It is not a measured explanation of a hosted failure or a guarantee of
+native completion. Click also performs its preceding visibility lookup; type
+performs visibility, clear and value requests. These are per-request bounds, not
+a fifteen-second bound on the entire action API. All phases are clipped by any
+enclosing monotonic deadline or phase cancellation signal. Mutations run once
+and are never replayed. Session creation retains its original
 240-second aggregate ceiling, including ownership; it does not gain five seconds.
 Visibility remains one ten-second window with at most six swipes. The read-only
 presence lookup now includes its initial native-context check within that same
@@ -331,6 +341,16 @@ the driver permanently refuses further guards, HTTP requests and session deletio
 even if that callback later acknowledges ownership. An unconfirmed setup check also prevents subsequent native actions;
 session deletion is reported unknown if the prior operation cannot be confirmed
 settled, and the controller fences it through owned-device teardown.
+A dispatched click/clear/value request without a successful complete terminal
+result is permanently quarantined, including timeout, cancellation, invalid body
+or a parsed Appium proxy error. The original failure is retained; further driver
+guards, native HTTP and session DELETE are refused with the fixed
+NATIVE_DRIVER_REMOTE_UNSETTLED code even after a late reply. A locally settled
+promise or proxy timeout does not establish that XCTest stopped. The runner
+leaves cleanup unknown and starts no cleanup callback or later case. The parent
+must stop the exact owned worker and Appium/device before credential cleanup;
+only actual unconfirmed termination defers that cleanup permanently. Read-only
+request failures retain their existing policy.
 The separate 600-second WDA
 compile happens during device setup, before the worker and credentials exist;
 it does not extend session or business-case deadlines. Fixed numeric `timings.json`

@@ -40,13 +40,13 @@ function harness(t) {
   };
 }
 
-test('a settled 4.7-second owner check leaves a fresh five-second HTTP phase inside the ten-second aggregate', async t => {
+test('a settled 4.7-second owner check leaves a fresh ten-second semantic POST phase inside its fifteen-second aggregate', async t => {
   const h = harness(t), driver = await h.create(); let owners = 0, clicked = false;
   h.owner(() => { if (++owners === 4) h.advance(4700); return true; });
-  h.http(route => { if (route.endsWith('/click')) { clicked = true; assert.equal([...h.timers.values()][0].milliseconds, 5000); h.advance(300); } });
+  h.http(route => { if (route.endsWith('/click')) { clicked = true; assert.equal([...h.timers.values()][0].milliseconds, 10000); h.advance(300); } });
   await driver.click('create-request');
   assert.equal(clicked, true); assert.equal(h.now(), 5000);
-  assert.equal(h.durations.slice(-2).every(ms => ms === 5000), true);
+  assert.deepEqual(h.durations.slice(-2), [5000, 10000]);
   await driver.close(); assert.equal(h.timers.size, 0);
 });
 
@@ -64,13 +64,13 @@ test('a fractional late settled owner result cannot send HTTP, but is not confus
 test('HTTP and the entire response body retain one five-second phase after a slow settled owner', async t => {
   const h = harness(t), driver = await h.create(); let owners = 0, reads = 0;
   h.owner(() => { if (++owners === 4) h.advance(4700); return true; });
-  h.http(route => route.endsWith('/click') ? { ok: true, status: 200, body: { getReader: () => ({ read: async () => {
+  h.http(route => route.endsWith('/attribute/value') ? { ok: true, status: 200, body: { getReader: () => ({ read: async () => {
     if (++reads === 1) { h.advance(4999); return { done: false, value: Buffer.from('{"value":null}') }; }
     h.advance(1.001); return { done: true };
   } }) } } : undefined);
-  await assert.rejects(driver.click('create-request'), error => {
+  await assert.rejects(driver.text('create-request'), error => {
     assert.equal(error.code, 'NATIVE_DRIVER_TIMEOUT');
-    assert.deepEqual(readIosRequestFailure(error), { operation: 'click', phase: 'response' }); return true;
+    assert.deepEqual(readIosRequestFailure(error), { operation: 'value-read', phase: 'response' }); return true;
   });
   assert.equal(reads, 2); assert.equal(h.now(), 9700.001);
   h.http(undefined); await driver.close(); assert.equal(h.timers.size, 0);
@@ -179,9 +179,9 @@ test('cancellation after settled true ownership cannot enqueue HTTP and leaves i
 
 test('a body read ignoring abort is bounded without allowing late chunks to resume the request', async t => {
   const h = harness(t), driver = await h.create(), gate = Promise.withResolvers(), entered = Promise.withResolvers(); let reads = 0;
-  h.http(route => route.endsWith('/click') ? { ok: true, status: 200, body: { getReader: () => ({ read() { reads++; entered.resolve(); return gate.promise; } }) } } : undefined);
-  const rejected = assert.rejects(driver.click('selected-id'), error => {
-    assert.equal(error.code, 'NATIVE_DRIVER_TIMEOUT'); assert.deepEqual(readIosRequestFailure(error), { operation: 'click', phase: 'response' }); return true;
+  h.http(route => route.endsWith('/attribute/value') ? { ok: true, status: 200, body: { getReader: () => ({ read() { reads++; entered.resolve(); return gate.promise; } }) } } : undefined);
+  const rejected = assert.rejects(driver.text('selected-id'), error => {
+    assert.equal(error.code, 'NATIVE_DRIVER_TIMEOUT'); assert.deepEqual(readIosRequestFailure(error), { operation: 'value-read', phase: 'response' }); return true;
   });
   await entered.promise; h.expire(); await rejected; const routes = h.routes.length;
   gate.resolve({ done: false, value: Buffer.from('{"value":null}') }); await Promise.resolve(); await Promise.resolve();
@@ -200,17 +200,17 @@ test('a pending-owner fence also interrupts a concurrent HTTP operation without 
   await ownerEntered.promise; phase.abort(); await Promise.all([first, second]);
   const routes = h.routes.length, owners = h.ownerCount();
   ownerGate.resolve(true); httpGate.resolve(h.json(null)); await Promise.resolve(); await Promise.resolve();
-  await assert.rejects(driver.close(), { code: 'NATIVE_DRIVER_OWNERSHIP_REFUSED' });
+  await assert.rejects(driver.close(), { code: 'NATIVE_DRIVER_REMOTE_UNSETTLED' });
   assert.equal(h.routes.length, routes); assert.equal(h.ownerCount(), owners); assert.equal(h.timers.size, 0);
 });
 
 test('JSON decoding time remains part of the HTTP body deadline and cannot accept a fractional late result', async t => {
   const h = harness(t), driver = await h.create(), parse = JSON.parse; let decoding = false;
-  h.http(route => { if (route.endsWith('/click')) { decoding = true; return h.json(null); } });
+  h.http(route => { if (route.endsWith('/attribute/value')) { decoding = true; return h.json(null); } });
   t.mock.method(JSON, 'parse', text => { const decoded = parse(text); if (decoding) { decoding = false; h.advance(5000.001); } return decoded; });
-  await assert.rejects(driver.click('create-request'), error => {
+  await assert.rejects(driver.text('create-request'), error => {
     assert.equal(error.code, 'NATIVE_DRIVER_TIMEOUT');
-    assert.deepEqual(readIosRequestFailure(error), { operation: 'click', phase: 'response' }); return true;
+    assert.deepEqual(readIosRequestFailure(error), { operation: 'value-read', phase: 'response' }); return true;
   });
   h.http(undefined); await driver.close();
 });
