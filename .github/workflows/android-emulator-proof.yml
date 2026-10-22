@@ -7,9 +7,8 @@ on:
       - scripts/android-*.mjs
       - scripts/native-proof-support.mjs
       - examples/android-verification/**
-      - examples/ios-verification/driver.mjs
-      - examples/ios-verification/device-scope.mjs
-      - examples/ios-verification/setup-ownership.mjs
+      # The installed-package content digest includes the shipped iOS example files.
+      - examples/ios-verification/**
       - examples/mobile-approval-app/**
       - examples/verification-demo/**
       - examples/workflows/test-support/real-broker.mjs
