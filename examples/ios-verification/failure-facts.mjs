@@ -81,3 +81,42 @@ export function retainIosStartupFailure(error, fact) {
   }
   return error;
 }
+
+// These are pattern observations in one accepted sample, never a root-cause or
+// process/cleanup assertion. Unavailable flags mean no accepted observation.
+const OBSERVATION_SCOPES = new Set(['cold-boot-first-owned-list', 'proof-app-prewarm']);
+const OBSERVATION_KINDS = new Set(['owned-device-list', 'owned-proof-app-prewarm']);
+const OBSERVATION_FIELDS = ['scope', 'commandKind', 'status', 'coreSimulatorObserved', 'xpcObserved', 'machMsgObserved', 'semaphoreObserved'];
+export function normalizeIosStartupCommandObservation(value) {
+  if (value === null || typeof value !== 'object' || types.isProxy(value)) return undefined;
+  try {
+    if (![Object.prototype, null].includes(Object.getPrototypeOf(value)) || Object.getOwnPropertySymbols(value).length) return undefined;
+    const keys = Object.getOwnPropertyNames(value);
+    if (keys.length !== OBSERVATION_FIELDS.length || keys.some(key => !OBSERVATION_FIELDS.includes(key))) return undefined;
+    const fields = Object.fromEntries(OBSERVATION_FIELDS.map(key => [key, ownValue(value, key)]));
+    if (!OBSERVATION_SCOPES.has(fields.scope) || !OBSERVATION_KINDS.has(fields.commandKind) ||
+        (fields.scope === 'cold-boot-first-owned-list' && fields.commandKind !== 'owned-device-list') ||
+        !['captured', 'unavailable'].includes(fields.status) ||
+        OBSERVATION_FIELDS.slice(3).some(key => typeof fields[key] !== 'boolean') ||
+        (fields.status === 'unavailable' && OBSERVATION_FIELDS.slice(3).some(key => fields[key]))) return undefined;
+    return Object.freeze(fields);
+  } catch { return undefined; }
+}
+export function iosStartupCommandObservation(scope, commandKind, text) {
+  const captured = typeof text === 'string' && text.trim().length > 0 && Buffer.byteLength(text) <= 8 * 1024 * 1024;
+  return normalizeIosStartupCommandObservation({ scope, commandKind, status: captured ? 'captured' : 'unavailable',
+    coreSimulatorObserved: captured && /CoreSimulator/.test(text),
+    xpcObserved: captured && /\b(?:XPC|libxpc|xpc_[A-Za-z0-9_]+)\b/.test(text),
+    machMsgObserved: captured && /\bmach_msg[A-Za-z0-9_]*\b/.test(text),
+    semaphoreObserved: captured && /\bsemaphore(?:_[A-Za-z0-9_]+)?\b/.test(text) });
+}
+export function readIosStartupCommandObservation(error) {
+  return nativeError(error) ? normalizeIosStartupCommandObservation(ownValue(error, 'startupCommandObservation')) : undefined;
+}
+export function retainIosStartupCommandObservation(error, fact) {
+  const safe = normalizeIosStartupCommandObservation(fact);
+  if (nativeError(error) && safe) {
+    try { if (!Object.getOwnPropertyDescriptor(error, 'startupCommandObservation')) Object.defineProperty(error, 'startupCommandObservation', { value: safe }); } catch {}
+  }
+  return error;
+}

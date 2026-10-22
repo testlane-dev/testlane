@@ -13,7 +13,7 @@ import {writeNativeProofReceipt,installedModule} from '../../../scripts/native-p
 import {publicAndroidFailure,retainAndroidFailureFact,readAndroidFailureFact} from '../failure.mjs';
 import {retainAndroidOwnershipFailure} from '../ownership-facts.mjs';
 import {publicIosFailure} from '../../ios-verification/failure.mjs';
-import {retainIosStartupFailure,readIosStartupFailure} from '../../ios-verification/failure-facts.mjs';
+import {retainIosStartupFailure,readIosStartupFailure,retainIosStartupCommandObservation} from '../../ios-verification/failure-facts.mjs';
 
 const test=(name,callback)=>nodeTest(name,{timeout:10000},callback);
 const root=fileURLToPath(new URL('../../../',import.meta.url));
@@ -121,8 +121,8 @@ async function tailFixture(t,platform,{cleanupFailure=false,originalError,sessio
   const context={Error,Object,JSON,Set,assert,path,signal:active.signal,receipt:receipt(),output,recovery,
     consumer:{root:output,sessionTemp},stage:'corrected',at:stage=>{context.stage=stage;events.push(stage);},
     workerUnconfirmed:false,deviceStartUnconfirmed:false,cleanupOK:true,harness:undefined,broker:undefined,brokerRecovery:undefined,
-    captured:'',audit:'',accounts:{},attempted:new Set(),originalFailure,startupFailure,ownershipFailure:undefined,primaryError:originalError,
-    retainAndroidFailureFact,retainAndroidOwnershipFailure,retainIosStartupFailure,writeFile:fs.writeFile,writeNativeProofReceipt,
+    captured:'',audit:'',accounts:{},attempted:new Set(),originalFailure,startupFailure,startupCommandObservation:undefined,ownershipFailure:undefined,primaryError:originalError,
+    retainAndroidFailureFact,retainAndroidOwnershipFailure,retainIosStartupFailure,retainIosStartupCommandObservation,writeFile:fs.writeFile,writeNativeProofReceipt,
     device:{async close(){events.push('device-close');if(!sessionBarrier){entered.resolve();await gate.promise;}if(cleanupFailure)throw Error('controlled-stop');events.push('device-stopped');},capturedText:()=>''},
     app:{records:()=>[],async close(){events.push('app-stopped');}},
     readdir:async file=>{const entries=await fs.readdir(file);if(sessionBarrier&&file===sessionTemp){entered.resolve();await gate.promise;}return entries;}};

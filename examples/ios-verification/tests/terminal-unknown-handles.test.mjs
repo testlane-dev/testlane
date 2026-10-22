@@ -227,7 +227,8 @@ else if (mode === '--fixture-host') {
         child: { stdin: { destroy() {} }, stdout: { destroy() {} }, stderr: { destroy() {} }, unref() {} } };
       const calls = [], context = { Error, Map, Set, Promise, Date, setTimeout, clearTimeout, sleep, fail: fixed,
         waitClosed: async () => {}, signal: undefined, commands: new Set([state]), diagnosticTasks: new Set(), closing: undefined,
-        diagnosticCleanupUncertain: false, wdaBuildIncomplete: true, appium: { spawned: false },
+        diagnosticPolicy: {finishPrewarm() {}}, startupDiagnosticLease: undefined,
+        diagnosticCleanupUncertain: false, commandStopUnconfirmed: false, wdaBuildIncomplete: true, appium: { spawned: false },
         path, writeFile, output: root, root, deviceSetPath: root, IOS_DEVICE_SCOPE: 'hosted-standard-device-set',
         marker: { udid: 'owned-fixture', name: 'owned-fixture', baselineSHA256: 'a'.repeat(64) },
         processInfo: async () => { calls.push('identity'); throw fixed('UNEXPECTED_COMMAND'); },

@@ -6,6 +6,11 @@ what to do about it in [docs/upgrading.md](docs/upgrading.md).
 
 ## Unreleased
 
+### Fixed
+
+- Preserve iOS recovery data when a command’s process termination cannot be
+  confirmed, even if its local streams close.
+
 ### Added
 
 - An experimental React Native/Expo Android emulator proof with pinned Appium and

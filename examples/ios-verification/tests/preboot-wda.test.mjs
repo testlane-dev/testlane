@@ -7,10 +7,10 @@ import {createHash} from 'node:crypto';
 import path from 'node:path';
 import vm from 'node:vm';
 import {getEventListeners} from 'node:events';
-import {acknowledgedIosCreate,ownedSimctlArguments,ownedIosWdaBuildArguments,runIosColdBoot,selectIosTarget,
-  validateIosWdaPreparation,verifyOwnedSimulator,verifyOwnedWdaPreparationSimulator} from '../device.mjs';
+import {acknowledgedIosProofLaunch,acknowledgedIosCreate,ownedSimctlArguments,ownedIosWdaBuildArguments,runIosColdBoot,selectIosTarget,
+  validateIosWdaPreparation,createIosDiagnosticPolicy,verifyOwnedSimulator,verifyOwnedWdaPreparationSimulator} from '../device.mjs';
 import {IOS_DEVICE_SCOPE,validateIosDeviceBinding,snapshotIosForeignDevices,assertIosForeignSnapshot} from '../device-scope.mjs';
-import {createIosStartupFailure,fixedIosDeviceFailureCode,readIosStartupFailure,retainIosStartupFailure} from '../failure-facts.mjs';
+import {createIosStartupFailure,fixedIosDeviceFailureCode,readIosStartupFailure,retainIosStartupFailure,readIosStartupCommandObservation,retainIosStartupCommandObservation} from '../failure-facts.mjs';
 
 const udid='12345678-1234-1234-1234-123456789ABC',other='87654321-1234-1234-1234-123456789ABC';
 const runtimeId='com.apple.CoreSimulator.SimRuntime.iOS-26-4',deviceType='com.apple.CoreSimulator.SimDeviceType.iPhone-17';
@@ -72,14 +72,14 @@ function controlled(options={}){
     driverPackage:{version:'12.19.1'},tools:'/private/tmp/pinned-tools',runtimeId,deviceType,
     appiumPort:8123,wdaPort:8124,mjpegPort:8125,env:undefined,baseline:undefined,wdaPreparation:undefined,target:undefined,xcodeVersion:undefined,
     marker:{...fixture.marker,udid:null,runtimeId:null,deviceType:null,baselineSHA256:null,wdaPreparationSHA256:null},
-    wdaBuildIncomplete:false,createAttempted:false,createSettled:false,ready:false,closed:false,closing:undefined,appium:undefined,
-    startupStage:'owned-simulator-start',WDA_BUILD_MS:600000,wdaStartupPatch:{schemaVersion:1},
+    wdaBuildIncomplete:false,commandStopUnconfirmed:false,createAttempted:false,createSettled:false,ready:false,closed:false,closing:undefined,appium:undefined,
+    BUNDLE:'dev.testlane.iosproof',startupStage:'owned-simulator-start',startupDiagnosticLease:undefined,prewarmAttempted:false,sampledCommandResults:new WeakMap(),WDA_BUILD_MS:600000,wdaStartupPatch:{schemaVersion:1},
     fail:code=>Error(code),digest:value=>createHash('sha256').update(JSON.stringify(value)).digest('hex'),
     safePath:value=>typeof value==='string'&&path.posix.isAbsolute(value),capture:()=>{},captured:{text:()=>''},
-    createIosDeviceEnvironment:()=>Object.freeze({}),diagnosticPolicy:{appiumLogLevel:'error'},
-    IOS_DEVICE_SCOPE,selectIosTarget,snapshotIosForeignDevices,assertIosForeignSnapshot,acknowledgedIosCreate,ownedSimctlArguments,
+    createIosDeviceEnvironment:()=>Object.freeze({}),diagnosticPolicy:createIosDiagnosticPolicy({prewarmDiagnostics:true}),
+    IOS_DEVICE_SCOPE,acknowledgedIosProofLaunch,selectIosTarget,snapshotIosForeignDevices,assertIosForeignSnapshot,acknowledgedIosCreate,ownedSimctlArguments,
     ownedIosWdaBuildArguments,runIosColdBoot:options=>runIosColdBoot({...options,now:()=>clock}),validateIosWdaPreparation,verifyOwnedSimulator,verifyOwnedWdaPreparationSimulator,validateIosDeviceBinding:value=>validateIosDeviceBinding(JSON.parse(JSON.stringify(value))),
-    createIosStartupFailure,fixedIosDeviceFailureCode,retainIosStartupFailure,
+    createIosStartupFailure,fixedIosDeviceFailureCode,retainIosStartupFailure,readIosStartupCommandObservation,retainIosStartupCommandObservation,
     mkdir:async()=>{},writeFile:async()=>{events.push('write');},
     realpath:async file=>{if(cacheStarted())clock+=options.cachePathMs??0;return options.alias&&file.endsWith(udid)?file+'-alias':file;},
     lstat:async()=>{if(cacheStarted())clock+=options.cachePathMs??0;return{isSymbolicLink:()=>options.symlink===true};},
@@ -142,6 +142,7 @@ function controlled(options={}){
       if(options.stateAfterCache)state=options.stateAfterCache;
       return{code:options.cacheCode??0};
     }
+    if(executable==='/usr/bin/xcrun'&&args[3]==='launch')return{code:0,stdout:'dev.testlane.iosproof: 1234'};
     assert.equal(executable,'/usr/bin/xcrun');assert.equal(args[3],'boot');events.push('boot');
     assert.ok(budget.timeoutMs<=30000);assert.equal(budget.deadlineAt,Math.min(601000,clock+30000));
     return{code:options.bootCode??0};
@@ -276,4 +277,19 @@ test('uncertain cache stop retains its original fixed kind even when cleanup als
     assert.deepEqual(readIosStartupFailure(error),{stage:'device-selected-runtime-cache-preparing',code:'IOS_PROCESS_STOP_UNCONFIRMED',commandKind:'selected-runtime-cache-update'});return true;
   });
   assert.equal(f.events.includes('boot'),false);assert.equal(f.closeCalls(),1);
+});
+
+
+test('only first postboot ownership receives the lease reused by the first prewarm',async()=>{
+  const f=controlled(),device=await f.execution();
+  const sampled=f.queries.filter(query=>query.prewarmDiagnostic);
+  assert.equal(sampled.length,1);assert.equal(sampled[0].deadlineAt,91000);
+  const lease=sampled[0].prewarmDiagnostic;
+  assert.equal(lease.canSample('owned-device-list'),true);
+  // The actual returned prewarm method uses the same private lease.
+  await device.prewarmProofApp();
+  const prewarm=f.queries.at(-1);assert.equal(prewarm.prewarmDiagnostic,lease);
+  assert.equal(lease.isActive(),false);
+  await device.prewarmProofApp();assert.equal(f.queries.at(-1).prewarmDiagnostic,undefined);
+  await device.close();
 });

@@ -43,16 +43,16 @@ test('1202 representative standard-set responses remain fully valid without exha
 
 test('only repeated inventory/listener/process payloads are transient, on both command streams',()=>{
   const capture=createIosDeviceCapture(),text='PUBLIC_FIXTURE_TRANSIENT_ERROR';
-  for(const kind of ['owned-device-list','loopback-listeners','process-identity','owned-descendants','owned-process-group']){
+  for(const kind of ['owned-device-list','loopback-listeners','process-identity','owned-descendants','owned-process-group','owned-prewarm-stack-sample']){
     assert.equal(retainIosCommandPayload(kind),false);
     assert.equal(captureIosCommandOutput(capture.append,kind,text),text);
   }
   assert.equal(capture.text(),'');
-  for(const kind of ['owned-wda-prebuild','owned-prewarm-stack-sample','owned-proof-app-prewarm','runtime-list','other']){
+  for(const kind of ['owned-wda-prebuild','owned-proof-app-prewarm','runtime-list','other']){
     assert.equal(retainIosCommandPayload(kind),true);
     assert.equal(captureIosCommandOutput(capture.append,kind,text),text);
   }
-  assert.equal(capture.text(),text.repeat(5));
+  assert.equal(capture.text(),text.repeat(4));
 });
 
 test('retained native diagnostics still fail the unchanged eight-MiB byte limit',()=>{
@@ -61,6 +61,6 @@ test('retained native diagnostics still fail the unchanged eight-MiB byte limit'
   assert.equal(Buffer.byteLength(capture.text()),8*1024*1024);assert.equal(capture.overflowed(),false);
   capture.append('x');assert.equal(capture.overflowed(),true);assert.equal(capture.text(),exact);
   const oversized=createIosDeviceCapture(),bytes='x'.repeat(8*1024*1024+1);
-  assert.equal(captureIosCommandOutput(oversized.append,'owned-prewarm-stack-sample',bytes),bytes);
+  assert.equal(captureIosCommandOutput(oversized.append,'owned-wda-prebuild',bytes),bytes);
   assert.equal(oversized.overflowed(),true);assert.equal(oversized.text(),'');
 });

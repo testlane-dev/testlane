@@ -38,7 +38,7 @@ concurrency:
 jobs:
   simulator:
     name: owned iOS simulator proof
-    runs-on: macos-26-intel
+    runs-on: macos-26
     timeout-minutes: 60
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
@@ -50,6 +50,19 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          architecture: arm64
+      - name: Require the fixed hosted Apple Silicon target
+        run: |
+          node --input-type=module <<'NODE'
+          if (process.platform !== 'darwin' || process.arch !== 'arm64' ||
+              process.env.RUNNER_ARCH !== 'ARM64' ||
+              process.env.RUNNER_ENVIRONMENT !== 'github-hosted' ||
+              process.env.GITHUB_ACTIONS !== 'true') {
+            console.error('IOS_HOSTED_ARM64_TARGET_REQUIRED');
+            process.exit(1);
+          }
+          console.log('IOS_HOSTED_ARM64_TARGET_CONFIRMED');
+          NODE
       - name: Inspect Xcode and the exact available simulator runtime
         run: node scripts/ios-preflight.mjs output/ios-preflight.json
       - run: npm ci
@@ -97,5 +110,6 @@ jobs:
           retention-days: 3
           path: |
             output/ios-proof/public-failure.json
+            output/ios-proof/startup-command-observation.json
             output/ios-proof/preauth-controls.json
             output/ios-proof/readiness.json

@@ -13,6 +13,10 @@ independently designing tests for an unfamiliar app.
 
 ## Required environment
 
+The hosted workflow targets the standard `macos-26` Apple Silicon runner and
+Node 22 arm64. It refuses a mismatched Node or runner architecture before native
+preflight.
+
 The complete credential-backed proof runs only on an **ephemeral GitHub-hosted
 macOS runner** with `TESTLANE_IOS_PROOF_CI=1`. It also requires GitHub's
 `GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT=github-hosted` indicators. Do not
@@ -408,6 +412,10 @@ does not settle has a separate fixed diagnosis, without replaying actions. The
 eight- and ten-second polling windows remain subject to the surrounding driver
 and case budgets; a single text read can involve several driver requests.
 
+An unconfirmed retained-command stop permanently fails that device factory’s cleanup,
+even if destroying local streams is followed by a child close event. Recovery and
+the owned root remain; a local close does not establish descendant termination.
+
 Repeated device inventory, listener and process-query responses remain bounded
 transient inputs to the live validators. The cumulative diagnostic log omits their
 raw payloads and records fixed command kinds, status and timing instead. This keeps
@@ -435,16 +443,25 @@ readiness check establishes that authenticated cases pass. The workflow does not
 post-authentication driver logs, keychain homes or recovery directories. Hashes bind reviewed inputs;
 they do not authenticate arbitrary reports or establish assertion quality.
 
-The first prewarm invocation can sample its exact retained inventory-query or
-fixed app-launch process if it remains pending after 15 seconds. Both commands share
-one sample claim; an attempted sample cannot be repeated. Ordinary ownership checks,
-worker RPCs and cleanup queries receive no sampling permission. Sampling lasts one
-second, with a five-second helper bound, identity rechecks and a bounded pre-auth
-capture. The helper must join before its command or cleanup completes. Permission
-is revoked when the first prewarm settles, including ownership failure or
-cancellation; later calls cannot sample. Inventory and launch retain their
-30-second limits. The installed proof enables this setup-only sampler before
-generating credentials while Appium logging stays at error level.
+The first fresh owned-device query after cold boot and the first prewarm
+inventory/launch share one sampling lease and at most one actual sample. Only
+these explicit commands may sample their exact retained live child after 15
+seconds. The one-second sample keeps its five-second helper cap, both identity
+checks, and any existing parent deadline; the helper joins before its command
+returns. Ordinary guards, worker RPCs and cleanup queries receive no lease.
+Permission is revoked at close entry or when the first prewarm settles, including
+failure and cancellation. The cold query keeps its existing shared cold-start
+window and 90-second step cap; prewarm inventory and launch keep 30-second caps.
+
+Raw sample output stays transient in memory. On that same command's failure only,
+`startup-command-observation.json` may contain a fixed scope, command kind, status
+and four symbol-presence booleans (CoreSimulator, XPC, mach_msg and semaphore).
+Unavailable means no accepted observation; its false flags do not establish
+symbol absence. A captured flag only reports a pattern in an accepted sample.
+It establishes neither a cause, command termination, cleanup nor proof success,
+and never authorizes raw diagnostic access. Successful commands cannot attach an
+old observation to a later unrelated failure. The installed proof enables this
+setup-only sampler before generating credentials while Appium stays at error level.
 The optional standalone diagnostic separately enables verbose startup logging; it
 never generates application credentials.
 

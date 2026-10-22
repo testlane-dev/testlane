@@ -13,7 +13,7 @@ import { IOS_DEVICE_SCOPE, validateIosDeviceBinding, normalizeIosDeviceInventory
 import { hashIosTree } from '../mobile-approval-app/build-ios.mjs';
 import { verifyPinnedWdaStartupPatch } from './tools/wda-startup-patch.mjs';
 import { verifyPinnedIosNativePrerequisite } from './tools/setup.mjs';
-import { createIosStartupFailure, fixedIosDeviceFailureCode, retainIosStartupFailure, tagIosCommandFailure } from './failure-facts.mjs';
+import { createIosStartupFailure, fixedIosDeviceFailureCode, retainIosStartupFailure, tagIosCommandFailure, iosStartupCommandObservation, readIosStartupCommandObservation, retainIosStartupCommandObservation } from './failure-facts.mjs';
 
 const UUID = /^[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}$/;
 const BUNDLE = 'dev.testlane.iosproof', MARKER = 'testlane-owned-simulator.json';
@@ -71,7 +71,7 @@ export async function runIosColdBoot({ prepareRuntime, boot, bootStatus, confirm
   return true;
 }
 
-const TRANSIENT_COMMAND_PAYLOADS = new Set(['owned-device-list', 'loopback-listeners', 'process-identity', 'owned-descendants', 'owned-process-group']);
+const TRANSIENT_COMMAND_PAYLOADS = new Set(['owned-prewarm-stack-sample', 'owned-device-list', 'loopback-listeners', 'process-identity', 'owned-descendants', 'owned-process-group']);
 export const retainIosCommandPayload = kind => !TRANSIENT_COMMAND_PAYLOADS.has(kind);
 
 /** The same fixed aggregate bound applies to retained native logs and markers. */
@@ -142,6 +142,7 @@ export function createIosDiagnosticPolicy({ diagnostics = false, prewarmDiagnost
       const canSample = kind => active && !claimed && (diagnostics || prewarmDiagnostics) && PREWARM_DIAGNOSTIC_KINDS.has(kind);
       const lease = Object.freeze({
         canSample,
+        isActive: () => active,
         claimSample(kind) { if (!canSample(kind)) return false; claimed = true; return true; },
       });
       activeLease = { lease, revoke: () => { active = false; } };
@@ -382,13 +383,14 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   const derivedDataPath = path.join(root, 'derived-data'), appiumHome = path.join(root, 'appium');
   const marker = { schemaVersion: 2, scope: IOS_DEVICE_SCOPE, nativeHome, privateRoot: root, nonce: randomBytes(12).toString('hex'), ownerPid: process.pid, name: '', udid: null, deviceSetPath, runtimeId: null, deviceType: null, appiumPid: null, baselineSHA256: null, wdaPreparationSHA256: null };
   marker.name = 'testlane_ios_' + marker.nonce;
-  const commands = new Set(), diagnosticTasks = new Set(); let diagnosticCleanupUncertain = false, wdaBuildIncomplete = false;
+  const commands = new Set(), diagnosticTasks = new Set(), sampledCommandResults = new WeakMap();
+  let startupDiagnosticLease, prewarmAttempted = false; let diagnosticCleanupUncertain = false, commandStopUnconfirmed = false, wdaBuildIncomplete = false;
   let appium, closing, closed = false, ready = false, createAttempted = false, createSettled = false, target, xcodeVersion;
   let env, baseline, wdaPreparation;
   const captured = createIosDeviceCapture(), capture = captured.append;
   const writeMarker = () => writeFile(path.join(root, MARKER), JSON.stringify(marker) + '\n', { mode: 0o600 });
   const live = (allowClosing = false) => { if (closed || (closing && !allowClosing) || signal?.aborted) throw fail('IOS_CANCELLED'); if (captured.overflowed()) throw fail('IOS_CAPTURE_LIMIT'); if (ready && (!appium?.spawned || appium.closed)) throw fail('IOS_APPIUM_STOPPED'); };
-  async function run(executable, args, { timeoutMs = 30000, ignoreSignal = false, prewarmDiagnostic, deadlineAt } = {}) {
+  async function run(executable, args, { timeoutMs = 30000, ignoreSignal = false, prewarmDiagnostic, observationScope, deadlineAt } = {}) {
     if (!ignoreSignal) live();
     let stdout = '', stderr = '', bytes = 0, overflow = false;
     const kind = commandKind(executable, args), began = performance.now();
@@ -412,27 +414,31 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     if (!await state.started) { diagnostic('start-failed'); commands.delete(state); throw tagIosCommandFailure(fail('IOS_COMMAND_START_FAILED'), kind); }
     state.child.stdin.end(); const deadline = Date.now() + timeoutMs;
     const remaining = () => monotonicDeadline === undefined ? deadline - Date.now() : monotonicDeadline - performance.now();
-    let diagnosticTask;
-    if (prewarmDiagnostic?.canSample(kind) === true) {
+    let diagnosticTask, commandObservation;
+    if (prewarmDiagnostic?.canSample(kind) === true && iosStartupCommandObservation(observationScope, kind)) {
       // Only the retained child of this fixed pre-auth command may be sampled.
       // There is no timer callback that could launch work after run()/close().
       diagnosticTask = (async () => {
         let started;
         try {
-          if (closing || signal?.aborted || state.exited || state.closed) return;
-          started = verifyIosDiagnosticIdentity(state, await processInfo(state.pid, { timeoutMs: 1000 }), { ownerPid: process.pid });
+          if (closing || signal?.aborted || state.exited || state.closed || remaining() < 6000) return;
+          started = verifyIosDiagnosticIdentity(state, await processInfo(state.pid, { timeoutMs: 1000, deadlineAt: monotonicDeadline }), { ownerPid: process.pid });
           while (remaining() > 0 && !closing && !signal?.aborted && !state.exited && !state.closed) {
             if (iosPrewarmDiagnosticDue({ diagnostics: prewarmDiagnostic.canSample(kind), kind, elapsedMs: performance.now() - began, state })) break;
             await sleep(30);
           }
-          if (closing || signal?.aborted || !iosPrewarmDiagnosticDue({ diagnostics: prewarmDiagnostic.canSample(kind), kind, elapsedMs: performance.now() - began, state })) return;
-          verifyIosDiagnosticIdentity(state, await processInfo(state.pid, { timeoutMs: 1000 }), { ownerPid: process.pid, started });
+          if (closing || signal?.aborted || remaining() < 6000 || !iosPrewarmDiagnosticDue({ diagnostics: prewarmDiagnostic.canSample(kind), kind, elapsedMs: performance.now() - began, state })) return;
+          verifyIosDiagnosticIdentity(state, await processInfo(state.pid, { timeoutMs: 1000, deadlineAt: monotonicDeadline }), { ownerPid: process.pid, started });
           if (closing || signal?.aborted || state.exited || state.closed || remaining() < 6000) return;
           // Inventory and launch share one claim; eligibility/identity probes do
           // not consume it. An attempted sample can never be repeated later.
           if (!prewarmDiagnostic.claimSample(kind)) return;
-          const result = await run('/usr/bin/sample', [String(state.pid), '1', '1', '-file', '/dev/stdout'], { timeoutMs: 5000 });
-          capture('\nIOS_PREWARM_DIAGNOSTIC ' + JSON.stringify({ status: result.code === 0 ? 'captured' : 'unavailable' }) + '\n');
+          commandObservation = iosStartupCommandObservation(observationScope, kind);
+          const result = await run('/usr/bin/sample', [String(state.pid), '1', '1', '-file', '/dev/stdout'],
+            { timeoutMs: 5000, deadlineAt: monotonicDeadline });
+          if (result.code === 0 && prewarmDiagnostic.isActive() && !closing && !signal?.aborted && !state.exited && !state.closed)
+            commandObservation = iosStartupCommandObservation(observationScope, kind, result.stdout);
+          capture('\nIOS_PREWARM_DIAGNOSTIC ' + JSON.stringify({ status: commandObservation.status }) + '\n');
         } catch (error) {
           if (error?.message === 'IOS_PROCESS_STOP_UNCONFIRMED') diagnosticCleanupUncertain = true;
           capture('\nIOS_PREWARM_DIAGNOSTIC ' + JSON.stringify(iosPrewarmDiagnosticFailure(error)) + '\n');
@@ -442,7 +448,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       // The task catches its errors and always settles before it is forgotten.
       void diagnosticTask.then(() => diagnosticTasks.delete(diagnosticTask));
     }
-    let completed = false;
+    let completed = false, commandFailure, commandResult;
     try {
       while (!state.closed && remaining() > 0 && !(signal?.aborted && !ignoreSignal) && !overflow && !captured.overflowed()) await sleep(30);
       if (!state.closed) {
@@ -454,9 +460,18 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       if (overflow || captured.overflowed()) throw fail('IOS_CAPTURE_LIMIT');
       if (monotonicDeadline !== undefined && remaining() <= 0) throw fail('IOS_COMMAND_TIMEOUT');
       completed = true;
-      return { code: state.code, stdout, stderr };
-    } catch (error) { throw tagIosCommandFailure(error, kind); }
-    finally { if (diagnosticTask) await diagnosticTask; diagnostic(completed ? 'end' : 'error'); if (state.closed) commands.delete(state); }
+      commandResult = { code: state.code, stdout, stderr }; return commandResult;
+    } catch (error) {
+      // A later local close after releasing pipes cannot confirm a failed stop.
+      if (fixedIosDeviceFailureCode(error) === 'IOS_PROCESS_STOP_UNCONFIRMED') commandStopUnconfirmed = true;
+      commandFailure = { error: tagIosCommandFailure(error, kind) }; throw commandFailure.error;
+    }
+    finally {
+      if (diagnosticTask) await diagnosticTask;
+      if (commandFailure) retainIosStartupCommandObservation(commandFailure.error, commandObservation);
+      if (commandResult && commandObservation) sampledCommandResults.set(commandResult, commandObservation);
+      diagnostic(completed ? 'end' : 'error'); if (state.closed) commands.delete(state);
+    }
   }
   const simctl = (args, options) => run('/usr/bin/xcrun', ['simctl', '--set', deviceSetPath, ...args], options);
   async function assertRoot() {
@@ -478,15 +493,16 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     } else if (marker.wdaPreparationSHA256 !== null) throw fail('IOS_OWNERSHIP_REFUSED');
     return current;
   }
-  async function listOwned(ignoreSignal = false, timeoutMs = 30000, prewarmDiagnostic, deadlineAt) {
-    const result = await simctl(['list', 'devices', '--json'], { ignoreSignal, timeoutMs, prewarmDiagnostic, deadlineAt });
-    if (result.code !== 0) throw fail('IOS_SIMULATOR_LIST_FAILED');
-    try { const parsed = JSON.parse(result.stdout); if (!parsed.devices || typeof parsed.devices !== 'object') throw fail(); return parsed.devices; } catch { throw fail('IOS_SIMULATOR_LIST_FAILED'); }
+  async function listOwned(ignoreSignal = false, timeoutMs = 30000, prewarmDiagnostic, deadlineAt, observationScope) {
+    const result = await simctl(['list', 'devices', '--json'], { ignoreSignal, timeoutMs, prewarmDiagnostic, observationScope, deadlineAt });
+    if (result.code !== 0) throw retainIosStartupCommandObservation(fail('IOS_SIMULATOR_LIST_FAILED'), sampledCommandResults.get(result));
+    try { const parsed = JSON.parse(result.stdout); if (!parsed.devices || typeof parsed.devices !== 'object') throw fail(); return parsed.devices; }
+    catch { throw retainIosStartupCommandObservation(fail('IOS_SIMULATOR_LIST_FAILED'), sampledCommandResults.get(result)); }
   }
-  async function assertOwned(queryTimeoutMs = 30000, prewarmDiagnostic, coldBootBudget) {
+  async function assertOwned(queryTimeoutMs = 30000, prewarmDiagnostic, coldBootBudget, observationScope = 'proof-app-prewarm') {
     const checked = async callback => { coldBootBudget?.check(); const result = await callback(); coldBootBudget?.check(); return result; };
     live(); const current = await checked(assertRoot);
-    const devices = await checked(() => listOwned(false, coldBootBudget ? Math.min(queryTimeoutMs, coldBootBudget.remainingMs()) : queryTimeoutMs, prewarmDiagnostic, coldBootBudget?.deadlineAt));
+    const devices = await checked(() => listOwned(false, coldBootBudget ? Math.min(queryTimeoutMs, coldBootBudget.remainingMs()) : queryTimeoutMs, prewarmDiagnostic, coldBootBudget?.deadlineAt, observationScope));
     verifyOwnedSimulator({ expected: marker, marker: current, devices, baseline });
     const ownDevice = path.join(deviceSetPath, marker.udid);
     if (await checked(() => realpath(ownDevice)) !== ownDevice || (await checked(() => lstat(ownDevice))).isSymbolicLink()) throw fail('IOS_OWNERSHIP_REFUSED');
@@ -571,9 +587,9 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
         artifacts.runnerSHA256 !== wdaPreparation.runnerSHA256 || artifacts.xctestrunSHA256 !== wdaPreparation.xctestrunSHA256) throw fail('IOS_WDA_ARTIFACT_CHANGED');
     await assertOwned(); return true;
   }
-  async function processInfo(pid, { timeoutMs = 30000 } = {}) {
+  async function processInfo(pid, { timeoutMs = 30000, deadlineAt } = {}) {
     if (!Number.isSafeInteger(pid) || pid < 2) throw fail('IOS_PROCESS_OWNERSHIP_REFUSED');
-    const result = await run('/bin/ps', ['-o', 'pid=,ppid=,pgid=,stat=,lstart=,command=', '-p', String(pid)], { ignoreSignal: true, timeoutMs });
+    const result = await run('/bin/ps', ['-o', 'pid=,ppid=,pgid=,stat=,lstart=,command=', '-p', String(pid)], { ignoreSignal: true, timeoutMs, deadlineAt });
     if (result.code === 1 && !result.stdout.trim()) return null;
     const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+([A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+?)\s*$/.exec(result.stdout);
     if (result.code !== 0 || !match || Number(match[1]) !== pid) throw fail('IOS_PROCESS_OWNERSHIP_REFUSED');
@@ -662,6 +678,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
   };
   async function close() {
     if (closing) return closing;
+    diagnosticPolicy.finishPrewarm(startupDiagnosticLease);
     closing = (async () => {
       signal?.removeEventListener('abort', abortLifecycle);
       const failures = [];
@@ -673,6 +690,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       // Its current sampler/identity command is included in commands above.
       await Promise.allSettled([...diagnosticTasks]);
       if (diagnosticCleanupUncertain) failures.push({ kind: 'prewarm-diagnostic' });
+      if (commandStopUnconfirmed) failures.push({ kind: 'command-stop-unconfirmed' });
       if (wdaBuildIncomplete) failures.push({ kind: 'wda-prebuild-incomplete' });
       try { await stopOwnedGroups(appium); } catch { failures.push({ kind: 'appium-or-detached-build', pid: appium?.pid, exited: appium?.exited, closed: appium?.closed }); }
       if (failures.length) { await recover('process-stop-unconfirmed', failures); throw fail('IOS_DEVICE_CLEANUP_UNCONFIRMED'); }
@@ -768,7 +786,10 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       boot: ({ timeoutMs, deadlineAt }) => run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'boot'), { timeoutMs, deadlineAt }),
       onBootStarted: () => { startupAt('owned-simulator-boot-started'); signal?.addEventListener('abort', abortLifecycle, { once: true }); },
       bootStatus: ({ timeoutMs, deadlineAt }) => simctl(['bootstatus', marker.udid, '-b'], { timeoutMs, deadlineAt }),
-      confirmOwned: budget => assertOwned(budget.timeoutMs, undefined, budget),
+      confirmOwned: budget => {
+        startupDiagnosticLease = diagnosticPolicy.beginPrewarm();
+        return assertOwned(budget.timeoutMs, startupDiagnosticLease, budget, 'cold-boot-first-owned-list');
+      },
     });
     startupAt('owned-simulator-booted');
     await assertWdaPrepared();
@@ -800,11 +821,13 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
         if (args.length !== 0) throw fail('IOS_APP_INPUT_INVALID');
         // This fixed public app is still signed out: no backend, account or
         // bootstrap has been allocated by the controller at this stage.
-        const prewarmDiagnostic = diagnosticPolicy.beginPrewarm();
+        const prewarmDiagnostic = prewarmAttempted ? undefined : startupDiagnosticLease;
+        prewarmAttempted = true;
         try {
           await assertOwned(30000, prewarmDiagnostic); live();
-          const result = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'launch', [BUNDLE]), { timeoutMs: 30000, prewarmDiagnostic });
-          return acknowledgedIosProofLaunch(result);
+          const result = await run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'launch', [BUNDLE]), { timeoutMs: 30000, prewarmDiagnostic, observationScope: 'proof-app-prewarm' });
+          try { return acknowledgedIosProofLaunch(result); }
+          catch (error) { throw retainIosStartupCommandObservation(error, sampledCommandResults.get(result)); }
         } finally { diagnosticPolicy.finishPrewarm(prewarmDiagnostic); }
       },
       async writeBootstrap(payload) {
@@ -821,9 +844,10 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     });
   } catch (error) {
     const startupFailure = createIosStartupFailure({ stage: startupStage, error });
+    const commandObservation = readIosStartupCommandObservation(error);
     let code = fixedIosDeviceFailureCode(error);
     try { await close(); } catch { code = 'IOS_DEVICE_CLEANUP_UNCONFIRMED'; }
-    const result = retainIosStartupFailure(fail(code), startupFailure);
+    const result = retainIosStartupCommandObservation(retainIosStartupFailure(fail(code), startupFailure), commandObservation);
     Object.defineProperty(result, 'capturedText', { value: captured.text }); throw result;
   }
 }

@@ -11,7 +11,7 @@ import { publicIosFailure } from '../failure.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 
-async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailure = false, deviceCloseFails = false, statusWriteFails = false, captureThrows = false, preauthControls = false } = {}) {
+async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailure = false, deviceCloseFails = false, statusWriteFails = false, captureThrows = false, preauthControls = false, commandObservation = false } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'tld-ios-readiness-'));
   const packageRoot = path.join(root, 'package'), appDirectory = path.join(root, 'TestlaneIOSProof.app');
   const outputDir = path.join(root, 'output'), sessionTemp = path.join(root, 'sessions');
@@ -19,7 +19,7 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
     const target = path.join(packageRoot, relative); await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, source);
   }
   await Promise.all([mkdir(appDirectory), mkdir(sessionTemp)]);
-  await file('state.mjs', `export const state=${JSON.stringify({ mode, failPostReadinessCheck, lateStartupFailure, deviceCloseFails, statusWriteFails, captureThrows,
+  await file('state.mjs', `export const state=${JSON.stringify({ mode, failPostReadinessCheck, lateStartupFailure, deviceCloseFails, statusWriteFails, captureThrows, commandObservation,
     cookie: randomBytes(24).toString('base64url'), events: [], accounts: 0, broker: 0, close: 0, wdaChecks: 0 })};`);
   const stateUrl = pathToFileURL(path.join(packageRoot, 'state.mjs')).href;
   const stateImport = 'import {state} from ' + JSON.stringify(stateUrl) + ';\n';
@@ -42,11 +42,12 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
       return {origin:'http://127.0.0.1:43111',records(){return [];},issuedSessionTokens(){return [state.cookie];},setDefect(){},async close(){state.events.push('backend-close');}};}
   `);
   await file('examples/ios-verification/device.mjs', stateImport + `
-    import {createIosStartupFailure,retainIosStartupFailure,tagIosCommandFailure} from './failure-facts.mjs';
+    import {createIosStartupFailure,retainIosStartupFailure,tagIosCommandFailure,retainIosStartupCommandObservation,iosStartupCommandObservation} from './failure-facts.mjs';
     export async function startOwnedIos(options){state.events.push('device-start');
       if(state.mode==='factory-unknown'){const {mkdir,writeFile}=await import('node:fs/promises');await mkdir(options.outputDir);await writeFile(options.outputDir+'/recovery.json','{"status":"manual-inspection-required"}');
         const original=createIosStartupFailure({stage:'device-owned-simulator-boot-started',error:tagIosCommandFailure(Error('IOS_COMMAND_TIMEOUT'),'owned-device-list')});
         const error=retainIosStartupFailure(Error('IOS_DEVICE_CLEANUP_UNCONFIRMED'),original);
+        if(state.commandObservation)retainIosStartupCommandObservation(error,iosStartupCommandObservation('cold-boot-first-owned-list','owned-device-list','CoreSimulator libxpc mach_msg_trap semaphore_wait_trap'));
         error.capturedText=()=>{if(state.captureThrows)throw Error('FIXTURE_CAPTURE_UNAVAILABLE');return '';};throw error;}
       state.deviceDiagnostics={diagnostics:options.diagnostics??false,prewarmDiagnostics:options.prewarmDiagnostics??false};const binding={schemaVersion:1,scope:'ephemeral-hosted-standard-device-set',
       nativeHome:'/Users/runner',deviceSetPath:'/Users/runner/Library/Developer/CoreSimulator/Devices',privateRoot:'/private/tmp/tld-ios-abc123',
@@ -220,4 +221,24 @@ test('unconfirmed factory cleanup preserves recovery and consumer before any han
       assert.equal(recovery.status, 'manual-inspection-required');
     } finally { await owned.close(); }
   }
+});
+
+
+test('controller emits only the original fixed command observation and preserves cleanup priority', async () => {
+  const owned=await fixture('factory-unknown',{commandObservation:true});
+  try{
+    let failure;await assert.rejects(runIosProof(owned.options),error=>{failure=error;return error.message==='IOS_PROOF_CLEANUP_INCOMPLETE';});
+    const {readIosStartupCommandObservation}=await import('../failure-facts.mjs');
+    const fact=readIosStartupCommandObservation(failure);
+    assert.equal(fact.status,'captured');assert.equal(fact.commandKind,'owned-device-list');
+    const json=JSON.parse(await readFile(path.join(owned.outputDir,'startup-command-observation.json'),'utf8'));
+    assert.deepEqual(json,fact);assert.equal(owned.state.accounts,0);assert.equal(owned.state.broker,0);
+    const summary=await publicIosFailure({output:owned.outputDir,stage:'cleanup',error:failure});
+    assert.equal(Object.hasOwn(summary,'startupCommandObservation'),false,'public-failure schema stays unchanged');
+  }finally{await owned.close();}
+  const unrelated=await fixture('create-failed');
+  try{
+    await assert.rejects(runIosProof(unrelated.options));
+    await assert.rejects(readFile(path.join(unrelated.outputDir,'startup-command-observation.json')),error=>error.code==='ENOENT');
+  }finally{await unrelated.close();}
 });
