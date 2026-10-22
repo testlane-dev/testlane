@@ -11,7 +11,7 @@ import { publicIosFailure } from '../failure.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 
-async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailure = false, deviceCloseFails = false, statusWriteFails = false, captureThrows = false, preauthControls = false, commandObservation = false, methodFailure, precedingFact = false } = {}) {
+async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailure = false, deviceCloseFails = false, statusWriteFails = false, captureThrows = false, preauthControls = false, commandObservation = false, methodFailure, precedingFact = false, preauthCommandFailure = false } = {}) {
   const tempParent = await realpath(os.tmpdir());
   const root = await realpath(await mkdtemp(path.join(tempParent, 'tld-ios-readiness-')));
   const packageRoot = path.join(root, 'package'), appDirectory = path.join(root, 'TestlaneIOSProof.app');
@@ -20,7 +20,7 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
     const target = path.join(packageRoot, relative); await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, source);
   }
   await Promise.all([mkdir(appDirectory), mkdir(sessionTemp)]);
-  await file('state.mjs', `export const state=${JSON.stringify({ mode, failPostReadinessCheck, lateStartupFailure, deviceCloseFails, statusWriteFails, captureThrows, commandObservation, methodFailure, precedingFact,
+  await file('state.mjs', `export const state=${JSON.stringify({ mode, failPostReadinessCheck, lateStartupFailure, deviceCloseFails, statusWriteFails, captureThrows, commandObservation, methodFailure, precedingFact, preauthCommandFailure,
     cookie: randomBytes(24).toString('base64url'), events: [], accounts: 0, broker: 0, close: 0, wdaChecks: 0 })};`);
   const stateUrl = pathToFileURL(path.join(packageRoot, 'state.mjs')).href;
   const stateImport = 'import {state} from ' + JSON.stringify(stateUrl) + ';\n';
@@ -43,12 +43,13 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
       return {origin:'http://127.0.0.1:43111',records(){return [];},issuedSessionTokens(){return [state.cookie];},setDefect(){},async close(){state.events.push('backend-close');}};}
   `);
   await file('examples/ios-verification/device.mjs', stateImport + `
-    import {createIosStartupFailure,retainIosStartupFailure,tagIosCommandFailure,retainIosStartupCommandObservation,iosStartupCommandObservation} from './failure-facts.mjs';
+    import {createIosStartupFailure,retainIosStartupFailure,tagIosCommandFailure,retainIosStartupCommandObservation,iosStartupCommandObservation,retainIosPreauthCommandFailure} from './failure-facts.mjs';
     function failMethod(method){
       if(state.methodFailure!==method)return;
       const error=tagIosCommandFailure(Error('IOS_COMMAND_TIMEOUT'),method==='prewarm'?'owned-proof-app-prewarm':'owned-device-list');
       if(state.precedingFact)retainIosStartupFailure(error,createIosStartupFailure({stage:'device-owned-simulator-boot-started',error:tagIosCommandFailure(Error('IOS_COMMAND_TIMEOUT'),'owned-device-bootstatus')}));
       if(state.commandObservation)retainIosStartupCommandObservation(error,iosStartupCommandObservation('proof-app-prewarm','owned-proof-app-prewarm','CoreSimulator libxpc mach_msg_trap semaphore_wait_trap'));
+      if(state.preauthCommandFailure)retainIosPreauthCommandFailure(error,{commandKind:method==='prewarm'?'owned-proof-app-prewarm':'owned-device-list',event:'timeout-before-stop',spawned:true,exited:false,closed:false,code:null,elapsedMs:30001.25,effectiveBudgetMs:30000});
       state.injectedError=error;throw error;
     }
     export async function startOwnedIos(options){state.events.push('device-start');
@@ -307,4 +308,34 @@ test('returned-device failures retain preceding startup and observation facts wh
       assert.equal(owned.state.accounts,0);assert.equal(owned.state.broker,0);assert.equal(owned.state.close,1);
     }finally{await owned.close();}
   }
+});
+
+test('original prewarm command state survives installed projection and cleanup override without becoming cleanup authority',async()=>{
+ const {readIosPreauthCommandFailure}=await import('../failure-facts.mjs');
+ for(const deviceCloseFails of [false,true]){
+  const owned=await fixture('passed',{methodFailure:'prewarm',preauthCommandFailure:true,deviceCloseFails});
+  try{
+   let failure;await assert.rejects(runIosProof(owned.options),error=>{failure=error;return true;});
+   const original=readIosPreauthCommandFailure(owned.state.injectedError);
+   assert.deepEqual(original,{commandKind:'owned-proof-app-prewarm',event:'timeout-before-stop',spawned:true,exited:false,closed:false,code:null,elapsedMs:30001.25,effectiveBudgetMs:30000});
+   assert.deepEqual(readIosPreauthCommandFailure(failure),original);assert.equal(owned.state.close,1);assert.equal(owned.state.accounts,0);assert.equal(owned.state.broker,0);
+   assert.equal(failure.message,deviceCloseFails?'IOS_PROOF_CLEANUP_INCOMPLETE':'IOS_COMMAND_TIMEOUT');
+   assert.equal(owned.state.events.includes('installed-driver-create'),false);
+   for(const project of [publicIosFailure,owned.installedProjection]){
+    const summary=await project({output:owned.outputDir,stage:deviceCloseFails?'cleanup':'app-prewarm',error:failure});
+    assert.deepEqual(summary.preauthCommandFailure,original);assert.deepEqual(summary.startupFailure,{stage:'proof-app-prewarm',code:'IOS_COMMAND_TIMEOUT',commandKind:'owned-proof-app-prewarm'});
+    assert.equal(summary.code,deviceCloseFails?'IOS_PROOF_CLEANUP_INCOMPLETE':'IOS_COMMAND_TIMEOUT');
+   }
+  }finally{await owned.close();}
+ }
+});
+
+test('unrelated setup and mismatched preceding facts cannot publish a prewarm command state',async()=>{
+ for(const [mode,options] of [['create-failed',{preauthCommandFailure:true}],['passed',{methodFailure:'revalidation',preauthCommandFailure:true}],['passed',{methodFailure:'prewarm',preauthCommandFailure:true,precedingFact:true}]]){
+  const owned=await fixture(mode,options);
+  try{
+   let failure;await assert.rejects(runIosProof(owned.options),error=>{failure=error;return true;});
+   for(const project of [publicIosFailure,owned.installedProjection])assert.equal(Object.hasOwn(await project({output:owned.outputDir,stage:'app-prewarm',error:failure}),'preauthCommandFailure'),false);
+  }finally{await owned.close();}
+ }
 });

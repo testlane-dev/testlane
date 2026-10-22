@@ -13,7 +13,7 @@ import { IOS_DEVICE_SCOPE, validateIosDeviceBinding, normalizeIosDeviceInventory
 import { hashIosTree } from '../mobile-approval-app/build-ios.mjs';
 import { verifyPinnedWdaStartupPatch } from './tools/wda-startup-patch.mjs';
 import { verifyPinnedIosNativePrerequisite } from './tools/setup.mjs';
-import { createIosStartupFailure, fixedIosDeviceFailureCode, retainIosStartupFailure, tagIosCommandFailure, iosStartupCommandObservation, readIosStartupCommandObservation, retainIosStartupCommandObservation } from './failure-facts.mjs';
+import { createIosStartupFailure, fixedIosDeviceFailureCode, retainIosStartupFailure, tagIosCommandFailure, iosStartupCommandObservation, readIosStartupCommandObservation, retainIosStartupCommandObservation, normalizeIosPreauthCommandFailure, retainIosPreauthCommandFailure } from './failure-facts.mjs';
 
 const UUID = /^[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}$/;
 const BUNDLE = 'dev.testlane.iosproof', MARKER = 'testlane-owned-simulator.json';
@@ -395,9 +395,9 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     let stdout = '', stderr = '', bytes = 0, overflow = false;
     const kind = commandKind(executable, args), began = performance.now();
     // Cold-start and WDA preparation callers supply an absolute monotonic deadline.
-    // Each command also keeps its own cap, including retained-child acquisition.
-    const monotonicDeadline = deadlineAt === undefined ? undefined : Math.min(deadlineAt, began + timeoutMs);
-    if (monotonicDeadline !== undefined && !(monotonicDeadline > began)) throw tagIosCommandFailure(fail('IOS_COMMAND_TIMEOUT'), kind);
+    // Each command keeps its invocation cap; settled acquisition is charged.
+    const monotonicDeadline = deadlineAt === undefined ? began + timeoutMs : Math.min(deadlineAt, began + timeoutMs);
+    if (!(monotonicDeadline > began)) throw tagIosCommandFailure(fail('IOS_COMMAND_TIMEOUT'), kind);
     const state = launch(executable, args, { cwd: root, env, capture: () => {} });
     state.commandKind = kind;
     const diagnostic = event => capture('\nIOS_DEVICE_COMMAND ' + JSON.stringify({ kind, event, spawned: state.spawned,
@@ -412,8 +412,20 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
       if (bytes > LIMIT) { overflow = true; return; } if (name === 'stdout') stdout += text; else stderr += text; });
     commands.add(state);
     if (!await state.started) { diagnostic('start-failed'); commands.delete(state); throw tagIosCommandFailure(fail('IOS_COMMAND_START_FAILED'), kind); }
-    state.child.stdin.end(); const deadline = Date.now() + timeoutMs;
-    const remaining = () => monotonicDeadline === undefined ? deadline - Date.now() : monotonicDeadline - performance.now();
+    // A settled start consumes the original allowance. A never-settling
+    // state.started remains awaited; this is not a bounded-start race.
+    const startExpired = performance.now() >= monotonicDeadline;
+    state.child.stdin.end();
+    const remaining = () => monotonicDeadline - performance.now();
+    let deadlineObservation;
+    const observeDeadline = event => {
+      if (deadlineObservation || !prewarmDiagnostic || prewarmDiagnostic !== startupDiagnosticLease ||
+          prewarmDiagnostic.isActive() !== true || observationScope !== 'proof-app-prewarm' ||
+          !PREWARM_DIAGNOSTIC_KINDS.has(kind)) return;
+      deadlineObservation = normalizeIosPreauthCommandFailure({ commandKind: kind, event,
+        spawned: state.spawned, exited: state.exited, closed: state.closed, code: state.code,
+        elapsedMs: Math.max(0, performance.now() - began), effectiveBudgetMs: monotonicDeadline - began });
+    };
     let diagnosticTask, commandObservation;
     if (prewarmDiagnostic?.canSample(kind) === true && iosStartupCommandObservation(observationScope, kind)) {
       // Only the retained child of this fixed pre-auth command may be sampled.
@@ -452,19 +464,22 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     try {
       while (!state.closed && remaining() > 0 && !(signal?.aborted && !ignoreSignal) && !overflow && !captured.overflowed()) await sleep(30);
       if (!state.closed) {
+        if (!(signal?.aborted && !ignoreSignal) && !overflow && !captured.overflowed())
+          observeDeadline(startExpired ? 'settled-start-expired' : 'timeout-before-stop');
         diagnostic(signal?.aborted && !ignoreSignal ? 'cancelled-before-stop' : overflow || captured.overflowed() ? 'capture-limit-before-stop' : 'timeout-before-stop');
         if (kind === 'owned-wda-prebuild') await stopOwnedGroups(state);
         else await stop(state);
         throw fail(signal?.aborted && !ignoreSignal ? 'IOS_CANCELLED' : overflow || captured.overflowed() ? 'IOS_CAPTURE_LIMIT' : 'IOS_COMMAND_TIMEOUT');
       }
       if (overflow || captured.overflowed()) throw fail('IOS_CAPTURE_LIMIT');
-      if (monotonicDeadline !== undefined && remaining() <= 0) throw fail('IOS_COMMAND_TIMEOUT');
+      if (signal?.aborted && !ignoreSignal) throw fail('IOS_CANCELLED');
+      if (remaining() <= 0) { observeDeadline(startExpired ? 'settled-start-expired' : 'late-close'); throw fail('IOS_COMMAND_TIMEOUT'); }
       completed = true;
       commandResult = { code: state.code, stdout, stderr }; return commandResult;
     } catch (error) {
       // A later local close after releasing pipes cannot confirm a failed stop.
       if (fixedIosDeviceFailureCode(error) === 'IOS_PROCESS_STOP_UNCONFIRMED') commandStopUnconfirmed = true;
-      commandFailure = { error: tagIosCommandFailure(error, kind) }; throw commandFailure.error;
+      commandFailure = { error: retainIosPreauthCommandFailure(tagIosCommandFailure(error, kind), deadlineObservation) }; throw commandFailure.error;
     }
     finally {
       if (diagnosticTask) await diagnosticTask;

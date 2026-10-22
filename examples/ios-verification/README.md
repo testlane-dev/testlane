@@ -481,3 +481,19 @@ before wider support claims. See the [mobile release criteria](../../docs/mobile
 If the credential-free readiness factory rejects before returning a driver, the optional failed `preauth-controls.json` record may contain `setupFailure`: fixed code/request facts, existing numeric progress and a four-field `startupResponse` snapshot. HTTP status, observed response state, closed W3C bucket and a recognized pinned-source signature distinguish an incomplete body from a decoded rejection. They retain no response text, identifiers or paths, establish no underlying cause or cleanup authority, and do not alter successful evidence or command budgets.
 
 A failed post-session ownership check may add `setupOwnership` to the zero-row failed `preauth-controls.json` setup record. Its fixed status, observed elapsed milliseconds, callback-started/settled flags, known guard code and command kind distinguish a rejected guard from the existing 20-second wait limit. Unknown rejection data is unavailable; late callbacks cannot alter the frozen observation. This fact does not acknowledge session cleanup or establish a native cause. Successful evidence, the 240-second setup limit and every ownership check remain unchanged.
+
+Native command acceptance uses a monotonic deadline from invocation entry,
+clipped by any earlier caller deadline. Time spent awaiting an acknowledged spawn
+consumes that command's existing allowance, and a close observed after expiry or
+cancellation cannot become success. Owned cleanup can still explicitly ignore the
+cancel signal. Stop and diagnostic tasks remain joined. A spawn acknowledgement
+that never settles is still awaited; this is not a bound on all process startup
+or operating-system work.
+
+In the owned device factory, only the private active prewarm lease can attach
+`preauthCommandFailure` to that original inventory or app-launch failure. Its eight
+fixed fields record the command kind, expiry event, spawned/exited/closed flags,
+exit code, elapsed milliseconds and effective allowance before stop. This optional
+field preserves the original observation when cleanup becomes the primary
+failure. It contains no command arguments, native text or identifiers, and gives
+neither a root cause nor process or cleanup authority.

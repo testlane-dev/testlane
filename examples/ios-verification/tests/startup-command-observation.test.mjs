@@ -8,7 +8,7 @@ import vm from 'node:vm';
 import {createIosDiagnosticPolicy,iosPrewarmDiagnosticDue,verifyIosDiagnosticIdentity,iosPrewarmDiagnosticFailure,
   captureIosCommandOutput,createIosDeviceCapture} from '../device.mjs';
 import {iosStartupCommandObservation,normalizeIosStartupCommandObservation,readIosStartupCommandObservation,
-  retainIosStartupCommandObservation,tagIosCommandFailure,fixedIosDeviceFailureCode} from '../failure-facts.mjs';
+  retainIosStartupCommandObservation,tagIosCommandFailure,fixedIosDeviceFailureCode,normalizeIosPreauthCommandFailure,retainIosPreauthCommandFailure} from '../failure-facts.mjs';
 
 const scope='cold-boot-first-owned-list',kind='owned-device-list';
 const golden='CoreSimulatorService libxpc.dylib xpc_connection_send_message mach_msg2_trap semaphore_wait_trap';
@@ -66,7 +66,7 @@ function commandFixture(options={}){
   const captured=createIosDeviceCapture(),outputs=[],identityOptions=[],sampledCommandResults=new WeakMap();
   const context={Error,Object,JSON,Buffer,Math,Number,Promise,WeakMap,performance:{now:()=>clock},Date,
     process:{pid:123},root:'/owned',env:{},signal:controller.signal,closing:false,commands:new Set(),diagnosticTasks:new Set(),
-    diagnosticCleanupUncertain:false,commandStopUnconfirmed:false,LIMIT:8*1024*1024,captured,capture:captured.append,sampledCommandResults,
+    diagnosticCleanupUncertain:false,commandStopUnconfirmed:false,LIMIT:8*1024*1024,captured,capture:captured.append,sampledCommandResults,startupDiagnosticLease:lease,normalizeIosPreauthCommandFailure,retainIosPreauthCommandFailure,PREWARM_DIAGNOSTIC_KINDS:new Set(['owned-device-list','owned-proof-app-prewarm']),
     fail:code=>Error(code),live(){if(controller.signal.aborted||context.closing)throw Error('IOS_CANCELLED');},
     commandKind:executable=>executable==='/usr/bin/sample'?'owned-prewarm-stack-sample':kind,
     captureIosCommandOutput,iosPrewarmDiagnosticDue,verifyIosDiagnosticIdentity,iosPrewarmDiagnosticFailure,
@@ -136,7 +136,7 @@ test('cancelled or already closed target never grants a sampler and no late call
 test('one actual sample claim is shared across cold and prewarm while later same-kind failure has no stale fact',async()=>{
   const f=commandFixture();await assert.rejects(f.invoke(),/IOS_COMMAND_TIMEOUT/);assert.equal(f.samples(),1);
   let later;await assert.rejects(f.invoke({deadlineAt:60000,observationScope:'proof-app-prewarm'}),error=>{later=error;return true;});
-  assert.equal(f.samples(),1);assert.equal(readIosStartupCommandObservation(later),undefined);
+  assert.equal(later.message,'IOS_COMMAND_TIMEOUT');assert.equal(f.samples(),1);assert.equal(readIosStartupCommandObservation(later),undefined);
   f.policy.finishPrewarm(f.lease);assert.equal(f.lease.isActive(),false);assert.equal(f.policy.beginPrewarm(),undefined);
 });
 

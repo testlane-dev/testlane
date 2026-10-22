@@ -107,7 +107,13 @@ including after a late acknowledgement. One live ownership check after session c
 remaining startup budget, capped at 20 seconds; later checks retain their ordinary
 limits. Repeated inventory responses are validated in full without retaining their
 raw payloads in the bounded diagnostic log. The proof checks authenticated workflows after that setup;
-it does not establish cold app-start performance.
+it does not establish cold app-start performance. Native command acceptance now charges
+acknowledged spawn time to the original monotonic command allowance and refuses
+late closure or cancellation as success. A never-settling spawn acknowledgement
+remains awaited; this is not a bound on all process startup. Existing command caps,
+owned stop/diagnostic joins and explicit cancellation-ignoring cleanup remain.
+An optional fixed prewarm failure snapshot records the original state before
+stop; it establishes no native cause, termination or acceptance.
 
 Before generating credentials, the installed driver must create a session, verify
 the native context and delete that exact session. The proof then uses the same

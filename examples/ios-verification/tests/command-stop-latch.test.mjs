@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import vm from 'node:vm';
-import {fixedIosDeviceFailureCode,tagIosCommandFailure,iosStartupCommandObservation,retainIosStartupCommandObservation} from '../failure-facts.mjs';
+import {fixedIosDeviceFailureCode,tagIosCommandFailure,iosStartupCommandObservation,retainIosStartupCommandObservation,normalizeIosPreauthCommandFailure,retainIosPreauthCommandFailure} from '../failure-facts.mjs';
 import {createIosDiagnosticPolicy,iosPrewarmDiagnosticDue,verifyIosDiagnosticIdentity,iosPrewarmDiagnosticFailure,captureIosCommandOutput} from '../device.mjs';
 
 const source=(await readFile(new URL('../device.mjs',import.meta.url),'utf8')).replaceAll('\r\n','\n');
@@ -33,7 +33,7 @@ function baseContext(root){
     marker:{udid:null,name:'synthetic',baselineSHA256:null},deviceSetPath:root,IOS_DEVICE_SCOPE:'hosted-standard-device-set',
     captured:{overflowed:()=>false},capture:text=>{captured+=text;},captureText:()=>captured,
     captureIosCommandOutput,iosPrewarmDiagnosticDue,verifyIosDiagnosticIdentity,iosPrewarmDiagnosticFailure,iosStartupCommandObservation,retainIosStartupCommandObservation,
-    commandKind:()=> 'owned-device-list',LIMIT:8*1024*1024,fail:code=>Error(code),fixedIosDeviceFailureCode,tagIosCommandFailure,
+    normalizeIosPreauthCommandFailure,retainIosPreauthCommandFailure,commandKind:()=> 'owned-device-list',LIMIT:8*1024*1024,fail:code=>Error(code),fixedIosDeviceFailureCode,tagIosCommandFailure,
     live:()=>{},stopOwnedGroups:async state=>{assert.equal(state,undefined);},writeFile,
     assertRoot:async()=>assert.fail('uncertain command must fence root/SDK cleanup'),
     listOwned:async()=>assert.fail('uncertain command must fence new inventory'),

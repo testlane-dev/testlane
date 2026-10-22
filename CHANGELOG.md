@@ -8,6 +8,9 @@ what to do about it in [docs/upgrading.md](docs/upgrading.md).
 
 ### Fixed
 
+- Charge acknowledged iOS command startup to the original monotonic allowance and
+  refuse late or cancelled completion as success; retain fixed prewarm failure state.
+
 - Let fixed iOS reads observe responses within their existing ten-second request
   window, retaining ownership checks, caller deadlines and separate mutation limits.
 - Preserve iOS recovery data when a command’s process termination cannot be

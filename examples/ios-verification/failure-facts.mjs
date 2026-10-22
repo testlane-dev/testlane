@@ -82,6 +82,38 @@ export function retainIosStartupFailure(error, fact) {
   return error;
 }
 
+// One original deadline observation, not process termination or cleanup authority.
+const PREAUTH_COMMAND_FIELDS = ['commandKind', 'event', 'spawned', 'exited', 'closed', 'code', 'elapsedMs', 'effectiveBudgetMs'];
+export function normalizeIosPreauthCommandFailure(value) {
+  if (value === null || typeof value !== 'object' || types.isProxy(value)) return undefined;
+  try {
+    if (![Object.prototype, null].includes(Object.getPrototypeOf(value)) || Object.getOwnPropertySymbols(value).length) return undefined;
+    const names = Object.getOwnPropertyNames(value);
+    if (names.length !== PREAUTH_COMMAND_FIELDS.length || names.some(name => !PREAUTH_COMMAND_FIELDS.includes(name))) return undefined;
+    const fact = Object.fromEntries(PREAUTH_COMMAND_FIELDS.map(name => [name, ownValue(value, name)]));
+    if (!['owned-device-list', 'owned-proof-app-prewarm'].includes(fact.commandKind) ||
+        !['timeout-before-stop', 'settled-start-expired', 'late-close'].includes(fact.event) ||
+        fact.spawned !== true || typeof fact.exited !== 'boolean' || typeof fact.closed !== 'boolean' ||
+        (fact.closed && !fact.exited) || (!fact.exited && fact.code !== null) ||
+        !(fact.code === null || (Number.isSafeInteger(fact.code) && fact.code >= -2147483648 && fact.code <= 4294967295)) ||
+        !Number.isFinite(fact.elapsedMs) || fact.elapsedMs < 0 || fact.elapsedMs > 3600000 ||
+        !Number.isFinite(fact.effectiveBudgetMs) || fact.effectiveBudgetMs <= 0 || fact.effectiveBudgetMs > 30000 ||
+        fact.elapsedMs < fact.effectiveBudgetMs ||
+        (fact.event === 'timeout-before-stop' && fact.closed) || (fact.event === 'late-close' && !fact.closed)) return undefined;
+    return Object.freeze(fact);
+  } catch { return undefined; }
+}
+export function readIosPreauthCommandFailure(error) {
+  return nativeError(error) ? normalizeIosPreauthCommandFailure(ownValue(error, 'preauthCommandFailure')) : undefined;
+}
+export function retainIosPreauthCommandFailure(error, fact) {
+  const safe = normalizeIosPreauthCommandFailure(fact);
+  if (nativeError(error) && safe) {
+    try { if (!Object.getOwnPropertyDescriptor(error, 'preauthCommandFailure')) Object.defineProperty(error, 'preauthCommandFailure', { value: safe }); } catch {}
+  }
+  return error;
+}
+
 // These are pattern observations in one accepted sample, never a root-cause or
 // process/cleanup assertion. Unavailable flags mean no accepted observation.
 const OBSERVATION_SCOPES = new Set(['cold-boot-first-owned-list', 'proof-app-prewarm']);
