@@ -8,6 +8,8 @@ what to do about it in [docs/upgrading.md](docs/upgrading.md).
 
 ### Fixed
 
+- Let fixed iOS reads observe responses within their existing ten-second request
+  window, retaining ownership checks, caller deadlines and separate mutation limits.
 - Preserve iOS recovery data when a command’s process termination cannot be
   confirmed, even if its local streams close.
 

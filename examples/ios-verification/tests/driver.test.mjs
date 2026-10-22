@@ -43,10 +43,10 @@ test('fixed request facts distinguish ownership, HTTP and response deadlines wit
     if(mode!=='command-error'){
       await entered.promise;
       if(mode==='cancelled')phase.abort();
-      else {const deadline=[...active.values()][0];assert.equal(deadline.milliseconds,5000);now+=5001;deadline.callback();}
+      else {const deadline=[...active.values()][0],budget=mode==='ownership'?5000:10000;assert.equal(deadline.milliseconds,budget);now+=budget+1;deadline.callback();}
     }
     await rejected;
-    assert.equal(failure.code,mode==='command-error'?'NATIVE_DRIVER_COMMAND_FAILED':mode==='cancelled'?'NATIVE_DRIVER_CANCELLED':'NATIVE_DRIVER_TIMEOUT');
+    assert.equal(failure.code,mode==='command-error'?'NATIVE_DRIVER_COMMAND_FAILED':mode==='cancelled'?'NATIVE_DRIVER_CANCELLED':mode==='ownership'?'NATIVE_DRIVER_TIMEOUT':'NATIVE_DRIVER_ELEMENT_TIMEOUT');
     const fact=readIosRequestFailure(failure);
     assert.deepEqual(fact,{operation:'element-find',phase:['ownership','cancelled'].includes(mode)?'ownership':mode==='http'?'http':'response'});
     assert.equal(Object.isFrozen(fact),true);
@@ -453,7 +453,9 @@ test('iOS cold WDA setup alone gets 240 seconds and fixed session/context/readin
     } finally { if (driver) { if (stage === '/click') await assert.rejects(driver.close(), { code: 'NATIVE_DRIVER_REMOTE_UNSETTLED' }); else await driver.close(); } }
   }
   assert.ok(calls.some(call => call.route === '/session' && call.milliseconds > 239_900 && call.milliseconds <= 240_000));
-  assert.ok(calls.some(call => call.route.endsWith('/click') && call.milliseconds > 9900 && call.milliseconds <= 10000)); assert.equal(calls.some(call => call.route !== '/session' && !call.route.endsWith('/click') && call.milliseconds > 5000), false); assert.equal(active.size, 0);
+  assert.ok(calls.some(call => call.route.endsWith('/click') && call.milliseconds > 9900 && call.milliseconds <= 10000)); assert.equal(calls.some(call => call.route !== '/session' && !/\/(click|context|element|displayed)$/.test(call.route) && call.milliseconds > 5000), false);
+  assert.ok(calls.filter(call => /\/(context|element|displayed)$/.test(call.route)).every(call => call.milliseconds <= 10000));
+  assert.ok(calls.find(call => call.route.endsWith('/context')).milliseconds <= 5000, 'the explicit setup-context allowance stays five seconds'); assert.equal(active.size, 0);
 });
 
 test('iOS setup accepts one seven-second logical ownership stabilization then performs a fresh ordinary context guard', async t => {

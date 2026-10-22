@@ -333,11 +333,16 @@ cases run once without retries. Appium/WebDriverAgent session creation has
 its own 240-second ceiling within that outer limit. After receiving a valid session
 ID, setup performs one live ownership check within the remaining startup budget,
 capped at 20 seconds. Every request allows up to five seconds for fresh live
-ownership confirmation. Reads, visibility-contained gestures, keyboard-state/hide
-fallback and session deletion retain five seconds for HTTP plus the complete
-response body, with a ten-second request aggregate. Only semantic element POST
-click/clear/value requests allow ten seconds for HTTP plus the complete body and
-a fifteen-second request aggregate. This is a declared response-observation
+ownership confirmation. The closed read-only route catalog can use the unused
+portion of its existing ten-second request aggregate for HTTP and the complete
+response body after ownership settles. That read phase may exceed five seconds;
+it remains clipped by the request aggregate and any enclosing deadline. Native
+context, element lookup/display/rectangle, window rectangle, keyboard state and
+text/value reads use this allocation. Visibility-contained gestures, keyboard-hide
+fallback and session deletion retain a five-second HTTP/body cap. Explicit setup
+context and keyboard-confirmation allowances remain five seconds. Semantic element
+POST click/clear/value requests retain ten seconds for HTTP plus the complete body
+and a fifteen-second request aggregate. This is a declared response-observation
 policy: the unchanged inner WDA five-second transport ceiling leaves up to one
 additional five-second client window for dispatch, response propagation and body
 handling. It is not a measured explanation of a hosted failure or a guarantee of

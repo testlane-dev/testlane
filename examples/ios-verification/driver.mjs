@@ -7,6 +7,8 @@ import { normalizeIosSetupOwnership } from './failure-facts.mjs';
 import { types } from 'node:util';
 
 const ELEMENT = 'element-6066-11e4-a52e-4f735466cecf';
+const READ_OPERATIONS = new Set(['native-context', 'element-find', 'element-displayed', 'element-rect',
+  'window-rect', 'keyboard-state', 'text-read', 'value-read']);
 function requestOperation(method, route) {
   if (method === 'POST' && route === '/session') return 'session-create';
   if (/^\/session\/[A-Za-z0-9-]{1,160}$/.test(route) && method === 'DELETE') return 'session-delete';
@@ -175,9 +177,10 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     if (ownershipFence.signal.aborted) throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED');
     if (requestSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
     const began = performance.now(), sessionCreate = operation === 'session-create';
-    const semanticAction = ['click', 'clear', 'type'].includes(operation), httpBudget = semanticAction ? 10_000 : 5000;
+    const semanticAction = ['click', 'clear', 'type'].includes(operation), httpBudget = semanticAction || READ_OPERATIONS.has(operation) ? 10_000 : 5000;
     // Semantic element mutations retain the inner WDA5000 response ceiling and
-    // allow one additional5000 client observation/body window. Reads are unchanged.
+    // allow one additional5000 client observation/body window. Read-only routes
+    // may consume the unused ordinary10000 aggregate after ownership settles.
     // Session creation still spends at most its original 240 seconds in total.
     const requestDeadline = began + (sessionCreate ? 240_000 : semanticAction ? 15_000 : 10_000), deadline = Math.min(requestDeadline, outerDeadline ?? Infinity);
     let phaseDeadline = Math.min(began + 5000, deadline), timeout, timedOut = false, ownerStarted = false, ownerSettled = false;
@@ -288,7 +291,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
   if (!created || typeof created.sessionId !== 'string' || !/^[A-Za-z0-9-]{1,160}$/.test(created.sessionId)) throw fail('NATIVE_DRIVER_SESSION_INVALID');
   session = created.sessionId;
   const route = suffix => '/session/' + encodeURIComponent(session) + suffix;
-  async function nativeContext(activeSignal = signal, timeoutMs = 5000, outerDeadline) {
+  async function nativeContext(activeSignal = signal, timeoutMs, outerDeadline) {
     try { if ((await request('GET', route('/context'), undefined, activeSignal, timeoutMs, outerDeadline)).value !== 'NATIVE_APP') throw fail('NATIVE_DRIVER_CONTEXT_REFUSED'); }
     catch (error) { if (error.code === 'NATIVE_DRIVER_TIMEOUT') throw reclassified('NATIVE_DRIVER_CONTEXT_TIMEOUT', error); throw error; }
   }
@@ -321,7 +324,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     if (closed || !identifier(id)) throw fail('NATIVE_DRIVER_ELEMENT_INVALID');
     const deadline = performance.now() + 10_000;
     const remaining = () => {
-      const value = deadline - performance.now(); if (value <= 0) throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT'); return Math.min(5000, value);
+      const value = deadline - performance.now(); if (value <= 0) throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT'); return value;
     };
     // The presence window includes its initial native-context check as well.
     await nativeContext(activeSignal, remaining(), deadline);
@@ -338,7 +341,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     const remaining = () => {
       const value = deadline - performance.now();
       if (value <= 0) throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT');
-      return Math.min(5000, value);
+      return value;
     };
     const bounded = (method, suffix, body) => request(method, route(suffix), body, activeSignal, remaining(), deadline);
     let frame;
@@ -399,7 +402,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     },
     async hideKeyboard(activeSignal = signal) {
       if (closed) throw fail('NATIVE_DRIVER_SESSION_INVALID'); await nativeContext(activeSignal);
-      const isShown = async (timeoutMs = 5000, outerDeadline) => {
+      const isShown = async (timeoutMs, outerDeadline) => {
         const shown = (await request('GET', route('/appium/device/is_keyboard_shown'), undefined, activeSignal, timeoutMs, outerDeadline)).value;
         if (shown !== true && shown !== false) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
         return shown;

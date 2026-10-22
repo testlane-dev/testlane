@@ -61,12 +61,13 @@ const plan = () => validateNativePlan({ schemaVersion: 1, runner: 'ios-xcuitest'
   target: { baseUrl: 'http://127.0.0.1:4555', environment: 'testing' }, app: { bundleId: 'dev.testlane.iosproof', buildSha256: 'a'.repeat(64) },
   cases: ['first', 'later'].map(id => ({ id, title: 'A fixed synthetic action settles', expected: ['The terminal result is confirmed'], cleanup: { required: true, description: 'Remove only owned state' } })) });
 
-test('only semantic element POSTs gain a bounded observation window; reads and DELETE stay five seconds', async t => {
+test('semantic POSTs keep their separate window while reads reuse their aggregate and DELETE stays five seconds', async t => {
   const h = harness(t), driver = await h.create(), seen = [];
   h.http(route => {
     const budget = [...h.timers.values()][0].milliseconds; seen.push({ route, budget });
     if (/\/(click|clear|value)$/.test(route) && !route.endsWith('/attribute/value')) { assert.equal(budget, 10000); h.advance(6500); }
-    else { assert.ok(budget <= 5000); if (route.endsWith('/attribute/value')) return h.json('observed'); }
+    else if (/\/(context|element|displayed|attribute\/value)$/.test(route)) { assert.ok(budget <= 10000); if (route.endsWith('/attribute/value')) return h.json('observed'); }
+    else assert.ok(budget <= 5000);
   });
   await driver.click('quantity'); await driver.type('run-marker', randomBytes(12).toString('hex')); assert.equal(await driver.text('run-marker'), 'observed'); await driver.close();
   assert.deepEqual(seen.filter(row => /\/(click|clear|value)$/.test(row.route) && !row.route.endsWith('/attribute/value')).map(row => row.budget), [10000, 10000, 10000]);

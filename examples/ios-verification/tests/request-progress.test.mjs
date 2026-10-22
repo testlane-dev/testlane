@@ -194,10 +194,10 @@ test('native-context and read-only presence wrappers preserve their actual HTTP 
     h.http(route => { if (route.endsWith('/' + stage)) { entered.resolve(); return gate.promise; } });
     const rejected = assert.rejects(driver ? driver.waitFor('session-status') : h.create(), error => {
       assert.equal(error.code, stage === 'context' ? 'NATIVE_DRIVER_CONTEXT_TIMEOUT' : 'NATIVE_DRIVER_READINESS_TIMEOUT');
-      assert.deepEqual(readIosRequestProgress(error), { ownershipElapsedMs: 0, effectiveHttpBudgetMs: 5000, httpBodyElapsedMs: 5000,
-        budgetSource: 'http-body', fetchInvoked: true, responseHeadersObserved: false }); return true;
+      assert.deepEqual(readIosRequestProgress(error), { ownershipElapsedMs: 0, effectiveHttpBudgetMs: stage === 'context' ? 5000 : 10000, httpBodyElapsedMs: stage === 'context' ? 5000 : 10000,
+        budgetSource: stage === 'context' ? 'http-body' : 'caller-outer', fetchInvoked: true, responseHeadersObserved: false }); return true;
     });
-    await entered.promise; h.advance(5000); h.expire(); await rejected;
+    await entered.promise; h.advance(stage === 'context' ? 5000 : 10000); h.expire(); await rejected;
     gate.resolve(h.json(null)); h.http(undefined); if (driver) await driver.close();
     assert.equal(h.timers.size, 0);
   }
@@ -225,9 +225,9 @@ test('readiness and preauth wrappers preserve an early fractional timer snapshot
   const rejected = assert.rejects(verifyInstalledIosReadiness({ createNativeDriver: options => h.create({ signal: options.signal }),
     driverOptions: { deviceBinding: binding() }, assertOwned: () => true, appPrewarmed: true, preauthControls: true,
     onPreauthControls: value => { report = value; } }), error => { failure = error; return error.code === 'NATIVE_DRIVER_TIMEOUT'; });
-  await entered.promise; h.advance(4999.25); h.expire(); await rejected;
-  const expected = { ownershipElapsedMs: 123.5, effectiveHttpBudgetMs: 5000, httpBodyElapsedMs: 4999.25,
-    budgetSource: 'http-body', fetchInvoked: true, responseHeadersObserved: false };
+  await entered.promise; h.advance(9875.75); h.expire(); await rejected;
+  const expected = { ownershipElapsedMs: 123.5, effectiveHttpBudgetMs: 9876.5, httpBodyElapsedMs: 9875.75,
+    budgetSource: 'caller-outer', fetchInvoked: true, responseHeadersObserved: false };
   assert.deepEqual(readIosRequestProgress(failure), expected); assert.equal(report.sessionCleanupAcknowledged, true);
   assert.deepEqual(report.steps, [{ controlId: 'run-marker', step: 'visibility', completed: false, code: 'NATIVE_DRIVER_TIMEOUT',
     request: { operation: 'element-find', phase: 'http' }, requestProgress: expected }]);

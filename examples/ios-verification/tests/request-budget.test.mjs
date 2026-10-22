@@ -61,18 +61,18 @@ test('a fractional late settled owner result cannot send HTTP, but is not confus
   h.owner(() => true); await driver.close(); assert.equal(h.routes.at(-1).method, 'DELETE');
 });
 
-test('HTTP and the entire response body retain one five-second phase after a slow settled owner', async t => {
+test('read HTTP and the entire body consume only the unused ten-second aggregate after a slow settled owner', async t => {
   const h = harness(t), driver = await h.create(); let owners = 0, reads = 0;
   h.owner(() => { if (++owners === 4) h.advance(4700); return true; });
   h.http(route => route.endsWith('/attribute/value') ? { ok: true, status: 200, body: { getReader: () => ({ read: async () => {
-    if (++reads === 1) { h.advance(4999); return { done: false, value: Buffer.from('{"value":null}') }; }
+    if (++reads === 1) { h.advance(5299); return { done: false, value: Buffer.from('{"value":null}') }; }
     h.advance(1.001); return { done: true };
   } }) } } : undefined);
   await assert.rejects(driver.text('create-request'), error => {
     assert.equal(error.code, 'NATIVE_DRIVER_TIMEOUT');
     assert.deepEqual(readIosRequestFailure(error), { operation: 'value-read', phase: 'response' }); return true;
   });
-  assert.equal(reads, 2); assert.equal(h.now(), 9700.001);
+  assert.equal(reads, 2); assert.equal(h.now(), 10000.001);
   h.http(undefined); await driver.close(); assert.equal(h.timers.size, 0);
 });
 
@@ -207,7 +207,7 @@ test('a pending-owner fence also interrupts a concurrent HTTP operation without 
 test('JSON decoding time remains part of the HTTP body deadline and cannot accept a fractional late result', async t => {
   const h = harness(t), driver = await h.create(), parse = JSON.parse; let decoding = false;
   h.http(route => { if (route.endsWith('/attribute/value')) { decoding = true; return h.json(null); } });
-  t.mock.method(JSON, 'parse', text => { const decoded = parse(text); if (decoding) { decoding = false; h.advance(5000.001); } return decoded; });
+  t.mock.method(JSON, 'parse', text => { const decoded = parse(text); if (decoding) { decoding = false; h.advance(10000.001); } return decoded; });
   await assert.rejects(driver.text('create-request'), error => {
     assert.equal(error.code, 'NATIVE_DRIVER_TIMEOUT');
     assert.deepEqual(readIosRequestFailure(error), { operation: 'value-read', phase: 'response' }); return true;

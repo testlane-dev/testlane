@@ -92,10 +92,14 @@ before sessions and between phases. Session creation requires the prebuilt runne
 uncertain compilation blocks authentication. Setup launches the unauthenticated
 proof app before WDA attaches, with one startup attempt and no forced relaunch.
 The 240-second session ceiling remains separate from compilation. Ordinary driver
-requests allow five seconds for a fresh ownership check, then five seconds for
-HTTP and the complete response body, with a ten-second aggregate ceiling clipped
-by the caller's monotonic deadline. Appium's ordinary WDA transport limit remains
-five seconds. Visibility and read-only presence retain ten-second windows;
+requests allow five seconds for a fresh ownership check within their aggregate
+ceiling. Fixed read-only routes may use the unused ten-second request and caller
+window for HTTP and the complete body, so that read phase may exceed five seconds.
+Gestures, keyboard-hide fallback and session deletion keep a five-second HTTP/body
+cap. Semantic click/clear/value requests retain a ten-second HTTP/body cap within
+their fifteen-second request aggregate. All phases remain clipped by the caller's
+monotonic deadline and cancellation signal. Appium's ordinary WDA transport limit
+remains five seconds. Visibility and read-only presence retain ten-second windows;
 presence includes its initial native-context check. Keyboard confirmation retains
 one five-second window. A pending ownership callback interrupted by timeout or
 cancellation permanently fences further driver guards, HTTP and session deletion,
