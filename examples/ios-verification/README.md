@@ -419,12 +419,12 @@ a lost runner. Delivery is best-effort; subsequent state remains unknown. A noti
 establishes neither cleanup nor credential absence and grants no permission to
 read logs. It cannot replace the successful workflow and validated evidence.
 
-The workflow uploads selected sanitized evidence after success. Proof failures
+The workflow uploads only the selected JSON evidence after success. Proof failures
 retain fixed stages/error codes, any successful readiness record and native reports
-that pass schema validation again. Bounded `preauth-device.log` is retained only
-when setup fails before an application backend, broker, credential or application
-session exists. The installed readiness session uses the same strict logging and
-privacy capabilities as the workers.
+that pass schema validation again. Raw setup and build diagnostics, including
+`preauth-device.log` and build `.log` files, are not uploaded by the workflow.
+The installed readiness session uses the same strict logging and privacy
+capabilities as the workers.
 
 The optional standalone WDA diagnostic checks the compiled app against its manifest
 and seven public source inputs. It opens a native automation session without

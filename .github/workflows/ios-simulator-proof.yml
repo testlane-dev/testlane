@@ -88,16 +88,6 @@ jobs:
             output/ios-proof/corrected.json
             output/ios-proof/receipt.json
             ${{ env.IOS_PROOF_ROOT }}/build/build-manifest.json
-      # Compilation happens before any accounts, broker or sessions exist.
-      # Never upload post-authentication Appium logs or native-store homes.
-      - name: Retain synthetic compilation diagnostics before authentication
-        if: failure() && steps.build.outcome == 'failure'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ios-build-diagnostics
-          if-no-files-found: ignore
-          retention-days: 3
-          path: ${{ env.IOS_PROOF_ROOT }}/build/*.log
       - name: Retain fixed failure codes and independently sanitized native reports
         if: failure() && steps.proof.outcome == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -109,4 +99,3 @@ jobs:
             output/ios-proof/public-failure.json
             output/ios-proof/preauth-controls.json
             output/ios-proof/readiness.json
-            output/ios-proof/preauth-device.log
