@@ -29,7 +29,7 @@ test('iOS plans have real bundle/build fields and cannot mix Android app fields 
   const android = plan(); android.runner = NATIVE_RUNNER; android.app = { package: 'dev.testlane.androidproof', apkSha256: 'a'.repeat(64) };
   assert.deepEqual(nativeLimits(android), NATIVE_LIMITS);
   assert.equal(nativeDiagnostic('NATIVE_DRIVER_SESSION_TIMEOUT').summary, 'Native session creation exceeded its 120-second setup budget.');
-  assert.equal(nativeDiagnostic('NATIVE_DRIVER_SESSION_TIMEOUT', IOS_NATIVE_RUNNER).summary, 'Native session creation exceeded its 240-second setup budget.');
+  assert.equal(nativeDiagnostic('NATIVE_DRIVER_SESSION_TIMEOUT', IOS_NATIVE_RUNNER).summary, 'Native session creation did not finish within its active setup or request budget.');
 });
 
 test('one shared runner and report sanitizer bind outcomes, limits and diagnoses to the reviewed platform', async () => {
@@ -42,7 +42,7 @@ test('one shared runner and report sanitizer bind outcomes, limits and diagnoses
     const value = structuredClone(report); mutate(value); assert.throws(() => sanitizeNativeReport(value, input), { code: 'NATIVE_REPORT_INVALID' });
   }
   const failed = appendNativeRunFailure(report, 'NATIVE_DRIVER_SESSION_TIMEOUT');
-  assert.equal(failed.verdict, 'blocked'); assert.ok(failed.diagnostics[0].summary.includes('240-second'));
+  assert.equal(failed.verdict, 'blocked'); assert.equal(failed.diagnostics[0].summary, 'Native session creation did not finish within its active setup or request budget.');
   assert.deepEqual(sanitizeNativeReport(failed, input), failed);
   assert.deepEqual(sanitizeNativeReport(nativeFailureReport(input, 'NATIVE_DRIVER_CONFIGURATION_INVALID'), input).runner, IOS_NATIVE_RUNNER);
 });

@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateNativePlan, sanitizeNativeReport, nativeFailureReport, appendNativeRunFailure, IOS_NATIVE_RUNNER } from './contracts.mjs';
+import { validateNativePlan, sanitizeNativeReport, nativeFailureReport, appendNativeRunFailure, IOS_NATIVE_RUNNER, NATIVE_WORKER_PROTOCOL_SUBTYPE_CODES, NATIVE_DRIVER_FAILURE_CODES } from './contracts.mjs';
 import { validateIosDeviceBinding } from '../ios-verification/device-scope.mjs';
 
 const ENTRY = fileURLToPath(new URL('./worker.mjs', import.meta.url));
@@ -62,9 +62,10 @@ export async function runNativeWorker({ plan: input, driverOptions, identities, 
   return new Promise(resolve => {
     let child, captured = '', outputBytes = 0, closed = false, exitCode, finishing = false, done = false, budget, grace;
     const requestIds = new Set(), activeRequests = new Set();
+    const protocolFailure = subtype => appendNativeRunFailure(nativeFailureReport(plan, 'NATIVE_WORKER_PROTOCOL_INVALID'), subtype);
     const complete = async (report, force = false) => {
       if (finishing || done) return; finishing = true; clearTimeout(budget); clearTimeout(grace); signal?.removeEventListener('abort', cancel);
-      let stopped;
+      let stopped, rpcUnsettled = false;
       try {
         if (!force && child && !closed) await new Promise(resolve => {
           const finish = () => { clearTimeout(timer); child.off('close', finish); resolve(); };
@@ -86,14 +87,21 @@ export async function runNativeWorker({ plan: input, driverOptions, identities, 
         const settled = await Promise.race([Promise.allSettled([...activeRequests]).then(() => true),
           new Promise(resolve => { timer = setTimeout(() => resolve(false), 25_000); })]);
         clearTimeout(timer);
-        if (!settled) report = appendNativeRunFailure(report, 'NATIVE_WORKER_RPC_UNSETTLED');
+        if (!settled) { rpcUnsettled = true; report = appendNativeRunFailure(report, 'NATIVE_WORKER_RPC_UNSETTLED'); }
       }
       if (signal?.aborted && !report.reasonCodes.includes('NATIVE_RUN_CANCELLED')) report = appendNativeRunFailure(report, 'NATIVE_RUN_CANCELLED');
       let safe;
-      try { safe = sanitizeNativeReport(report, plan); } catch { safe = nativeFailureReport(plan, 'NATIVE_WORKER_PROTOCOL_INVALID'); }
+      try { safe = sanitizeNativeReport(report, plan); } catch {
+        safe = protocolFailure('NATIVE_WORKER_PROTOCOL_FINAL_SANITIZE');
+        // Only observed host outcomes survive rejection of the report itself.
+        if (!stopped) safe = appendNativeRunFailure(safe, 'NATIVE_WORKER_TERMINATION_UNCONFIRMED');
+        if (rpcUnsettled) safe = appendNativeRunFailure(safe, 'NATIVE_WORKER_RPC_UNSETTLED');
+        if (signal?.aborted) safe = appendNativeRunFailure(safe, 'NATIVE_RUN_CANCELLED');
+      }
       done = true; resolve({ report: safe, captured });
     };
     const refuse = code => complete(nativeFailureReport(plan, code), true);
+    const refuseProtocol = subtype => complete(protocolFailure(subtype), true);
     const cancel = () => {
       if (finishing || done || grace) return;
       if (child?.connected) child.send({ type: 'cancel' }, () => {});
@@ -110,18 +118,28 @@ export async function runNativeWorker({ plan: input, driverOptions, identities, 
       });
       child.on('message', message => {
         if (finishing || done) return;
-        let size; try { size = Buffer.byteLength(JSON.stringify(message)); } catch { void refuse('NATIVE_WORKER_PROTOCOL_INVALID'); return; }
-        if (size > MAX_IPC) { void refuse('NATIVE_WORKER_PROTOCOL_INVALID'); return; }
+        let size; try { size = Buffer.byteLength(JSON.stringify(message)); } catch { void refuseProtocol('NATIVE_WORKER_PROTOCOL_MESSAGE_SERIALIZATION'); return; }
+        if (size > MAX_IPC) { void refuseProtocol('NATIVE_WORKER_PROTOCOL_MESSAGE_SIZE'); return; }
         if (exact(message, ['type', 'report']) && message.type === 'result') {
           let report;
-          try { report = sanitizeNativeReport(message.report, plan); } catch { void refuse('NATIVE_WORKER_PROTOCOL_INVALID'); return; }
-          if (activeRequests.size) { void refuse('NATIVE_WORKER_PROTOCOL_INVALID'); return; }
+          try {
+            report = sanitizeNativeReport(message.report, plan);
+            if (report.reasonCodes.some(code => NATIVE_WORKER_PROTOCOL_SUBTYPE_CODES.includes(code))) throw new Error();
+          } catch { void refuseProtocol('NATIVE_WORKER_PROTOCOL_RESULT_CONTRACT'); return; }
+          if (activeRequests.size) {
+            let failure = protocolFailure('NATIVE_WORKER_PROTOCOL_RESULT_ACTIVE_RPC');
+            // These remain worker-reported fixed codes, not host-observed causes.
+            // Discard its rows and retain no data from rejected/final-invalid reports.
+            for (const code of report.reasonCodes.filter(value => NATIVE_DRIVER_FAILURE_CODES.includes(value)))
+              failure = appendNativeRunFailure(failure, code);
+            void complete(failure, true); return;
+          }
           const unsettled = report.cases.some(item => item.diagnostics.some(value => /_UNSETTLED$/.test(value.code)));
           void complete(report, unsettled); return;
         }
         if (!exact(message, ['type', 'id', 'request']) || message.type !== 'request' || typeof message.id !== 'string' ||
           !/^rpc-[0-9]{1,6}$/.test(message.id) || requestIds.has(message.id) || requestIds.size >= 2048 || !validNativeWorkerRequest(message.request, plan)) {
-          void refuse('NATIVE_WORKER_PROTOCOL_INVALID'); return;
+          void refuseProtocol('NATIVE_WORKER_PROTOCOL_REQUEST_CONTRACT'); return;
         }
         requestIds.add(message.id);
         const operation = Promise.resolve().then(() => onRequest(structuredClone(message.request)));

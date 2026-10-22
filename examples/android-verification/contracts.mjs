@@ -2,6 +2,14 @@
 import { types } from 'node:util';
 export const NATIVE_RUNNER = 'android-uiautomator2';
 export const IOS_NATIVE_RUNNER = 'ios-xcuitest';
+export const NATIVE_WORKER_PROTOCOL_SUBTYPE_CODES = Object.freeze([
+  'NATIVE_WORKER_PROTOCOL_MESSAGE_SERIALIZATION',
+  'NATIVE_WORKER_PROTOCOL_MESSAGE_SIZE',
+  'NATIVE_WORKER_PROTOCOL_REQUEST_CONTRACT',
+  'NATIVE_WORKER_PROTOCOL_RESULT_CONTRACT',
+  'NATIVE_WORKER_PROTOCOL_RESULT_ACTIVE_RPC',
+  'NATIVE_WORKER_PROTOCOL_FINAL_SANITIZE',
+]);
 export const NATIVE_CASE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const NATIVE_DRIVER_FAILURE_CODES = Object.freeze([
   'NATIVE_DRIVER_CONFIGURATION_INVALID', 'NATIVE_DRIVER_OWNERSHIP_REFUSED', 'NATIVE_DRIVER_CONTEXT_REFUSED',
@@ -132,6 +140,12 @@ const diagnoses = {
   NATIVE_WORKER_FAILED: ['execution', 'The native worker failed before a complete result was accepted.', 'Inspect owned worker and device state; incomplete execution cannot verify cleanup.'],
   NATIVE_WORKER_TIMEOUT: ['execution', 'The outer native worker budget expired.', 'The owned worker was stopped. Inspect owned records and stop the owned device processes; cleanup remains unknown.'],
   NATIVE_WORKER_PROTOCOL_INVALID: ['execution', 'The native worker IPC contract was refused.', 'Preserve private recovery state and inspect the worker source/protocol. No offending payload is copied into this report.'],
+  NATIVE_WORKER_PROTOCOL_MESSAGE_SERIALIZATION: ['execution', 'The native worker IPC message could not be measured.', 'Preserve owned recovery state and inspect the fixed worker contract. No offending IPC data is included.'],
+  NATIVE_WORKER_PROTOCOL_MESSAGE_SIZE: ['execution', 'The native worker IPC message exceeded the fixed byte limit.', 'Preserve owned recovery state and inspect the fixed worker contract. No offending IPC data is included.'],
+  NATIVE_WORKER_PROTOCOL_REQUEST_CONTRACT: ['execution', 'The native worker IPC request contract was refused.', 'Preserve owned recovery state and inspect the fixed worker contract. No offending IPC data is included.'],
+  NATIVE_WORKER_PROTOCOL_RESULT_CONTRACT: ['execution', 'The native worker result contract was refused.', 'Preserve owned recovery state and inspect the fixed worker contract. No offending IPC data is included.'],
+  NATIVE_WORKER_PROTOCOL_RESULT_ACTIVE_RPC: ['execution', 'The native worker returned a result while a parent operation remained pending.', 'Preserve owned recovery state and inspect the fixed worker contract. No offending IPC data is included.'],
+  NATIVE_WORKER_PROTOCOL_FINAL_SANITIZE: ['execution', 'The final native worker report contract was refused.', 'Preserve owned recovery state and inspect the fixed worker contract. No offending IPC data is included.'],
   NATIVE_WORKER_OUTPUT_LIMIT: ['execution', 'The native worker exceeded its private output budget.', 'Inspect private diagnostics and owned state; no truncated output is evidence of a passing run.'],
   NATIVE_WORKER_TERMINATION_UNCONFIRMED: ['execution', 'Owned native worker termination could not be confirmed.', 'Stop the owned process tree and device processes manually before recovery or another run.'],
   NATIVE_WORKER_RPC_UNSETTLED: ['cleanup', 'A parent-owned native operation did not settle.', 'Do not start another run. Stop the owned device processes and inspect retained recovery state before continuing.'],
@@ -141,7 +155,7 @@ const iosDiagnoses = {
   NATIVE_DRIVER_FAILED: ['setup', 'The owned native driver could not complete setup or execution.', 'Inspect the owned Simulator and Appium lifecycle privately; no driver payload is retained.'],
   NATIVE_DRIVER_CONFIGURATION_INVALID: ['setup', 'The native driver configuration was refused.', 'Review the loopback Appium origin, exact Simulator UDID/bundle, owned device-set/build paths and required privacy capabilities.'],
   NATIVE_DRIVER_CONTEXT_REFUSED: ['setup', 'The driver did not observe the required NATIVE_APP context.', 'Use XCUITest for the owned Simulator app; WebViews and browser contexts are not accepted by this proof.'],
-  NATIVE_DRIVER_SESSION_TIMEOUT: ['setup', 'Native session creation exceeded its 240-second setup budget.', 'Inspect the owned cold WebDriverAgent build and Simulator startup privately before retrying. Business-case budgets remain separate.'],
+  NATIVE_DRIVER_SESSION_TIMEOUT: ['setup', 'Native session creation did not finish within its active setup or request budget.', 'Inspect the owned cold WebDriverAgent build and Simulator startup privately before retrying. Business-case budgets remain separate.'],
   NATIVE_DRIVER_CLEANUP_FAILED: ['cleanup', 'The owned native driver session did not close successfully.', 'Stop the owned Appium/Simulator processes and inspect cleanup before accepting the run.'],
 };
 export function nativeDiagnostic(code, runner = NATIVE_RUNNER) {
@@ -189,6 +203,8 @@ export function sanitizeNativeReport(value, inputPlan) {
     value.diagnostics.length !== value.reasonCodes.length || value.diagnostics.some((item, index) => !validDiagnostic(item) || item.code !== value.reasonCodes[index]) ||
     !Array.isArray(value.cases) || value.cases.length !== plan.cases.length ||
     JSON.stringify(value.limits) !== JSON.stringify(nativeLimits(plan))) return refuse();
+  const protocolSubtypes = value.reasonCodes.filter(code => NATIVE_WORKER_PROTOCOL_SUBTYPE_CODES.includes(code));
+  if (protocolSubtypes.length > 1 || (protocolSubtypes.length && value.reasonCodes[0] !== 'NATIVE_WORKER_PROTOCOL_INVALID')) return refuse();
   const rows = [];
   for (let index = 0; index < plan.cases.length; index++) {
     const row = value.cases[index], planned = plan.cases[index];
@@ -201,7 +217,7 @@ export function sanitizeNativeReport(value, inputPlan) {
       row.assertionsObserved !== row.bodyAssertionsObserved + row.cleanupAssertionsObserved ||
       !keys(row.cleanup, ['required', 'status']) || Object.keys(row.cleanup).length !== 2 || row.cleanup.required !== planned.cleanup.required ||
       !['completed', 'failed', 'not-required', 'unknown'].includes(row.cleanup.status) ||
-      !Array.isArray(row.diagnostics) || row.diagnostics.some(item => !validDiagnostic(item)) ||
+      !Array.isArray(row.diagnostics) || row.diagnostics.some(item => !validDiagnostic(item) || NATIVE_WORKER_PROTOCOL_SUBTYPE_CODES.includes(item.code)) ||
       new Set(row.diagnostics.map(item => item.code)).size !== row.diagnostics.length ||
       (row.cleanup.status === 'completed' && row.cleanupAssertionsObserved < 1) ||
       (row.cleanup.status === 'not-required' && (row.cleanup.required || row.cleanupAssertionsObserved !== 0))) return refuse();
