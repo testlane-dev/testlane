@@ -66,6 +66,7 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
     export function readIosRequestFailure(){return undefined;}
     export function readIosRequestProgress(){return undefined;}
     export function readIosStartupResponse(){return undefined;}
+    export function readIosSetupOwnership(){return undefined;}
     export async function createNativeDriver(options){state.events.push('installed-driver-create');
       state.privacy={showXcodeLog:options.capabilities['appium:showXcodeLog'],showIOSLog:options.capabilities['appium:showIOSLog'],
         skipLogCapture:options.capabilities['appium:skipLogCapture']};

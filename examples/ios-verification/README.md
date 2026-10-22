@@ -412,7 +412,7 @@ does not settle has a separate fixed diagnosis, without replaying actions. The
 eight- and ten-second polling windows remain subject to the surrounding driver
 and case budgets; a single text read can involve several driver requests.
 
-An unconfirmed retained-command stop permanently fails that device factory’s cleanup,
+An unconfirmed retained-command stop permanently fails that device factory's cleanup,
 even if destroying local streams is followed by a child close event. Recovery and
 the owned root remain; a local close does not establish descendant termination.
 
@@ -474,3 +474,5 @@ setup/teardown failures and other native frameworks need their own actual trials
 before wider support claims. See the [mobile release criteria](../../docs/mobile-testing.md#release-gate).
 
 If the credential-free readiness factory rejects before returning a driver, the optional failed `preauth-controls.json` record may contain `setupFailure`: fixed code/request facts, existing numeric progress and a four-field `startupResponse` snapshot. HTTP status, observed response state, closed W3C bucket and a recognized pinned-source signature distinguish an incomplete body from a decoded rejection. They retain no response text, identifiers or paths, establish no underlying cause or cleanup authority, and do not alter successful evidence or command budgets.
+
+A failed post-session ownership check may add `setupOwnership` to the zero-row failed `preauth-controls.json` setup record. Its fixed status, observed elapsed milliseconds, callback-started/settled flags, known guard code and command kind distinguish a rejected guard from the existing 20-second wait limit. Unknown rejection data is unavailable; late callbacks cannot alter the frozen observation. This fact does not acknowledge session cleanup or establish a native cause. Successful evidence, the 240-second setup limit and every ownership check remain unchanged.

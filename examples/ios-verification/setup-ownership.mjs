@@ -1,7 +1,19 @@
 /** One live post-session check. A failed wait never represents callback settlement. */
+import { readIosOwnershipGuardFailure, normalizeIosSetupOwnership } from './failure-facts.mjs';
+const observations = new WeakMap();
+export function readIosSetupOwnershipResult(result) {
+  return result && typeof result === 'object' ? normalizeIosSetupOwnership(observations.get(result)) : undefined;
+}
 export async function stabilizeIosSetupOwnership({ assertOwned, signal, deadline }) {
   const began = performance.now();
-  const result = status => Object.freeze({ status, completed: status === 'completed', elapsedMs: Math.max(0, Math.round(performance.now() - began)) });
+  let callbackStarted = false, callbackSettled = false;
+  let guardFailure = { guardCode: 'unavailable', commandKind: 'not-recorded' };
+  const result = status => {
+    const value = Object.freeze({ status, completed: status === 'completed', elapsedMs: Math.max(0, Math.round(performance.now() - began)) });
+    const observation = normalizeIosSetupOwnership({ status, elapsedMs: value.elapsedMs, callbackStarted, callbackSettled, ...guardFailure });
+    if (observation) observations.set(value, observation);
+    return value;
+  };
   if (signal?.aborted) return result('cancelled');
   if (typeof assertOwned !== 'function' || !Number.isFinite(deadline)) return result('refused');
   const remaining = deadline - began;
@@ -21,8 +33,9 @@ export async function stabilizeIosSetupOwnership({ assertOwned, signal, deadline
     const owned = Promise.resolve().then(() => {
       if (signal?.aborted) return 'cancelled';
       if (performance.now() >= began + budget) return 'timeout';
-      return Promise.resolve(assertOwned()).then(value => value === true ? 'completed' : 'refused');
-    }).catch(() => 'refused');
+      callbackStarted = true;
+      return Promise.resolve(assertOwned()).then(value => { callbackSettled = true; return value === true ? 'completed' : 'refused'; });
+    }).catch(error => { if (callbackStarted) callbackSettled = true; guardFailure = readIosOwnershipGuardFailure(error); return 'refused'; });
     const status = await Promise.race([owned, stopped]);
     if (signal?.aborted) return result('cancelled');
     if (performance.now() >= began + budget) return result('timeout');

@@ -120,3 +120,27 @@ export function retainIosStartupCommandObservation(error, fact) {
   }
   return error;
 }
+
+/** Fixed rejection classification only; unknown messages never become codes. */
+export function readIosOwnershipGuardFailure(error) {
+  const message = nativeError(error) ? ownValue(error, 'message') : undefined;
+  const kind = nativeError(error) ? ownValue(error, 'nativeCommandKind') : undefined;
+  return Object.freeze({ guardCode: CODES.has(message) ? message : 'unavailable',
+    commandKind: KINDS.has(kind) ? kind : 'not-recorded' });
+}
+
+/** An observed setup wait, not proof of native/session or callback termination. */
+export function normalizeIosSetupOwnership(value) {
+  const names = ['status', 'elapsedMs', 'callbackStarted', 'callbackSettled', 'guardCode', 'commandKind'];
+  if (value === null || typeof value !== 'object' || types.isProxy(value)) return undefined;
+  try {
+    if (Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertyNames(value).length !== names.length || Object.getOwnPropertySymbols(value).length) return undefined;
+    const data = {};
+    for (const name of names) { const field = Object.getOwnPropertyDescriptor(value, name); if (!field || !Object.hasOwn(field, 'value')) return undefined; data[name] = field.value; }
+    if (!['refused', 'timeout', 'cancelled'].includes(data.status) || !Number.isSafeInteger(data.elapsedMs) || data.elapsedMs < 0 || data.elapsedMs > 3_600_000 ||
+        typeof data.callbackStarted !== 'boolean' || typeof data.callbackSettled !== 'boolean' || (data.callbackSettled && !data.callbackStarted) ||
+        !(data.guardCode === 'unavailable' || CODES.has(data.guardCode)) || !KINDS.has(data.commandKind) ||
+        (!data.callbackSettled && (data.guardCode !== 'unavailable' || data.commandKind !== 'not-recorded'))) return undefined;
+    return Object.freeze(data);
+  } catch { return undefined; }
+}

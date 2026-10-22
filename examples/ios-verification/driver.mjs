@@ -2,7 +2,8 @@
 import { loopbackOrigin, normalizeIosRequestFact } from '../android-verification/contracts.mjs';
 import { combineDriverSignals, withDriverSignal, waitDriverSignal } from '../android-verification/driver-phase.mjs';
 import { validateIosDeviceBinding } from './device-scope.mjs';
-import { stabilizeIosSetupOwnership } from './setup-ownership.mjs';
+import { stabilizeIosSetupOwnership, readIosSetupOwnershipResult } from './setup-ownership.mjs';
+import { normalizeIosSetupOwnership } from './failure-facts.mjs';
 import { types } from 'node:util';
 
 const ELEMENT = 'element-6066-11e4-a52e-4f735466cecf';
@@ -19,6 +20,13 @@ function requestOperation(method, route) {
 }
 export class NativeDriverError extends Error {
   constructor(code, requestFact, requestProgress, startupResponse) { super(code); this.name = 'NativeDriverError'; this.code = code; retainRequestFact(this, requestFact); retainRequestProgress(this, requestProgress); retainStartupResponse(this, startupResponse); }
+}
+const setupOwnershipErrors = new WeakMap();
+/** Only this driver's actual post-session failed check can supply this fact. */
+export function readIosSetupOwnership(error) {
+  if (!error || typeof error !== 'object' || types.isProxy(error) || !types.isNativeError(error)) return undefined;
+  try { return Object.getPrototypeOf(error) === NativeDriverError.prototype ? normalizeIosSetupOwnership(setupOwnershipErrors.get(error)) : undefined; }
+  catch { return undefined; }
 }
 const remoteUnsettledErrors = new WeakSet();
 /** A private driver-created failure marker, never caller-supplied cleanup authority. */
@@ -288,7 +296,10 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     const owned = await stabilizeIosSetupOwnership({ assertOwned, signal, deadline: setupDeadline });
     if (!owned.completed) {
       ownershipFence.abort();
-      throw fail(owned.status === 'cancelled' ? 'NATIVE_DRIVER_CANCELLED' : performance.now() >= setupDeadline ? 'NATIVE_DRIVER_SESSION_TIMEOUT' : 'NATIVE_DRIVER_OWNERSHIP_REFUSED');
+      const error = fail(owned.status === 'cancelled' ? 'NATIVE_DRIVER_CANCELLED' : performance.now() >= setupDeadline ? 'NATIVE_DRIVER_SESSION_TIMEOUT' : 'NATIVE_DRIVER_OWNERSHIP_REFUSED');
+      const observation = readIosSetupOwnershipResult(owned);
+      if (observation) setupOwnershipErrors.set(error, observation);
+      throw error;
     }
     const remaining = setupDeadline - performance.now();
     if (remaining <= 0) { ownershipFence.abort(); throw fail('NATIVE_DRIVER_SESSION_TIMEOUT'); }

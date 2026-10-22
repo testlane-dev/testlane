@@ -188,7 +188,7 @@ test('copied installed driver and runner JSON force actual owned Node worker sto
   const originalSpawn = childProcess.spawn;
   try {
     const sourceRoot = fileURLToPath(new URL('../../../', import.meta.url));
-    for (const file of ['examples/ios-verification/driver.mjs', 'examples/ios-verification/device-scope.mjs', 'examples/ios-verification/setup-ownership.mjs',
+    for (const file of ['examples/ios-verification/driver.mjs', 'examples/ios-verification/device-scope.mjs', 'examples/ios-verification/setup-ownership.mjs', 'examples/ios-verification/failure-facts.mjs',
       'examples/android-verification/contracts.mjs', 'examples/android-verification/runner.mjs', 'examples/android-verification/driver.mjs', 'examples/android-verification/driver-phase.mjs']) {
       const target = path.join(fixtureRoot, file); await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, await readFile(path.join(sourceRoot, file)));
     }

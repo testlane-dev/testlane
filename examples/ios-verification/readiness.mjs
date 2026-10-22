@@ -2,7 +2,7 @@
 import { IOS_DEVICE_SCOPE, validateIosDeviceBinding } from './device-scope.mjs';
 import { NATIVE_DRIVER_FAILURE_CODES } from '../android-verification/contracts.mjs';
 import { probeIosPreauthControls } from './preauth-controls.mjs';
-import { NativeDriverError, readIosRequestFailure, readIosRequestProgress, readIosStartupResponse } from './driver.mjs';
+import { NativeDriverError, readIosRequestFailure, readIosRequestProgress, readIosStartupResponse, readIosSetupOwnership } from './driver.mjs';
 import { types } from 'node:util';
 
 const codes = new Set([...NATIVE_DRIVER_FAILURE_CODES, 'NATIVE_DRIVER_CANCELLED']);
@@ -47,12 +47,12 @@ export async function verifyInstalledIosReadiness({ createNativeDriver, driverOp
   if (typeof createNativeDriver !== 'function' || typeof assertOwned !== 'function' || appPrewarmed !== true ||
     driverOptions?.deviceBinding?.scope !== IOS_DEVICE_SCOPE || typeof preauthControls !== 'boolean' ||
     typeof onPreauthControls !== 'function') throw fail('NATIVE_DRIVER_CONFIGURATION_INVALID');
-  let driver, error, failed = false, factoryRejected = false, sessionSetupMs, sessionCleanupAcknowledged = false;
+  let driver, error, setupOwnership, failed = false, factoryRejected = false, sessionSetupMs, sessionCleanupAcknowledged = false;
   const steps = [];
   const began = performance.now();
   try {
     try { driver = await createNativeDriver({ ...driverOptions, signal, assertOwned }); }
-    catch (caught) { factoryRejected = true; throw caught; }
+    catch (caught) { factoryRejected = true; setupOwnership = readIosSetupOwnership(caught); throw caught; }
     sessionSetupMs = Math.max(0, Math.round(performance.now() - began));
     if (driver?.context !== 'NATIVE_APP') throw fail('NATIVE_DRIVER_CONTEXT_REFUSED');
     if (signal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
@@ -68,7 +68,7 @@ export async function verifyInstalledIosReadiness({ createNativeDriver, driverOp
   let setupFailure;
   if (factoryRejected && failed && !driver && steps.length === 0) {
     const request = readIosRequestFailure(error), requestProgress = readIosRequestProgress(error), startupResponse = readIosStartupResponse(error);
-    setupFailure = Object.freeze({ code: error.code, ...(request ? { request } : {}), ...(requestProgress ? { requestProgress } : {}), ...(startupResponse ? { startupResponse } : {}) });
+    setupFailure = Object.freeze({ code: error.code, ...(request ? { request } : {}), ...(requestProgress ? { requestProgress } : {}), ...(startupResponse ? { startupResponse } : {}), ...(setupOwnership ? { setupOwnership } : {}) });
   }
   if (preauthControls) onPreauthControls(Object.freeze({ schemaVersion: 1, purpose: 'credential-free-fixed-controls',
     completed: !failed, sessionCleanupAcknowledged, steps: Object.freeze(steps), ...(setupFailure ? { setupFailure } : {}) }));
