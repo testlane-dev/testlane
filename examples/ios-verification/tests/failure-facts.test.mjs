@@ -59,3 +59,36 @@ test('command tagging never overwrites an existing original command kind', () =>
   tagIosCommandFailure(error, 'owned-device-delete');
   assert.equal(createIosStartupFailure({ stage: 'owned-simulator-start', error }).commandKind, 'owned-device-list');
 });
+
+
+test('returned-device stages admit only closed own-data facts and export no unknown error text', async () => {
+  const canary='synthetic-'+randomBytes(24).toString('hex');let reads=0;
+  for(const stage of ['proof-app-prewarm','preauth-wda-revalidation']){
+    const known=tagIosCommandFailure(Error('IOS_COMMAND_TIMEOUT'),'owned-device-list');
+    assert.equal(retainIosStartupFailure(known,createIosStartupFailure({stage,error:known})),known);
+    const fact={stage,code:'IOS_COMMAND_TIMEOUT',commandKind:'owned-device-list'};
+    assert.deepEqual(readIosStartupFailure(known),fact);assert.equal(Object.isFrozen(readIosStartupFailure(known)),true);
+    assert.deepEqual((await publicIosFailure({output:'.',stage:'app-prewarm',error:known})).startupFailure,fact);
+    const unknown=Error(canary);Object.defineProperty(unknown,'nativeCommandKind',{get(){reads++;throw Error(canary);}});
+    retainIosStartupFailure(unknown,createIosStartupFailure({stage,error:unknown}));
+    assert.deepEqual(readIosStartupFailure(unknown),{stage,code:'IOS_DEVICE_START_FAILED',commandKind:'not-recorded'});
+    const impostor={message:'IOS_COMMAND_TIMEOUT',nativeCommandKind:'owned-device-list'};
+    const proxy=new Proxy(Error('IOS_COMMAND_TIMEOUT'),{get(){reads++;throw Error(canary);},getPrototypeOf(){reads++;throw Error(canary);}});
+    for(const error of [impostor,proxy,null,canary]){
+      retainIosStartupFailure(error,createIosStartupFailure({stage,error}));
+      assert.equal(readIosStartupFailure(error),undefined);
+    }
+    const accessor={...fact};Object.defineProperty(accessor,'stage',{enumerable:true,get(){reads++;throw Error(canary);}});
+    for(const value of [{...fact,stage:stage+'-unknown'},{...fact,extra:canary},accessor,
+      Object.assign({...fact},{[Symbol('synthetic')]:true}),new Proxy(fact,{ownKeys(){reads++;throw Error(canary);}})]){
+      const error=Error('IOS_COMMAND_TIMEOUT');Object.defineProperty(error,'startupFailure',{value});
+      assert.equal(readIosStartupFailure(error),undefined);
+      const summary=await publicIosFailure({output:'.',stage:'app-prewarm',error});
+      assert.equal(Object.hasOwn(summary,'startupFailure'),false);
+      for(const secret of [canary,encodeURIComponent(canary),Buffer.from(canary).toString('base64')])assert.equal(JSON.stringify(summary).includes(secret),false);
+    }
+    const summary=await publicIosFailure({output:'.',stage:'app-prewarm',error:unknown});
+    assert.equal(summary.code,'IOS_PROOF_FAILED');assert.equal(JSON.stringify(summary).includes(canary),false);
+  }
+  assert.equal(reads,0);
+});

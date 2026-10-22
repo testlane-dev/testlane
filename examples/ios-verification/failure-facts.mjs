@@ -4,7 +4,7 @@ import { types } from 'node:util';
 const STAGES = new Set(['owned-simulator-start', 'device-xcode-runtime-and-pinned-tools-validated',
   'device-owned-simulator-created', 'device-owned-simulator-boot-started', 'device-owned-simulator-booted',
   'device-wda-build-for-testing', 'device-wda-prepared', 'device-selected-runtime-cache-preparing',
-  'device-selected-runtime-cache-prepared', 'device-private-appium-ready']);
+  'device-selected-runtime-cache-prepared', 'device-private-appium-ready', 'proof-app-prewarm', 'preauth-wda-revalidation']);
 const KINDS = new Set(['not-recorded', 'xcode-version', 'runtime-list', 'device-type-list', 'owned-device-list',
   'selected-runtime-cache-update', 'owned-device-create', 'owned-device-boot', 'owned-device-bootstatus', 'owned-device-shutdown', 'owned-device-delete',
   'owned-wda-prebuild', 'owned-app-install', 'owned-proof-app-prewarm', 'owned-app-container', 'loopback-listeners',

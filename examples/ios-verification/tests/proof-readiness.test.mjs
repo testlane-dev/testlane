@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -11,15 +11,16 @@ import { publicIosFailure } from '../failure.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 
-async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailure = false, deviceCloseFails = false, statusWriteFails = false, captureThrows = false, preauthControls = false, commandObservation = false } = {}) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'tld-ios-readiness-'));
+async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailure = false, deviceCloseFails = false, statusWriteFails = false, captureThrows = false, preauthControls = false, commandObservation = false, methodFailure, precedingFact = false } = {}) {
+  const tempParent = await realpath(os.tmpdir());
+  const root = await realpath(await mkdtemp(path.join(tempParent, 'tld-ios-readiness-')));
   const packageRoot = path.join(root, 'package'), appDirectory = path.join(root, 'TestlaneIOSProof.app');
   const outputDir = path.join(root, 'output'), sessionTemp = path.join(root, 'sessions');
   async function file(relative, source) {
     const target = path.join(packageRoot, relative); await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, source);
   }
   await Promise.all([mkdir(appDirectory), mkdir(sessionTemp)]);
-  await file('state.mjs', `export const state=${JSON.stringify({ mode, failPostReadinessCheck, lateStartupFailure, deviceCloseFails, statusWriteFails, captureThrows, commandObservation,
+  await file('state.mjs', `export const state=${JSON.stringify({ mode, failPostReadinessCheck, lateStartupFailure, deviceCloseFails, statusWriteFails, captureThrows, commandObservation, methodFailure, precedingFact,
     cookie: randomBytes(24).toString('base64url'), events: [], accounts: 0, broker: 0, close: 0, wdaChecks: 0 })};`);
   const stateUrl = pathToFileURL(path.join(packageRoot, 'state.mjs')).href;
   const stateImport = 'import {state} from ' + JSON.stringify(stateUrl) + ';\n';
@@ -43,6 +44,13 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
   `);
   await file('examples/ios-verification/device.mjs', stateImport + `
     import {createIosStartupFailure,retainIosStartupFailure,tagIosCommandFailure,retainIosStartupCommandObservation,iosStartupCommandObservation} from './failure-facts.mjs';
+    function failMethod(method){
+      if(state.methodFailure!==method)return;
+      const error=tagIosCommandFailure(Error('IOS_COMMAND_TIMEOUT'),method==='prewarm'?'owned-proof-app-prewarm':'owned-device-list');
+      if(state.precedingFact)retainIosStartupFailure(error,createIosStartupFailure({stage:'device-owned-simulator-boot-started',error:tagIosCommandFailure(Error('IOS_COMMAND_TIMEOUT'),'owned-device-bootstatus')}));
+      if(state.commandObservation)retainIosStartupCommandObservation(error,iosStartupCommandObservation('proof-app-prewarm','owned-proof-app-prewarm','CoreSimulator libxpc mach_msg_trap semaphore_wait_trap'));
+      state.injectedError=error;throw error;
+    }
     export async function startOwnedIos(options){state.events.push('device-start');
       if(state.mode==='factory-unknown'){const {mkdir,writeFile}=await import('node:fs/promises');await mkdir(options.outputDir);await writeFile(options.outputDir+'/recovery.json','{"status":"manual-inspection-required"}');
         const original=createIosStartupFailure({stage:'device-owned-simulator-boot-started',error:tagIosCommandFailure(Error('IOS_COMMAND_TIMEOUT'),'owned-device-list')});
@@ -54,9 +62,10 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
       udid:'FA001122-3344-5566-7788-9900AABBCCDD',nonce:'a'.repeat(24)};
       return {udid:binding.udid,deviceBinding:binding,deviceSetPath:binding.deviceSetPath,derivedDataPath:binding.privateRoot+'/derived-data',
         serverUrl:'http://127.0.0.1:4723',wdaPort:8211,mjpegPort:8212,
-        async installApp(){state.events.push('app-install');},async prewarmProofApp(){state.events.push('app-prewarm');return {appPrewarmed:true};},
+        async installApp(){state.events.push('app-install');},async prewarmProofApp(){state.events.push('app-prewarm');failMethod('prewarm');return {appPrewarmed:true};},
         async assertOwned(){return true;},async assertWdaPrepared(){state.events.push('wda-check');
-          if(++state.wdaChecks===2&&state.failPostReadinessCheck)throw Error('IOS_WDA_ARTIFACT_CHANGED');},
+          if(++state.wdaChecks===1)failMethod('revalidation');
+          if(state.wdaChecks===2&&state.failPostReadinessCheck)throw Error('IOS_WDA_ARTIFACT_CHANGED');},
         async close(){state.close++;state.events.push('device-close');
           if(state.statusWriteFails){const {mkdir}=await import('node:fs/promises');await mkdir(${JSON.stringify(path.join(outputDir, 'cleanup-status.json'))});}
           if(state.deviceCloseFails)throw Error('IOS_DEVICE_CLEANUP_UNCONFIRMED');},capturedText(){if(state.captureThrows)throw Error('FIXTURE_CAPTURE_UNAVAILABLE');return '';}};}
@@ -77,7 +86,7 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
         async close(){state.events.push('installed-driver-close');
         if(state.mode==='close-failed')throw Object.assign(Error('private-fixture-native-message'),{code:'NATIVE_DRIVER_TIMEOUT'});}};}
   `);
-  for (const name of ['readiness.mjs', 'device-scope.mjs', 'preauth-controls.mjs', 'failure-facts.mjs']) await file('examples/ios-verification/' + name, await readFile(new URL('../' + name, import.meta.url)));
+  for (const name of ['readiness.mjs', 'device-scope.mjs', 'preauth-controls.mjs', 'failure-facts.mjs', 'failure.mjs']) await file('examples/ios-verification/' + name, await readFile(new URL('../' + name, import.meta.url)));
   await file('examples/android-verification/worker-host.mjs', stateImport + `export function runNativeWorker(){
     if(!state.lateStartupFailure)throw Error('WORKER_NOT_EXPECTED');state.events.push('worker-start');
     return {report:{verdict:'blocked',reasonCodes:['NATIVE_DRIVER_SESSION_TIMEOUT'],cases:[]},captured:''};}`);
@@ -95,8 +104,13 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
     proofOnly: true, configuration: 'Release', signature: 'none', unsigned: true, codeSigningAllowed: false, embeddedBundle: true,
     architecture: 'arm64', appSHA256, builderSHA256: sha(builder), publicSourceSHA256 }));
   const { state } = await import(stateUrl);
-  return { state, outputDir, options: { consumer: { root, packageRoot, sessionTemp }, appDirectory, toolsRoot: path.join(root, 'tools'), outputDir, preauthControls,
-    onStage: value => state.events.push('stage:' + value) }, close: () => rm(root, { recursive: true, force: true }) };
+  const installedProjection = (await import(pathToFileURL(path.join(packageRoot, 'examples/ios-verification/failure.mjs')).href)).publicIosFailure;
+  return { state, outputDir, installedProjection, options: { consumer: { root, packageRoot, sessionTemp }, appDirectory, toolsRoot: path.join(root, 'tools'), outputDir, preauthControls,
+    onStage: value => state.events.push('stage:' + value) }, async close() {
+      assert.equal(await realpath(root),root);assert.equal(path.dirname(root),tempParent);
+      assert.ok(path.basename(root).startsWith('tld-ios-readiness-'));
+      await rm(root,{recursive:true,force:false,maxRetries:5,retryDelay:100});
+    } };
 }
 
 test('controller refuses all credential/backend/broker work until installed-driver readiness and exact-session close succeed', async () => {
@@ -147,7 +161,10 @@ test('explicit fixed-controls probe uses the installed helper before account all
 test('a successful single-session readiness record precedes credential creation and omits device teardown claims', async () => {
   const owned = await fixture('passed');
   try {
-    await assert.rejects(runIosProof(owned.options), /FIXTURE_AFTER_READINESS/);
+    let failure;await assert.rejects(runIosProof(owned.options), error => {failure=error;return error.message==='FIXTURE_AFTER_READINESS';});
+    const {readIosStartupFailure}=await import('../failure-facts.mjs');
+    assert.equal(readIosStartupFailure(failure),undefined,'successful prewarm and revalidation do not tag a later failure');
+    assert.deepEqual(owned.state.events.slice(0,9),['stage:owned-simulator-start','device-start','app-install','stage:app-prewarm','app-prewarm','wda-check','stage:wda-readiness','installed-driver-create','installed-driver-close']);
     const events = owned.state.events;
     assert.ok(events.indexOf('installed-driver-close') < events.indexOf('account-backend-start'));
     assert.equal(owned.state.accounts, 1); assert.deepEqual(owned.state.roles, ['Editor', 'Reviewer']);
@@ -242,4 +259,52 @@ test('controller emits only the original fixed command observation and preserves
     await assert.rejects(runIosProof(unrelated.options));
     await assert.rejects(readFile(path.join(unrelated.outputDir,'startup-command-observation.json')),error=>error.code==='ENOENT');
   }finally{await unrelated.close();}
+});
+
+
+test('returned-device prewarm and first WDA revalidation preserve the original command timeout through both projectors', async () => {
+  const {readIosStartupFailure}=await import('../failure-facts.mjs');
+  for(const [methodFailure,stage,commandKind] of [
+    ['prewarm','proof-app-prewarm','owned-proof-app-prewarm'],
+    ['revalidation','preauth-wda-revalidation','owned-device-list']]){
+    const owned=await fixture('passed',{methodFailure});
+    try{
+      let failure;await assert.rejects(runIosProof(owned.options),error=>{failure=error;return true;});
+      assert.equal(failure,owned.state.injectedError,'the method error is rethrown without replacement');
+      const expected={stage,code:'IOS_COMMAND_TIMEOUT',commandKind};
+      assert.deepEqual(readIosStartupFailure(failure),expected);
+      for(const project of [publicIosFailure,owned.installedProjection]){
+        const summary=await project({output:owned.outputDir,stage:'app-prewarm',error:failure});
+        assert.deepEqual(summary,{schemaVersion:1,status:'failed',stage:'app-prewarm',code:'IOS_COMMAND_TIMEOUT',reports:[],startupFailure:expected});
+      }
+      assert.equal(owned.state.accounts,0);assert.equal(owned.state.broker,0);assert.equal(owned.state.close,1);
+      assert.equal(owned.state.events.includes('installed-driver-create'),false);
+      assert.equal(owned.state.wdaChecks,methodFailure==='prewarm'?0:1);
+      assert.equal(owned.state.events.filter(value=>value==='app-prewarm').length,1);
+      await assert.rejects(readFile(path.join(owned.outputDir,'readiness.json')),{code:'ENOENT'});
+      await assert.rejects(readFile(path.join(owned.outputDir,'preauth-controls.json')),{code:'ENOENT'});
+    }finally{await owned.close();}
+  }
+});
+
+test('returned-device failures retain preceding startup and observation facts when cleanup becomes primary', async () => {
+  const {readIosStartupFailure,readIosStartupCommandObservation}=await import('../failure-facts.mjs');
+  for(const methodFailure of ['prewarm','revalidation']){
+    const owned=await fixture('passed',{methodFailure,precedingFact:true,commandObservation:true,deviceCloseFails:true});
+    try{
+      let failure;await assert.rejects(runIosProof(owned.options),error=>{failure=error;return error.message==='IOS_PROOF_CLEANUP_INCOMPLETE';});
+      assert.notEqual(failure,owned.state.injectedError);assert.equal(failure.preserveConsumer,true);
+      const prior=readIosStartupFailure(owned.state.injectedError),observation=readIosStartupCommandObservation(owned.state.injectedError);
+      assert.deepEqual(prior,{stage:'device-owned-simulator-boot-started',code:'IOS_COMMAND_TIMEOUT',commandKind:'owned-device-bootstatus'});
+      assert.deepEqual(readIosStartupFailure(failure),prior);assert.deepEqual(readIosStartupCommandObservation(failure),observation);
+      assert.equal(observation.status,'captured');
+      assert.deepEqual(JSON.parse(await readFile(path.join(owned.outputDir,'startup-command-observation.json'),'utf8')),observation);
+      for(const project of [publicIosFailure,owned.installedProjection]){
+        const summary=await project({output:owned.outputDir,stage:'cleanup',error:failure});
+        assert.equal(summary.code,'IOS_PROOF_CLEANUP_INCOMPLETE');assert.deepEqual(summary.startupFailure,prior);
+        assert.equal(Object.hasOwn(summary,'startupCommandObservation'),false);
+      }
+      assert.equal(owned.state.accounts,0);assert.equal(owned.state.broker,0);assert.equal(owned.state.close,1);
+    }finally{await owned.close();}
+  }
 });

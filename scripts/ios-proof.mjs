@@ -9,7 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {consumerProject} from '../examples/playwright/tests/consumer.mjs';
 import {sha,tree,digestTree,installedModule,proofProfiles,runProofPhases,writeNativeProofReceipt} from './native-proof-support.mjs';
 import {publicIosFailure} from '../examples/ios-verification/failure.mjs';
-import {readIosStartupFailure,retainIosStartupFailure,readIosStartupCommandObservation,retainIosStartupCommandObservation} from '../examples/ios-verification/failure-facts.mjs';
+import {createIosStartupFailure,readIosStartupFailure,retainIosStartupFailure,readIosStartupCommandObservation,retainIosStartupCommandObservation} from '../examples/ios-verification/failure-facts.mjs';
 
 const BUNDLE='dev.testlane.iosproof';
 export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,signal,onStage=()=>{},preauthControls=false}) {
@@ -51,8 +51,12 @@ export async function runIosProof({consumer,appDirectory,toolsRoot,outputDir,sig
     try{device=await startOwnedIos({toolsRoot,outputDir:path.join(output,'device'),signal:startup.signal,onStage:name=>at('device-'+name),prewarmDiagnostics:true});}
     finally{signal?.removeEventListener('abort',cancelStartup);}
     signal?.throwIfAborted();await device.installApp(appRoot);
-    at('app-prewarm');assert.deepEqual(await device.prewarmProofApp(),{appPrewarmed:true});
-    await device.assertWdaPrepared();
+    at('app-prewarm');let prewarmed;
+    try{prewarmed=await device.prewarmProofApp();}
+    catch(error){throw retainIosStartupFailure(error,createIosStartupFailure({stage:'proof-app-prewarm',error}));}
+    assert.deepEqual(prewarmed,{appPrewarmed:true});
+    try{await device.assertWdaPrepared();}
+    catch(error){throw retainIosStartupFailure(error,createIosStartupFailure({stage:'preauth-wda-revalidation',error}));}
     const driverOptions=iosProofDriverOptions(device);
     at('wda-readiness');
     let controlResult;
