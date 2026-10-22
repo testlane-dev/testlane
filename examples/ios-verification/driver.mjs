@@ -108,6 +108,41 @@ export function readIosStartupResponse(error) {
   try { const field = Object.getOwnPropertyDescriptor(error, 'startupResponse'); return field && Object.hasOwn(field, 'value') ? normalizeIosStartupResponse(field.value) : undefined; }
   catch { return undefined; }
 }
+// Only actual failed click requests can populate this private diagnostic store.
+const commandResponseErrors = new WeakMap();
+const COMMAND_W3C = [...STARTUP_W3C, 'no-such-element', 'stale-element-reference', 'element-not-interactable', 'invalid-element-state'];
+const COMMAND_PROXY_CATEGORIES = ['unmatched', 'downstream-proxy-signature', 'downstream-5000-timeout-signature'];
+/** Fixed response observations only; no remote outcome or cleanup authority. */
+export function normalizeIosCommandResponse(value) {
+  const names = ['httpStatus', 'responseState', 'w3cError', 'proxyCategory'];
+  if (!value || typeof value !== 'object' || types.isProxy(value)) return;
+  try {
+    if (Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertyNames(value).length !== names.length || Object.getOwnPropertySymbols(value).length) return;
+    const data = {};
+    for (const name of names) { const field = Object.getOwnPropertyDescriptor(value, name); if (!field || !Object.hasOwn(field, 'value')) return; data[name] = field.value; }
+    if (!Number.isSafeInteger(data.httpStatus) || !STARTUP_STATES.includes(data.responseState) || !COMMAND_W3C.includes(data.w3cError) || !COMMAND_PROXY_CATEGORIES.includes(data.proxyCategory)) return;
+    if (data.responseState === 'not-observed' ? data.httpStatus !== 0 : data.httpStatus < 100 || data.httpStatus > 599) return;
+    if (data.responseState !== 'json-decoded' && (data.w3cError !== 'unavailable' || data.proxyCategory !== 'unmatched')) return;
+    if (data.proxyCategory !== 'unmatched' && data.w3cError === 'unavailable') return;
+    return Object.freeze(data);
+  } catch { /* No getter, proxy or arbitrary value becomes response facts. */ }
+}
+function retainCommandResponse(error, value) {
+  const request = readIosRequestFailure(error), data = normalizeIosCommandResponse(value);
+  if (data && request?.operation === 'click' && ['http', 'response'].includes(request.phase) && !commandResponseErrors.has(error)) commandResponseErrors.set(error, data);
+  return error;
+}
+export function readIosCommandResponse(error) {
+  const request = readIosRequestFailure(error);
+  if (request?.operation !== 'click' || !['http', 'response'].includes(request.phase)) return;
+  return normalizeIosCommandResponse(commandResponseErrors.get(error));
+}
+function commandProxySignature(message) {
+  if (typeof message !== 'string' || message.length > 64 * 1024) return 'unmatched';
+  const prefix = 'Could not proxy command to the remote server. Original error: ';
+  if (message.includes(prefix + 'timeout of 5000ms exceeded')) return 'downstream-5000-timeout-signature';
+  return message.includes(prefix) ? 'downstream-proxy-signature' : 'unmatched';
+}
 function startupSignature(message) {
   // These exact public pinned-source signatures classify a match, not its cause.
   if (typeof message !== 'string' || message.length > 64 * 1024) return 'unmatched';
@@ -185,6 +220,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
     const requestDeadline = began + (sessionCreate ? 240_000 : semanticAction ? 15_000 : 10_000), deadline = Math.min(requestDeadline, outerDeadline ?? Infinity);
     let phaseDeadline = Math.min(began + 5000, deadline), timeout, timedOut = false, ownerStarted = false, ownerSettled = false;
     let ownerAllowed = false, httpStarted, effectiveHttpBudgetMs, budgetSource, fetchInvoked = false, responseHeadersObserved = false;
+    const commandResponse = operation === 'click' ? { httpStatus: 0, responseState: 'not-observed', w3cError: 'unavailable', proxyCategory: 'unmatched' } : undefined;
     const startupResponse = { httpStatus: 0, responseState: 'not-observed', w3cError: 'unavailable', startupCategory: 'unmatched' };
     const timer = new AbortController();
     const operationSignal = AbortSignal.any([timer.signal, ownershipFence.signal, remoteFence.signal, ...(requestSignal ? [requestSignal] : [])]);
@@ -228,20 +264,33 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
           headers: { 'Content-Type': 'application/json' }, ...(encoded === undefined ? {} : { body: encoded }) });
       }, operationSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
       responseHeadersObserved = true;
+      if (commandResponse) { commandResponse.httpStatus = response.status; commandResponse.responseState = 'headers-observed'; }
       if (sessionCreate) { startupResponse.httpStatus = response.status; startupResponse.responseState = 'headers-observed'; }
       checkDeadline(); phase = 'response';
       const reader = response.body?.getReader(); if (!reader) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
       let length = 0; const chunks = [];
       for (;;) {
         checkDeadline();
-        const { value, done } = await withDriverSignal(() => { checkDeadline(); if (sessionCreate) startupResponse.responseState = 'body-reading'; return reader.read(); }, operationSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
+        const { value, done } = await withDriverSignal(() => { checkDeadline(); if (sessionCreate) startupResponse.responseState = 'body-reading'; if (commandResponse) commandResponse.responseState = 'body-reading'; return reader.read(); }, operationSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
         if (sessionCreate && done === true) startupResponse.responseState = 'body-ended';
+        if (commandResponse && done === true) commandResponse.responseState = 'body-ended';
         checkDeadline(); if (done) break;
         length += value.byteLength;
         if (length > 64 * 1024) { await withDriverSignal(() => reader.cancel(), operationSignal, () => fail('NATIVE_DRIVER_CANCELLED')); throw fail('NATIVE_DRIVER_RESPONSE_INVALID'); }
         chunks.push(Buffer.from(value));
       }
       let decoded; try { decoded = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw fail('NATIVE_DRIVER_RESPONSE_INVALID'); }
+      if (commandResponse) {
+        commandResponse.responseState = 'json-decoded';
+        if (decoded && typeof decoded === 'object' && Object.hasOwn(decoded, 'value')) {
+          const value = decoded.value;
+          commandResponse.w3cError = 'none';
+          if (value && typeof value === 'object' && Object.hasOwn(value, 'error')) {
+            commandResponse.w3cError = typeof value.error === 'string' ? new Map([['unknown error', 'unknown-error'], ['session not created', 'session-not-created'], ['invalid argument', 'invalid-argument'], ['timeout', 'timeout'], ['no such element', 'no-such-element'], ['stale element reference', 'stale-element-reference'], ['element not interactable', 'element-not-interactable'], ['invalid element state', 'invalid-element-state']]).get(value.error) ?? 'other' : 'other';
+          }
+          if ((!response.ok || (value && typeof value === 'object' && Object.hasOwn(value, 'error'))) && value && typeof value === 'object') commandResponse.proxyCategory = commandProxySignature(value.message);
+        }
+      }
       if (sessionCreate) {
         startupResponse.responseState = 'json-decoded';
         if (decoded && typeof decoded === 'object' && Object.hasOwn(decoded, 'value')) {
@@ -269,6 +318,7 @@ export async function createNativeDriver({ url, capabilities: supplied, deviceBi
           httpBodyElapsedMs: performance.now() - httpStarted, budgetSource, fetchInvoked, responseHeadersObserved }) : failure;
       const failed = failure => {
         const result = progress(failure);
+        if (commandResponse) retainCommandResponse(result, commandResponse);
         if (sessionCreate) retainStartupResponse(result, startupResponse);
         // A returned local promise or proxy error does not prove the native
         // mutation stopped. Never replay or race DELETE/another action with it.

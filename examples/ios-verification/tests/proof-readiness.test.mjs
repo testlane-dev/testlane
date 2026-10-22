@@ -75,6 +75,7 @@ async function fixture(mode, { failPostReadinessCheck = false, lateStartupFailur
     export class NativeDriverError extends Error{constructor(code){super('FIXTURE_NATIVE_FAILURE');this.code=code;}}
     export function readIosRequestFailure(){return undefined;}
     export function readIosRequestProgress(){return undefined;}
+    export function readIosCommandResponse(){return undefined;}
     export function readIosStartupResponse(){return undefined;}
     export function readIosSetupOwnership(){return undefined;}
     export async function createNativeDriver(options){state.events.push('installed-driver-create');

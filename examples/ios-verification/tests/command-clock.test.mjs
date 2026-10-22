@@ -18,7 +18,7 @@ const runSource=source.slice(source.indexOf(start),source.indexOf(end));
 const emptyOutput=fileURLToPath(new URL('./absent-command-clock-fixture',import.meta.url));
 const kind='owned-device-list',scope='proof-app-prewarm';
 function fixture(options={}){
- let clock=0,wall=0,stops=0,sleeps=0,wallReads=0,state;
+ let clock=options.originMs??0,wall=0,stops=0,sleeps=0,wallReads=0,state;
  const controller=new AbortController(),policy=createIosDiagnosticPolicy({prewarmDiagnostics:false}),lease=policy.beginPrewarm();
  const started=options.pendingStart?Promise.withResolvers():undefined;
  const context={Error,Object,JSON,Buffer,Math,Number,Promise,WeakMap,performance:{now:()=>clock},Date:{now(){wallReads++;return wall;}},
@@ -162,4 +162,27 @@ test('a never-settling start is still awaited without a false stop claim or new 
  const pending=f.invoke().finally(()=>{done=true;});await Promise.resolve();f.controller.abort();await Promise.resolve();
  assert.equal(done,false);assert.equal(f.stops(),0);f.started.resolve();const error=await rejection(pending);
  assert.equal(error.message,'IOS_CANCELLED');assert.equal(f.stops(),1);assert.equal(readIosPreauthCommandFailure(error),undefined);
+});
+
+test('fractional monotonic origins retain all three deadline snapshots without changing timeout or stop outcomes',async()=>{
+ const originMs=240000.0004;
+ assert.ok((originMs+30000)-originMs>30000,'the unbounded subtraction exceeds the canonical cap at this origin');
+ for(const row of [
+  {event:'settled-start-expired',options:{acquisitionMs:31000},stops:1},
+  {event:'timeout-before-stop',options:{},stops:1},
+  {event:'late-close',options:{closeAt:originMs+30001,tickMs:31},stops:0},
+ ]){
+  const f=fixture({originMs,...row.options}),error=await rejection(f.invoke()),observed=readIosPreauthCommandFailure(error);
+  assert.equal(error.message,'IOS_COMMAND_TIMEOUT');assert.equal(f.stops(),row.stops);assert.equal(f.wallReads(),0);assert.equal(f.context.commands.size,0);
+  assert.ok(observed,'the optional snapshot must remain available at a fractional nonzero origin');
+  assert.equal(observed.effectiveBudgetMs,30000);assert.equal(observed.elapsedMs,f.clock()-originMs);assert.ok(Object.isFrozen(observed));
+  assert.deepEqual(observed,fact({event:row.event,elapsedMs:f.clock()-originMs,...(row.event==='late-close'?{exited:true,closed:true,code:0}:{})}));
+  if(row.event==='settled-start-expired')assert.equal(f.sleeps(),0);
+ }
+});
+
+test('fractional-origin parent clipping still records the shorter allowance and joins its timeout stop',async()=>{
+ const originMs=240000.0004,f=fixture({originMs}),error=await rejection(f.invoke({deadlineAt:originMs+4500}));
+ assert.equal(error.message,'IOS_COMMAND_TIMEOUT');assert.equal(f.clock(),originMs+4500);assert.equal(f.stops(),1);assert.equal(f.context.commands.size,0);
+ assert.deepEqual(readIosPreauthCommandFailure(error),fact({elapsedMs:4500,effectiveBudgetMs:4500}));
 });

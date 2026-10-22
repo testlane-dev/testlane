@@ -424,7 +424,7 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
           !PREWARM_DIAGNOSTIC_KINDS.has(kind)) return;
       deadlineObservation = normalizeIosPreauthCommandFailure({ commandKind: kind, event,
         spawned: state.spawned, exited: state.exited, closed: state.closed, code: state.code,
-        elapsedMs: Math.max(0, performance.now() - began), effectiveBudgetMs: monotonicDeadline - began });
+        elapsedMs: Math.max(0, performance.now() - began), effectiveBudgetMs: Math.min(timeoutMs, monotonicDeadline - began) });
     };
     let diagnosticTask, commandObservation;
     if (prewarmDiagnostic?.canSample(kind) === true && iosStartupCommandObservation(observationScope, kind)) {
