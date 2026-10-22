@@ -4,11 +4,14 @@ Native Android and iOS testing is planned work. Testlane 0.7.0-beta.2 verifies w
 applications with Playwright; it has no native app runner, device manager or native
 session bootstrap. Changing a browser viewport does not verify a native app.
 
-The unreleased checkout now includes an [Android emulator experiment](../examples/android-verification/README.md)
-and its [synthetic React Native/Expo app](../examples/mobile-approval-app/README.md).
-It uses Appium/UiAutomator2, a separate native report contract and a test-only session
-bootstrap. Run its installed-package positive/fault/corrected proof before relying
-on it. This is separate from the published web CLI and the broader roadmap below.
+The unreleased checkout now includes an [Android emulator experiment](../examples/android-verification/README.md),
+an [iOS Simulator experiment](../examples/ios-verification/README.md), and their
+[synthetic React Native/Expo app](../examples/mobile-approval-app/README.md).
+They use Appium platform drivers, a separate native report contract and an
+app-specific test session bootstrap. Each target needs its own installed-package
+positive/fault/corrected proof. The hosted Mac has compiled the iOS Simulator app;
+the full native run and cleanup still need to pass. This work is separate from the
+published web CLI and the broader roadmap below.
 
 The intended workflow stays the same: describe a feature to an existing coding agent,
 review app-owned tests, run them against a dedicated test environment, and inspect
@@ -33,7 +36,14 @@ revision and detect changes during execution.
 | First target | Required environment | Acceptance status |
 | --- | --- | --- |
 | React Native/Expo on Android | A pinned test build, Android SDK, emulator and platform driver | Unreleased synthetic emulator proof; see its recipe and limits |
-| React Native/Expo on iOS | A pinned simulator build, macOS, Xcode, iOS Simulator and platform driver | Planned; must be validated independently of Android |
+| React Native/Expo on iOS | A pinned Simulator Release build without Apple signing credentials, macOS, Xcode, iOS Simulator and XCUITest | Unreleased implementation; hosted macOS proof and cleanup must pass independently of Android |
+
+The [latest Android regression evidence](verification/native-2026-10-19/android-hosted-scope-regression.public.json)
+binds the shared worker changes to an installed source package and the unchanged
+keyboard-accessory app. Its five passes → two expected injected failures → five passes
+included independent cleanup and credential scans. These are prewritten cases for
+one synthetic app; the record does not establish general mobile or agent-authoring
+support.
 
 The first proof must cover:
 
@@ -48,6 +58,82 @@ The first proof must cover:
 An emulator-only proof will be labeled as such. Physical devices, notifications,
 biometrics, camera permissions, offline synchronization, store purchases and mixed
 native/WebView flows each require additional tests and evidence.
+
+## iOS experiment boundary
+
+The hosted proof requires the workflow's exact Xcode 26.6 developer directory,
+matching local Node headers, npm-provided node-gyp, Python 3, Clang and Make.
+Its [tooling prerequisites](../examples/ios-verification/README.md#required-environment)
+include a targeted native-addon source build and read-only load probe before any
+app build or Simulator allocation. These checks do not establish acceptance.
+
+The iOS controller is restricted to an explicitly opted-in, ephemeral GitHub-hosted
+macOS job. It builds a Simulator Release app with embedded JavaScript without Apple
+signing credentials; a linker ad-hoc signature may remain, with no Developer
+identity or team. This is not an App Store or physical-device build. The controller
+creates one new nonce-named Simulator in the runner's existing standard device set
+so Xcode can find it, and uses pinned Appium 3.8.0, XCUITest 12.19.1 and
+WebDriverAgent 16.16.3. Device commands name that exact UUID; the controller checks
+the other devices' stable inventory before and after the run and refuses cleanup
+success if it changes. It never deletes or repairs another device or the device-set
+directory. Appium's home and derived data remain private, and process cleanup
+requires retained owned process identities. Headless Appium can terminate Simulator
+UI clients, which further limits this experiment to an ephemeral host. It does not
+require an Apple/Expo account or accept SDK licenses.
+
+Setup prebuilds the pinned WDA project for the exact owned Simulator into private
+DerivedData, with a separate 600-second monotonic compile bound. This bounded
+cold-compile experiment requires actual process close with exit zero and has no
+retry or automatic budget increase; it does not establish iOS acceptance.
+Retained stop and independent cleanup must settle and may add time before failure
+returns. It verifies and binds the
+generated runner/test artifacts and measured source inputs, then rechecks them
+before sessions and between phases. Session creation requires the prebuilt runner;
+uncertain compilation blocks authentication. Setup launches the unauthenticated
+proof app before WDA attaches, with one startup attempt and no forced relaunch.
+The 240-second session ceiling remains separate from compilation. Ordinary driver
+requests allow five seconds for a fresh ownership check within their aggregate
+ceiling. Fixed read-only routes may use the unused ten-second request and caller
+window for HTTP and the complete body, so that read phase may exceed five seconds.
+Gestures, keyboard-hide fallback and session deletion keep a five-second HTTP/body
+cap. Semantic click/clear/value requests retain a ten-second HTTP/body cap within
+their fifteen-second request aggregate. All phases remain clipped by the caller's
+monotonic deadline and cancellation signal. Appium's ordinary WDA transport limit
+remains five seconds. Visibility and read-only presence retain ten-second windows;
+presence includes its initial native-context check. Keyboard confirmation retains
+one five-second window. A pending ownership callback interrupted by timeout or
+cancellation permanently fences further driver guards, HTTP and session deletion,
+including after a late acknowledgement. One live ownership check after session creation belongs to the
+remaining startup budget, capped at 20 seconds; later checks retain their ordinary
+limits. Repeated inventory responses are validated in full without retaining their
+raw payloads in the bounded diagnostic log. The proof checks authenticated workflows after that setup;
+it does not establish cold app-start performance. Native command acceptance now charges
+acknowledged spawn time to the original monotonic command allowance and refuses
+late closure or cancellation as success. A never-settling spawn acknowledgement
+remains awaited; this is not a bound on all process startup. Existing command caps,
+owned stop/diagnostic joins and explicit cancellation-ignoring cleanup remain.
+An optional fixed prewarm failure snapshot records the original state before
+stop; it establishes no native cause, termination or acceptance.
+
+Before generating credentials, the installed driver must create a session, verify
+the native context and delete that exact session. The proof then uses the same
+owned Simulator for all three business phases. Its intermediate readiness record
+establishes session cleanup; final teardown separately establishes device cleanup.
+The standalone WDA diagnostic remains available for credential-free troubleshooting.
+
+Generated sandbox credentials pass through the real installed CLI and an explicitly
+selected temporary macOS keychain. A private file in the owned app container delivers
+the resulting session; the app deletes it before parsing, and the controller checks
+absence. Keychain entries, owned native processes, Simulator state and backend
+records each have separate cleanup checks. Unconfirmed cleanup prevents success.
+
+The required result is five passes, exactly two expected assertion failures after
+the injected total defect, then five passes after correction, with unchanged build
+and test inputs and zero owned records after every phase. This is an acceptance
+criterion until a real hosted run records it. It does not establish independent
+agent-authored case quality, arbitrary existing-app integration or physical-device
+support. See the [iOS recipe](../examples/ios-verification/README.md) for prerequisites,
+commands, credential boundaries and retained evidence.
 
 ## Runner evaluation
 

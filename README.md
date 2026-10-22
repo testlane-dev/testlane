@@ -41,9 +41,11 @@ approvals and persistent business data. The aim is a complete workflow: tests th
 team owns, exact browser and API assertions, and verified removal of test records.
 The next milestone adds a reproducible approval example, useful failure diagnostics
 and an installed-package acceptance gate. The unreleased checkout also has an
-[experimental Android emulator proof](examples/android-verification/README.md) for a
-synthetic React Native/Expo app. General native support and iOS remain planned; the
-current published release runs web tests with Playwright.
+[experimental Android emulator proof](examples/android-verification/README.md) and
+an [iOS Simulator experiment](examples/ios-verification/README.md) for a synthetic
+React Native/Expo app. The iOS experiment requires a separate hosted macOS build
+and installed-package proof before acceptance. General native support remains
+planned; the current published release runs web tests with Playwright.
 
 See the [prioritized roadmap](docs/roadmap.md) and
 [native mobile proposal](docs/mobile-testing.md) for scope and release criteria.

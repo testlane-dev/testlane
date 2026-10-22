@@ -131,6 +131,15 @@ tests/              vitest; no network; strategies run against local fake server
 docs/               reference documentation; the README lists every page
 ```
 
+## Public examples and consuming projects
+
+Examples and test fixtures must use independently authored synthetic applications
+and generated data. Private consumer code, architecture, schemas, internal routes,
+configuration and secrets must stay in the consumer repository, including private
+adapters and product-specific tests. Reference a consumer only through an approved
+project name or high-level workflow. Review logs, screenshots and evidence for
+private information before publishing.
+
 ## Rules for tests
 
 1. **Tests never touch a real vault.** `vitest.config.ts` points `TESTLANE_HOME` (and the legacy

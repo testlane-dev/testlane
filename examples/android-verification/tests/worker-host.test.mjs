@@ -6,22 +6,30 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { runNativeWorker, validNativeWorkerRequest } from '../worker-host.mjs';
-import { NATIVE_RUNNER, sanitizeNativeReport } from '../contracts.mjs';
+import { NATIVE_RUNNER, IOS_NATIVE_RUNNER, sanitizeNativeReport } from '../contracts.mjs';
+import { IOS_DEVICE_SCOPE } from '../../ios-verification/device-scope.mjs';
 
 const plan = () => ({ schemaVersion: 1, runner: NATIVE_RUNNER, status: 'reviewed', title: 'Disposable native workflow',
   target: { baseUrl: 'http://127.0.0.1:4555', environment: 'testing' }, app: { package: 'dev.testlane.androidproof', apkSha256: 'a'.repeat(64) },
   cases: [{ id: 'owned-request', title: 'Exact total', expected: ['Save the exact total'], cleanup: { required: true, description: 'Delete the owned record' } }] });
 const fixture = fileURLToPath(new URL('./fixtures/worker-protocol.mjs', import.meta.url));
 async function withWorker(mode, callback) {
-  const original = childProcess.spawn; const children = [];
+  const original = childProcess.spawn; const children = [], starts = [];
   childProcess.spawn = function (command, args, options) {
     const isWorker = args?.length === 1 && args[0].endsWith('android-verification' + (process.platform === 'win32' ? '\\' : '/') + 'worker.mjs');
     const child = original(command, isWorker ? [fixture, mode] : args, options);
-    if (isWorker) children.push(child);
+    if (isWorker) {
+      children.push(child);
+      const send = child.send;
+      child.send = function (message, ...args) {
+        if (message?.type === 'start') starts.push(structuredClone(message.payload));
+        return send.call(child, message, ...args);
+      };
+    }
     return child;
   };
   syncBuiltinESMExports();
-  try { return await callback(children); }
+  try { return await callback(children, starts); }
   finally { childProcess.spawn = original; syncBuiltinESMExports(); }
 }
 const input = () => {
@@ -54,6 +62,28 @@ test('pre-cancelled workers do not spawn and normal fixed results require a clea
     const result = await runNativeWorker(value);
     assert.equal(result.report.verdict, 'passed'); assert.equal(result.captured, ''); assert.equal(children.length, 1);
     assert.equal(children[0].exitCode, 0); assert.deepEqual(sanitizeNativeReport(result.report, value.plan), result.report); noSecrets(result.report, value);
+  });
+});
+
+test('worker host snapshots bound device and credentials before the caller can mutate the pending IPC payload', async () => {
+  await withWorker('pass', async (_children, starts) => {
+    const value = input(); value.plan.runner = IOS_NATIVE_RUNNER;
+    value.plan.app = { bundleId: 'dev.testlane.iosproof', buildSha256: 'a'.repeat(64) };
+    value.driverOptions.deviceBinding = { schemaVersion: 1, scope: IOS_DEVICE_SCOPE, nativeHome: '/Users/runner',
+      deviceSetPath: '/Users/runner/Library/Developer/CoreSimulator/Devices', privateRoot: '/private/tmp/tld-ios-abc123',
+      udid: '12345678-1234-1234-1234-123456789ABC', nonce: 'a'.repeat(24) };
+    value.driverOptions.capabilities = { 'appium:udid': value.driverOptions.deviceBinding.udid,
+      'appium:simulatorDevicesSetPath': value.driverOptions.deviceBinding.deviceSetPath,
+      'appium:derivedDataPath': '/private/tmp/tld-ios-abc123/derived-data' };
+    const original = structuredClone({ driverOptions: value.driverOptions, cookies: value.cookies, identities: value.identities });
+    const pending = runNativeWorker(value);
+    value.driverOptions.deviceBinding.udid = '87654321-1234-1234-1234-123456789ABC';
+    value.driverOptions.capabilities['appium:udid'] = value.driverOptions.deviceBinding.udid;
+    value.cookies.editor = 'mutated'; value.identities.editor.email = 'mutated@example.test';
+    const result = await pending;
+    assert.equal(result.report.verdict, 'passed'); assert.equal(starts.length, 1);
+    assert.deepEqual(starts[0].driverOptions, original.driverOptions);
+    assert.deepEqual(starts[0].cookies, original.cookies); assert.deepEqual(starts[0].identities, original.identities);
   });
 });
 

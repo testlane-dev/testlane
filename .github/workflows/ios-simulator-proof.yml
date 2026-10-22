@@ -1,0 +1,115 @@
+name: iOS simulator proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/ios-simulator-proof.yml
+      - scripts/ios-*.mjs
+      - scripts/native-proof-support.mjs
+      - package.json
+      - examples/ios-verification/**
+      - examples/mobile-approval-app/**
+      - examples/android-verification/**
+      - examples/verification-demo/native.mjs
+      - examples/workflows/test-support/real-broker.mjs
+      - examples/playwright/tests/consumer.mjs
+  pull_request:
+    paths:
+      - .github/workflows/ios-simulator-proof.yml
+      - scripts/ios-*.mjs
+      - scripts/native-proof-support.mjs
+      - examples/ios-verification/**
+      - examples/mobile-approval-app/**
+      - examples/android-verification/**
+      - examples/verification-demo/native.mjs
+      - examples/workflows/test-support/real-broker.mjs
+      - examples/playwright/tests/consumer.mjs
+      - package.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-proof-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  simulator:
+    name: owned iOS simulator proof
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      TESTLANE_IOS_PROOF_CI: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          architecture: arm64
+      - name: Require the fixed hosted Apple Silicon target
+        run: |
+          node --input-type=module <<'NODE'
+          if (process.platform !== 'darwin' || process.arch !== 'arm64' ||
+              process.env.RUNNER_ARCH !== 'ARM64' ||
+              process.env.RUNNER_ENVIRONMENT !== 'github-hosted' ||
+              process.env.GITHUB_ACTIONS !== 'true') {
+            console.error('IOS_HOSTED_ARM64_TARGET_REQUIRED');
+            process.exit(1);
+          }
+          console.log('IOS_HOSTED_ARM64_TARGET_CONFIRMED');
+          NODE
+      - name: Inspect Xcode and the exact available simulator runtime
+        run: node scripts/ios-preflight.mjs output/ios-preflight.json
+      - run: npm ci
+      - run: npm run build
+      - name: Verify the shared native contracts and owned toolchain helpers
+        run: npm run test:mobile
+      - name: Prepare a canonical private build and tooling parent
+        shell: bash
+        run: |
+          umask 077
+          proof_root="$(cd "$RUNNER_TEMP" && pwd -P)/testlane-ios"
+          mkdir "$proof_root"
+          echo "IOS_PROOF_ROOT=$proof_root" >> "$GITHUB_ENV"
+      - name: Install the pinned optional Appium and XCUITest tools
+        run: npm --prefix examples/ios-verification/tools run setup -- --output-dir "$IOS_PROOF_ROOT/tools"
+      - name: Build the Release simulator app without Apple signing credentials
+        id: build
+        run: npm run build:ios-proof -- --output-dir "$IOS_PROOF_ROOT/build"
+      - name: Verify readiness and the installed package on one owned simulator
+        id: proof
+        run: npm run proof:ios -- --app "$IOS_PROOF_ROOT/build/TestlaneIOSProof.app" --tools-root "$IOS_PROOF_ROOT/tools" --output-dir "$GITHUB_WORKSPACE/output/ios-proof" --preauth-controls
+      - name: Retain only sanitized public proof evidence
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-simulator-proof
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            output/ios-preflight.json
+            output/ios-proof/readiness.json
+            output/ios-proof/preauth-controls.json
+            output/ios-proof/plan.json
+            output/ios-proof/positive.json
+            output/ios-proof/fault.json
+            output/ios-proof/corrected.json
+            output/ios-proof/receipt.json
+            ${{ env.IOS_PROOF_ROOT }}/build/build-manifest.json
+      - name: Retain fixed failure codes and independently sanitized native reports
+        if: failure() && steps.proof.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-proof-failure-summary
+          if-no-files-found: ignore
+          retention-days: 3
+          path: |
+            output/ios-proof/public-failure.json
+            output/ios-proof/startup-command-observation.json
+            output/ios-proof/preauth-controls.json
+            output/ios-proof/readiness.json

@@ -6,12 +6,16 @@ import { access, copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeF
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { androidDeviceDirectories, createAndroidControlEnvironment, createAndroidDeviceEnvironment, requireAndroidProofHost } from './environment.mjs';
+import { confirmRetainedGroupAbsent, requireRetainedProcessGroupHost, retainDetachedChild, stopRetainedGroup } from './process-group.mjs';
+import { readAndroidOwnershipFailure, retainAndroidOwnershipFailure } from './ownership-facts.mjs';
 
 const PREFIX = 'tld-android-';
 const MARKER = 'testlane-owned-device.json';
 const CAPTURE_LIMIT = 8 * 1024 * 1024;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const fail = code => new Error(code);
+const ownershipRefusal = (gate, checks) => retainAndroidOwnershipFailure(fail('ANDROID_OWNERSHIP_REFUSED'), { gate, ...(checks ? { checks } : {}) });
 const inside = (root, file) => { const rel = path.relative(root, file); return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel); };
 const same = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 const safePath = value => typeof value === 'string' && path.isAbsolute(value) && !/[\r\n\0]/.test(value);
@@ -72,21 +76,26 @@ async function consolePort() {
 }
 
 function launch(executable, args, { cwd, env, capture }) {
+  const controlEnvironment = process.platform === 'win32' ? createAndroidControlEnvironment(env) : undefined;
   const child = spawn(executable, args, { cwd, env, windowsHide: true, shell: false,
     detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
-  const state = { child, pid: null, spawned: false, exited: false, closed: false, code: null, startError: false };
-  state.started = new Promise(resolve => {
-    child.once('spawn', () => { state.spawned = true; state.pid = child.pid; resolve(true); });
-    child.once('error', () => { state.startError = true; resolve(false); });
-  });
-  child.once('exit', code => { state.exited = true; state.code = code; });
-  state.done = new Promise(resolve => child.once('close', code => { state.closed = true; state.code = code; resolve(); }));
+  let state;
+  if (process.platform === 'win32') {
+    state = { child, controlEnvironment, pid: null, spawned: false, exited: false, closed: false, code: null, startError: false };
+    state.started = new Promise(resolve => {
+      child.once('spawn', () => { state.spawned = true; state.pid = child.pid; resolve(true); });
+      child.once('error', () => { state.startError = true; resolve(false); });
+    });
+    child.once('exit', code => { state.exited = true; state.code = code; });
+    state.done = new Promise(resolve => child.once('close', code => { state.closed = true; state.code = code; resolve(); }));
+  } else state = retainDetachedChild(child);
   child.stdin.on('error', () => {});
   for (const stream of ['stdout', 'stderr']) child[stream].on('data', chunk => capture(chunk.toString('utf8')));
   return state;
 }
 
 async function stopProcess(state, graceMs = 1500) {
+  if (process.platform !== 'win32') return state ? stopRetainedGroup(state, { graceMs }) : true;
   if (!state || state.closed || !state.spawned) return true;
   if (process.platform === 'win32') {
     // Killing a Windows parent first can orphan QEMU. Terminate its owned tree
@@ -95,21 +104,18 @@ async function stopProcess(state, graceMs = 1500) {
       state.child.stdin?.destroy(); state.child.stdout?.destroy(); state.child.stderr?.destroy(); state.child.unref();
       throw fail('ANDROID_PROCESS_TERMINATION_UNCONFIRMED');
     }
-    const system = process.env.SystemRoot ?? process.env.windir;
-    if (!safePath(system)) throw fail('ANDROID_PROCESS_TERMINATION_UNCONFIRMED');
+    let controlEnvironment;
+    try { controlEnvironment = createAndroidControlEnvironment(state.controlEnvironment); }
+    catch { throw fail('ANDROID_PROCESS_TERMINATION_UNCONFIRMED'); }
+    const system = controlEnvironment.SystemRoot;
     const killer = spawn(path.join(system, 'System32', 'taskkill.exe'), ['/PID', String(state.pid), '/T', '/F'], {
-      windowsHide: true, shell: false, stdio: 'ignore',
+      windowsHide: true, shell: false, stdio: 'ignore', env: controlEnvironment,
     });
     await new Promise(resolve => {
       const timer = setTimeout(() => { killer.kill(); resolve(); }, 5000);
       const done = () => { clearTimeout(timer); resolve(); };
       killer.once('error', done); killer.once('close', done);
     });
-  } else {
-    state.child.kill('SIGTERM');
-    await Promise.race([state.done, sleep(graceMs)]);
-    if (state.closed) return true;
-    try { process.kill(-state.pid, 'SIGKILL'); } catch { state.child.kill('SIGKILL'); }
   }
   await Promise.race([state.done, sleep(5000)]);
   if (!state.closed) {
@@ -121,11 +127,8 @@ async function stopProcess(state, graceMs = 1500) {
 
 /** Internal lifecycle seam: test the real retained tree without starting an AVD. */
 export async function stopOwnedAndroidProcesses({ commands = [], appium, emulator, adbServer, gracefulEmulatorShutdown }, { platform = process.platform } = {}) {
-  // On Windows an emulator-console shutdown can let its parent exit before
-  // taskkill /T observes the tree, leaving QEMU or inherited pipes unconfirmed.
-  if (platform !== 'win32' && gracefulEmulatorShutdown) {
-    try { await gracefulEmulatorShutdown(); } catch {}
-  }
+  // Keep each retained leader alive for tree/group ownership checks. A console
+  // shutdown could lose that identity before either platform's stopper runs.
   const failures = [];
   const pending = typeof commands === 'function' ? commands() : commands;
   for (const [kind, state] of [...pending.map(state => ['command', state]), ['appium', appium], ['emulator', emulator], ['adb', adbServer]]) {
@@ -142,7 +145,11 @@ export async function stopOwnedAndroidProcesses({ commands = [], appium, emulato
 export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemImagePath, outputDir, signal, onStage = () => {} }) {
   if ([sdkRoot, javaHome, toolsRoot, systemImagePath, outputDir].some(value => !safePath(value))) throw fail('ANDROID_DEVICE_INPUT_INVALID');
   if (signal?.aborted) throw fail('ANDROID_CANCELLED');
+  requireAndroidProofHost();
+  if (process.platform !== 'win32') requireRetainedProcessGroupHost();
   const sdk = await realpath(sdkRoot), java = await realpath(javaHome), tools = await realpath(toolsRoot), image = await realpath(systemImagePath);
+  const nodeExecutable = await realpath(process.execPath);
+  if (process.platform === 'win32') createAndroidControlEnvironment();
   if (!inside(path.join(sdk, 'system-images'), image)) throw fail('ANDROID_SYSTEM_IMAGE_REFUSED');
   const properties = Object.fromEntries((await readFile(path.join(image, 'source.properties'), 'utf8')).split(/\r?\n/).filter(line => /^[A-Za-z]/.test(line) && line.includes('=')).map(line => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
   if (properties['SystemImage.Abi'] !== 'x86_64' || properties['SystemImage.TagId'] !== 'google_apis' || !/^\d{2}$/.test(properties['AndroidVersion.ApiLevel'] ?? '')) throw fail('ANDROID_SYSTEM_IMAGE_UNSUPPORTED');
@@ -179,7 +186,7 @@ export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemIm
   const androidHome = path.join(root, 'android'), avdHome = path.join(androidHome, 'avd'), avd = path.join(avdHome, avdName + '.avd'), appiumHome = path.join(root, 'appium');
   const serial = 'emulator-' + ports.consolePort, markerPath = path.join(root, MARKER);
   const marker = { schemaVersion: 1, nonce, ownerPid: process.pid, avdName, serial, adbPort: ports.adbPort, emulatorPid: null, adbPid: null, appiumPid: null };
-  let captured = '', captureBytes = 0, captureFailed = false, closing, ready = false, closed = false, ownershipChecks;
+  let captured = '', captureBytes = 0, captureFailed = false, processUncertain = false, closing, ready = false, closed = false, ownershipChecks;
   let emulator, adbServer, appium;
   const commands = new Set();
   const capture = value => {
@@ -187,18 +194,11 @@ export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemIm
     if (captureBytes + size > CAPTURE_LIMIT) { captureFailed = true; return; }
     captured += value; captureBytes += size;
   };
-  const env = { ...process.env, ANDROID_HOME: sdk, ANDROID_SDK_ROOT: sdk, JAVA_HOME: java,
-    ANDROID_USER_HOME: androidHome, ANDROID_EMULATOR_HOME: androidHome, ANDROID_AVD_HOME: avdHome,
-    ADB_VENDOR_KEYS: path.join(androidHome, 'adbkey'), ADB_SERVER_SOCKET: 'tcp:127.0.0.1:' + ports.adbPort,
-    ANDROID_ADB_SERVER_PORT: String(ports.adbPort), ADB_MDNS_AUTO_CONNECT: '0', ADB_USB: '0', ADB_EMU: '0', APPIUM_HOME: appiumHome,
-    PATH: [path.join(java, 'bin'), path.join(sdk, 'platform-tools'), path.join(sdk, 'emulator'), process.env.PATH ?? process.env.Path ?? ''].join(path.delimiter),
-    DEBUG: '', NODE_DEBUG: '', ANDROID_VERBOSE: '', APPIUM_SKIP_EXTENSIONS_INSTALL: '1',
-  };
-  delete env.NODE_OPTIONS; delete env.ANDROID_SERIAL; delete env.ANDROID_LOG_TAGS;
-  delete env.ANDROID_ADB_SERVER_ADDRESS; delete env.ANDROID_PRODUCT_OUT;
+  let env;
   const writeMarker = () => writeFile(markerPath, JSON.stringify(marker) + '\n', { mode: 0o600 });
   const ensureLive = (allowClosing = false) => {
     if (closed || (closing && !allowClosing) || signal?.aborted) throw fail('ANDROID_CANCELLED');
+    if (processUncertain) throw fail('ANDROID_PROCESS_TERMINATION_UNCONFIRMED');
     if (captureFailed) throw fail('ANDROID_CAPTURE_LIMIT');
     if (!adbServer?.spawned || adbServer.closed) throw fail('ANDROID_ADB_SERVER_STOPPED');
     if (!emulator?.spawned || emulator.closed) throw fail('ANDROID_EMULATOR_STOPPED');
@@ -208,34 +208,47 @@ export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemIm
   const raw = async (executable, args, options) => {
     const localSignal = options?.signal === null ? undefined : options?.signal ?? signal;
     if (localSignal?.aborted) throw fail('ANDROID_CANCELLED');
+    if (processUncertain) throw fail('ANDROID_PROCESS_TERMINATION_UNCONFIRMED');
     let stdout = '', stderr = '';
     const before = commands;
     const collect = launch(executable, args, { cwd: root, env, capture }); before.add(collect);
     collect.child.stdout.on('data', bytes => { stdout += bytes.toString('utf8'); });
     collect.child.stderr.on('data', bytes => { stderr += bytes.toString('utf8'); });
-    if (!await collect.started) { before.delete(collect); throw fail('ANDROID_COMMAND_START_FAILED'); }
+    if (!await collect.started) { if (process.platform === 'win32') before.delete(collect); throw fail('ANDROID_COMMAND_START_FAILED'); }
     collect.child.stdin.end(options?.input === undefined ? undefined : options.input);
     const timeoutMs = options?.timeoutMs ?? 30_000;
     const deadline = Date.now() + timeoutMs;
     let cancelled = localSignal?.aborted === true;
     const abort = () => { cancelled = true; }; localSignal?.addEventListener('abort', abort, { once: true });
+    let retired = false;
     try {
       while (!collect.closed && !cancelled && Date.now() < deadline && !captureFailed) await sleep(30);
-      if (!collect.closed) { await stopProcess(collect, 0); throw fail(cancelled ? 'ANDROID_CANCELLED' : captureFailed ? 'ANDROID_CAPTURE_LIMIT' : 'ANDROID_COMMAND_TIMEOUT'); }
+      if (!collect.closed) {
+        try { await stopProcess(collect, 0); }
+        catch { processUncertain = true; throw fail('ANDROID_PROCESS_TERMINATION_UNCONFIRMED'); }
+        throw fail(cancelled ? 'ANDROID_CANCELLED' : captureFailed ? 'ANDROID_CAPTURE_LIMIT' : 'ANDROID_COMMAND_TIMEOUT');
+      }
+      if (process.platform !== 'win32') {
+        try { confirmRetainedGroupAbsent(collect); }
+        catch { processUncertain = true; throw fail('ANDROID_PROCESS_TERMINATION_UNCONFIRMED'); }
+      }
+      retired = true;
       if (captureFailed) throw fail('ANDROID_CAPTURE_LIMIT');
       return { code: collect.code, stdout, stderr };
-    } finally { localSignal?.removeEventListener('abort', abort); if (collect.closed) before.delete(collect); }
+    } finally { localSignal?.removeEventListener('abort', abort); if (collect.closed && (process.platform === 'win32' || retired)) before.delete(collect); }
   };
   const rawAdb = (args, options) => raw(adbPath, ['-H', '127.0.0.1', '-P', String(ports.adbPort), '-s', serial, ...args], options);
   async function assertRoot() {
     const current = await realpath(root);
-    if (!same(current, root) || path.dirname(current) !== parent || !/^tld-android-[a-zA-Z0-9]+$/.test(path.basename(root)) || (await lstat(root)).isSymbolicLink()) throw fail('ANDROID_OWNERSHIP_REFUSED');
+    if (!same(current, root) || path.dirname(current) !== parent || !/^tld-android-[a-zA-Z0-9]+$/.test(path.basename(root)) || (await lstat(root)).isSymbolicLink()) throw ownershipRefusal('root-path');
     const actual = JSON.parse(await readFile(markerPath, 'utf8'));
     if (actual.schemaVersion !== 1 || actual.nonce !== nonce || actual.ownerPid !== process.pid || actual.avdName !== avdName || actual.serial !== serial ||
-        actual.adbPort !== marker.adbPort || actual.adbPid !== marker.adbPid || actual.emulatorPid !== marker.emulatorPid || actual.appiumPid !== marker.appiumPid) throw fail('ANDROID_OWNERSHIP_REFUSED');
+        actual.adbPort !== marker.adbPort || actual.adbPid !== marker.adbPid || actual.emulatorPid !== marker.emulatorPid || actual.appiumPid !== marker.appiumPid) throw ownershipRefusal('marker');
     return actual;
   }
   async function assertOwned(allowClosing = false) {
+    // Every invocation starts empty; a later early refusal cannot reuse success.
+    ownershipChecks = undefined;
     ensureLive(allowClosing); const actual = await assertRoot();
     ensureLive(allowClosing);
     const [state, qemu, name] = await Promise.all([
@@ -245,13 +258,18 @@ export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemIm
     // The system image exposes the random AVD name through this boot property.
     // It binds the guest to the same 96-bit nonce as our new marker and retained
     // process handles; arbitrary custom qemu properties are filtered by Android.
-    ownershipChecks = { stateDevice: state.stdout.trim() === 'device', allQueriesSucceeded: [state, qemu, name].every(result => result.code === 0),
+    const checks = Object.freeze({ stateDevice: state.stdout.trim() === 'device', allQueriesSucceeded: [state, qemu, name].every(result => result.code === 0),
       qemuMatches: qemu.stdout.trim() === '1', avdNamePresent: Boolean(name.stdout.trim()), avdNameMatches: name.stdout.trim() === avdName,
       avdNameNonceMatches: name.stdout.trim() === 'testlane_' + nonce,
-      markerPidMatches: actual.emulatorPid === marker.emulatorPid, markerNonceMatches: actual.nonce === nonce };
-    if ([state, qemu, name].some(result => result.code !== 0) || state.stdout.trim() !== 'device') throw fail('ANDROID_OWNERSHIP_REFUSED');
-    verifyOwnedIdentity({ expected: marker, marker: actual, alive: !emulator.closed && !adbServer.closed,
-      qemu: qemu.stdout.trim(), avdName: name.stdout.trim() });
+      markerPidMatches: actual.emulatorPid === marker.emulatorPid, markerNonceMatches: actual.nonce === nonce,
+      retainedProcessesAlive: !emulator.closed && !adbServer.closed });
+    ownershipChecks = checks;
+    if ([state, qemu, name].some(result => result.code !== 0)) throw ownershipRefusal('adb-query-status', checks);
+    if (state.stdout.trim() !== 'device') throw ownershipRefusal('adb-device-state', checks);
+    try {
+      verifyOwnedIdentity({ expected: marker, marker: actual, alive: checks.retainedProcessesAlive,
+        qemu: qemu.stdout.trim(), avdName: name.stdout.trim() });
+    } catch (error) { throw retainAndroidOwnershipFailure(error, { gate: 'guest-identity', checks }); }
     ensureLive(allowClosing);
     return true;
   }
@@ -284,7 +302,9 @@ export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemIm
   const abortLifecycle = () => { void close().catch(() => {}); };
   try {
     await writeMarker();
-    await Promise.all([mkdir(avd, { recursive: true, mode: 0o700 }), mkdir(appiumHome, { recursive: true, mode: 0o700 })]);
+    const directories = androidDeviceDirectories(root);
+    await Promise.all([avd, appiumHome, ...Object.values(directories)].map(dir => mkdir(dir, { recursive: true, mode: 0o700 })));
+    env = createAndroidDeviceEnvironment({ root, sdkRoot: sdk, javaHome: java, nodeExecutable, adbPort: ports.adbPort });
     await writeFile(path.join(avd, 'config.ini'), ownedAvdConfiguration({ avdName, image, apiLevel: properties['AndroidVersion.ApiLevel'] }), { flag: 'wx', mode: 0o600 });
     await writeFile(path.join(avdHome, avdName + '.ini'), ['avd.ini.encoding=UTF-8', 'path=' + avd.replaceAll('\\', '/'), 'target=android-' + properties['AndroidVersion.ApiLevel'], ''].join('\n'), { flag: 'wx', mode: 0o600 });
     const generated = await raw(adbPath, ['keygen', env.ADB_VENDOR_KEYS]);
@@ -304,6 +324,7 @@ export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemIm
     if (signal?.aborted) throw fail('ANDROID_CANCELLED');
     emulator = launch(emulatorPath, ['-avd', avdName, '-port', String(ports.consolePort), '-sysdir', image,
       '-datadir', avd, '-no-window', '-no-audio', '-no-snapshot', '-no-boot-anim', '-gpu', 'swiftshader_indirect',
+      ...(process.platform === 'linux' ? ['-accel', 'on'] : []),
       '-camera-front', 'none', '-camera-back', 'none', '-memory', '2048', '-cores', '2'], { cwd: root, env, capture });
     if (!await emulator.started) throw fail('ANDROID_EMULATOR_START_FAILED');
     emulator.child.stdin.end(); marker.emulatorPid = emulator.pid; await writeMarker();
@@ -366,9 +387,11 @@ export async function startOwnedAndroid({ sdkRoot, javaHome, toolsRoot, systemIm
       close,
     });
   } catch (error) {
+    const ownershipFailure = readAndroidOwnershipFailure(error);
     let code = /^ANDROID_[A-Z_]+$/.test(error.message) ? error.message : 'ANDROID_DEVICE_START_FAILED';
     try { await close(); } catch { code = 'ANDROID_DEVICE_CLEANUP_UNCONFIRMED'; }
     const result = fail(code);
+    retainAndroidOwnershipFailure(result, ownershipFailure);
     // Private in-memory diagnostics only. Error serialization keeps the fixed code;
     // a controller can inspect/scan this buffer without publishing raw tool logs.
     Object.defineProperty(result, 'capturedText', { value: () => captured });

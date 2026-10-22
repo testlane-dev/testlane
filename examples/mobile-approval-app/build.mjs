@@ -8,11 +8,14 @@ import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFil
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createAndroidBuildFailure } from './build-diagnostics.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_FILES = ['package.json', 'package-lock.json', 'app.config.cjs', 'index.js', 'App.js', 'bootstrap.mjs', 'plugins/withProofBuild.cjs'];
 const TEMPLATE = 'expo-template-bare-minimum@58.0.25';
 const BUILD_TOOLS = '37.0.0', PLATFORM = 'android-37.0', NDK = '27.1.12297006', CMAKE = '3.22.1';
+// App selection and AGP 9.2.1's default for Android library modules are distinct.
+const LIBRARY_BUILD_TOOLS = '36.0.0';
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 async function requireFiles(root, files, code) {
   try {
@@ -29,9 +32,11 @@ async function prerequisites(sdkRoot, javaHome) {
   const aapt = path.join('build-tools', BUILD_TOOLS, executable('aapt2'));
   await requireFiles(sdk, [
     path.join('platforms', PLATFORM, 'android.jar'), path.join('platforms', PLATFORM, 'source.properties'),
-    path.join('build-tools', BUILD_TOOLS, 'source.properties'), aapt,
-    path.join('build-tools', BUILD_TOOLS, executable('zipalign')),
-    path.join('build-tools', BUILD_TOOLS, 'lib/d8.jar'), path.join('build-tools', BUILD_TOOLS, 'lib/apksigner.jar'),
+    ...[LIBRARY_BUILD_TOOLS, BUILD_TOOLS].flatMap(revision => [
+      path.join('build-tools', revision, 'source.properties'), path.join('build-tools', revision, executable('aapt2')),
+      path.join('build-tools', revision, executable('zipalign')),
+      path.join('build-tools', revision, 'lib/d8.jar'), path.join('build-tools', revision, 'lib/apksigner.jar'),
+    ]),
     path.join('ndk', NDK, 'source.properties'), path.join('ndk', NDK, 'build/cmake/android.toolchain.cmake'),
     path.join('ndk', NDK, 'toolchains/llvm/prebuilt', host, 'bin', executable('clang')),
     path.join('cmake', CMAKE, 'source.properties'), path.join('cmake', CMAKE, 'bin', executable('cmake')),
@@ -76,9 +81,9 @@ async function run(entry, args, { cwd, env, timeoutMs, logFile, signal }) {
   checkCancelled(signal);
   return new Promise((resolve, reject) => {
     let child, output = '', done = false, stopping = false, closed = false;
-    const finish = (error, code) => {
+    const finish = (error, code, childSignal = null) => {
       if (done) return; done = true; clearTimeout(timer); signal?.removeEventListener('abort', cancel);
-      void writeFile(logFile, output, { flag: 'wx', mode: 0o600 }).then(() => error ? reject(error) : resolve({ code, output }), () => reject(Error('ANDROID_BUILD_LOG_FAILED')));
+      void writeFile(logFile, output, { flag: 'wx', mode: 0o600 }).then(() => error ? reject(error) : resolve({ code, signal: childSignal, output }), () => reject(Error('ANDROID_BUILD_LOG_FAILED')));
     };
     const stop = async code => {
       if (stopping || done) return; stopping = true; clearTimeout(timer);
@@ -98,7 +103,7 @@ async function run(entry, args, { cwd, env, timeoutMs, logFile, signal }) {
         else output += bytes.toString('utf8');
       });
       child.once('error', () => { if (!stopping) finish(Error('ANDROID_BUILD_CHILD_START_FAILED')); });
-      child.once('close', code => { closed = true; if (!stopping) finish(null, code); });
+      child.once('close', (code, childSignal) => { closed = true; if (!stopping) finish(null, code, childSignal); });
       signal?.addEventListener('abort', cancel, { once: true }); if (signal?.aborted) cancel();
     } catch { finish(Error('ANDROID_BUILD_CHILD_START_FAILED')); }
   });
@@ -148,7 +153,11 @@ export async function buildAndroidProof({ outputDir, sdkRoot = process.env.ANDRO
         process.stdout.write('ANDROID_BUILD_STAGE ' + stage + '\n');
         const result = await run(entry, args, { cwd, env, timeoutMs, logFile: path.join(output, stage + '.log'), signal });
         checkCancelled(signal);
-        if (result.code !== 0) throw Error('ANDROID_BUILD_STAGE_FAILED');
+        if (result.code !== 0) {
+          const error = Error('ANDROID_BUILD_STAGE_FAILED');
+          error.buildDiagnostic = createAndroidBuildFailure({ stage, code: error.message, output: result.output, exitCode: result.code, signal: result.signal });
+          throw error;
+        }
         return result.output;
       } catch (error) { error.stage = stage; throw error; }
     };
@@ -184,6 +193,10 @@ export async function buildAndroidProof({ outputDir, sdkRoot = process.env.ANDRO
     await rm(scratch, { recursive: true });
     return { status: 'built', outputDirectory: output, apkFile: path.join(output, 'testlane-android-proof.apk'), apkSHA256: digest(apkBytes), versions };
   } catch (error) {
+    // Only the fixed projection is eligible for public retention. The bounded
+    // compiler/npm logs remain private and never supply copied message fields.
+    const diagnostic = error.buildDiagnostic ?? createAndroidBuildFailure({ stage: error.stage, code: error.message });
+    try { await writeFile(path.join(output, 'build-failure.json'), JSON.stringify(diagnostic) + '\n', { flag: 'wx', mode: 0o600 }); } catch {}
     await writeFile(path.join(output, 'recovery.json'), JSON.stringify({ status: 'build-incomplete', buildRoot: scratch ?? null, stage: error.stage ?? null,
       cancelled: signal?.aborted === true, childTermination: error.terminationConfirmed === true ? 'confirmed' : error.terminationConfirmed === false ? 'unconfirmed' : 'not-requested',
       ...(error.terminationConfirmed === false ? { ownedChildPid: error.childPid ?? null } : {}) }) + '\n', { flag: 'wx', mode: 0o600 });

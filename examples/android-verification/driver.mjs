@@ -1,5 +1,6 @@
 /** Thin W3C native client. Never requests screenshots, source, logs or shell execution. */
 import { loopbackOrigin } from './contracts.mjs';
+import { combineDriverSignals, withDriverSignal, waitDriverSignal } from './driver-phase.mjs';
 
 const ELEMENT = 'element-6066-11e4-a52e-4f735466cecf';
 export class NativeDriverError extends Error {
@@ -22,26 +23,27 @@ export async function createNativeDriver({ url, capabilities, signal, assertOwne
       (assertOwned !== undefined && typeof assertOwned !== 'function')) throw new Error();
   } catch { throw fail('NATIVE_DRIVER_CONFIGURATION_INVALID'); }
   let session, closed = false;
-  async function verifyOwner() {
+  async function verifyOwner(activeSignal) {
     if (!assertOwned) return;
     let timer;
     try {
-      const allowed = await Promise.race([Promise.resolve().then(assertOwned),
-        new Promise((_, reject) => { timer = setTimeout(() => reject(fail('NATIVE_DRIVER_OWNERSHIP_REFUSED')), 5000); })]);
+      const allowed = await withDriverSignal(() => Promise.race([Promise.resolve().then(assertOwned),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(fail('NATIVE_DRIVER_OWNERSHIP_REFUSED')), 5000); })]), activeSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
       if (allowed === false) throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED');
-    } catch { throw fail('NATIVE_DRIVER_OWNERSHIP_REFUSED'); }
+    } catch { throw fail(activeSignal?.aborted ? 'NATIVE_DRIVER_CANCELLED' : 'NATIVE_DRIVER_OWNERSHIP_REFUSED'); }
     finally { clearTimeout(timer); }
   }
   async function request(method, route, body, requestSignal = signal, timeoutMs = 5000) {
     if (requestSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
     const timer = new AbortController();
     const timeout = setTimeout(() => timer.abort(), timeoutMs);
+    const operationSignal = requestSignal ? AbortSignal.any([requestSignal, timer.signal]) : timer.signal;
     try {
-      await verifyOwner();
+      await verifyOwner(operationSignal);
       if (requestSignal?.aborted) throw fail('NATIVE_DRIVER_CANCELLED');
       if (timer.signal.aborted) throw fail('NATIVE_DRIVER_TIMEOUT');
       const response = await fetch(origin + route, { method,
-        signal: requestSignal ? AbortSignal.any([requestSignal, timer.signal]) : timer.signal,
+        signal: operationSignal,
         headers: { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), redirect: 'error' });
       const reader = response.body?.getReader();
       let length = 0; const chunks = [];
@@ -81,9 +83,9 @@ export async function createNativeDriver({ url, capabilities, signal, assertOwne
   if (!created || typeof created.sessionId !== 'string' || !/^[A-Za-z0-9-]{1,160}$/.test(created.sessionId)) throw fail('NATIVE_DRIVER_SESSION_INVALID');
   session = created.sessionId;
   const route = suffix => '/session/' + encodeURIComponent(session) + suffix;
-  async function nativeContext() {
+  async function nativeContext(activeSignal = signal) {
     try {
-      if ((await request('GET', route('/context'))).value !== 'NATIVE_APP') throw fail('NATIVE_DRIVER_CONTEXT_REFUSED');
+      if ((await request('GET', route('/context'), undefined, activeSignal)).value !== 'NATIVE_APP') throw fail('NATIVE_DRIVER_CONTEXT_REFUSED');
     } catch (error) {
       if (error instanceof NativeDriverError && error.code === 'NATIVE_DRIVER_TIMEOUT') throw fail('NATIVE_DRIVER_CONTEXT_TIMEOUT');
       throw error;
@@ -99,67 +101,66 @@ export async function createNativeDriver({ url, capabilities, signal, assertOwne
     if (!response.missing && typeof element === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(element)) return element;
     throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
   }
-  async function scrollIntoView(accessibilityId) {
+  async function scrollIntoView(accessibilityId, activeSignal = signal) {
     if (closed || !identifier(accessibilityId)) throw fail('NATIVE_DRIVER_ELEMENT_INVALID');
-    await nativeContext();
+    await nativeContext(activeSignal);
     // This is a fixed native selector, not an arbitrary UiAutomator program.
     // The only interpolated value is a JSON-escaped string literal.
     const value = 'new UiScrollable(new UiSelector().scrollable(true)).setMaxSearchSwipes(8).scrollIntoView(new UiSelector().description(' + JSON.stringify(accessibilityId) + '))';
-    const response = await request('POST', route('/element'), { using: '-android uiautomator', value });
+    const response = await request('POST', route('/element'), { using: '-android uiautomator', value }, activeSignal);
     if (response.missing) throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT');
     const element = elementId(response);
-    if ((await request('GET', route('/element/' + encodeURIComponent(element) + '/displayed'))).value !== true) throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT');
+    if ((await request('GET', route('/element/' + encodeURIComponent(element) + '/displayed'), undefined, activeSignal)).value !== true) throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT');
     return element;
   }
-  async function find(accessibilityId, visible = false) {
+  async function find(accessibilityId, visible = false, activeSignal = signal) {
     if (closed || !identifier(accessibilityId)) throw fail('NATIVE_DRIVER_ELEMENT_INVALID');
-    await nativeContext();
+    await nativeContext(activeSignal);
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
-      const response = await request('POST', route('/element'), { using: 'accessibility id', value: accessibilityId }, signal, Math.max(1, Math.min(5000, deadline - Date.now())));
+      const response = await request('POST', route('/element'), { using: 'accessibility id', value: accessibilityId }, activeSignal, Math.max(1, Math.min(5000, deadline - Date.now())));
       if (!response.missing) {
         const element = elementId(response);
         if (!visible) return element;
-        const displayed = (await request('GET', route('/element/' + encodeURIComponent(element) + '/displayed'))).value;
+        const displayed = (await request('GET', route('/element/' + encodeURIComponent(element) + '/displayed'), undefined, activeSignal)).value;
         if (displayed === true) return element;
         if (displayed !== false) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
-        return scrollIntoView(accessibilityId);
+        return scrollIntoView(accessibilityId, activeSignal);
       }
-      if (visible) return scrollIntoView(accessibilityId);
-      await new Promise(resolve => setTimeout(resolve, Math.min(200, Math.max(0, deadline - Date.now()))));
+      if (visible) return scrollIntoView(accessibilityId, activeSignal);
+      await waitDriverSignal(Math.min(200, Math.max(0, deadline - Date.now())), activeSignal, () => fail('NATIVE_DRIVER_CANCELLED'));
     }
     throw fail('NATIVE_DRIVER_ELEMENT_TIMEOUT');
   }
-  return Object.freeze({
-    context: 'NATIVE_APP',
-    async waitFor(id) {
-      try { await find(id); }
+  const actions = {
+    async waitFor(id, activeSignal = signal) {
+      try { await find(id, false, activeSignal); }
       catch (error) {
         if (error instanceof NativeDriverError && ['NATIVE_DRIVER_TIMEOUT', 'NATIVE_DRIVER_ELEMENT_TIMEOUT'].includes(error.code)) throw fail('NATIVE_DRIVER_READINESS_TIMEOUT');
         throw error;
       }
     },
-    async click(id) { const element = await find(id, true); await request('POST', route('/element/' + encodeURIComponent(element) + '/click'), {}); },
-    async scrollIntoView(id) { await scrollIntoView(id); },
-    async text(id) {
-      const element = await find(id, true), base = '/element/' + encodeURIComponent(element);
-      let value = (await request('GET', route(base + '/text'))).value;
-      if (value === null || value === '') value = (await request('GET', route(base + '/attribute/text'))).value;
+    async click(id, activeSignal = signal) { const element = await find(id, true, activeSignal); await request('POST', route('/element/' + encodeURIComponent(element) + '/click'), {}, activeSignal); },
+    async scrollIntoView(id, activeSignal = signal) { await scrollIntoView(id, activeSignal); },
+    async text(id, activeSignal = signal) {
+      const element = await find(id, true, activeSignal), base = '/element/' + encodeURIComponent(element);
+      let value = (await request('GET', route(base + '/text'), undefined, activeSignal)).value;
+      if (value === null || value === '') value = (await request('GET', route(base + '/attribute/text'), undefined, activeSignal)).value;
       if (typeof value !== 'string' || value.length > 8192) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
       return value; // Trusted case code may compare this; the runner never retains it.
     },
-    async type(id, value) {
+    async type(id, value, activeSignal = signal) {
       if (typeof value !== 'string' || value.length > 4096) throw fail('NATIVE_DRIVER_INPUT_INVALID');
-      const element = await find(id, true), base = '/element/' + encodeURIComponent(element);
-      await request('POST', route(base + '/clear'), {});
-      await request('POST', route(base + '/value'), { text: value });
+      const element = await find(id, true, activeSignal), base = '/element/' + encodeURIComponent(element);
+      await request('POST', route(base + '/clear'), {}, activeSignal);
+      await request('POST', route(base + '/value'), { text: value }, activeSignal);
     },
-    async hideKeyboard() {
+    async hideKeyboard(activeSignal = signal) {
       if (closed) throw fail('NATIVE_DRIVER_SESSION_INVALID');
-      await nativeContext();
-      const shown = (await request('GET', route('/appium/device/is_keyboard_shown'))).value;
+      await nativeContext(activeSignal);
+      const shown = (await request('GET', route('/appium/device/is_keyboard_shown'), undefined, activeSignal)).value;
       if (shown !== true && shown !== false) throw fail('NATIVE_DRIVER_RESPONSE_INVALID');
-      if (shown) await request('POST', route('/appium/device/hide_keyboard'), {});
+      if (shown) await request('POST', route('/appium/device/hide_keyboard'), {}, activeSignal);
     },
     async close() {
       if (closed) return;
@@ -167,5 +168,14 @@ export async function createNativeDriver({ url, capabilities, signal, assertOwne
       await request('DELETE', route(''), undefined, null, 5000);
       closed = true;
     },
+  };
+  const scoped = activeSignal => Object.freeze({
+    context: 'NATIVE_APP',
+    withSignal(phaseSignal) { try { return scoped(combineDriverSignals(activeSignal, phaseSignal)); } catch { throw fail('NATIVE_DRIVER_INPUT_INVALID'); } },
+    waitFor: id => actions.waitFor(id, activeSignal), click: id => actions.click(id, activeSignal),
+    scrollIntoView: id => actions.scrollIntoView(id, activeSignal), text: id => actions.text(id, activeSignal),
+    type: (id, value) => actions.type(id, value, activeSignal), hideKeyboard: () => actions.hideKeyboard(activeSignal),
+    close: actions.close,
   });
+  return scoped(signal);
 }

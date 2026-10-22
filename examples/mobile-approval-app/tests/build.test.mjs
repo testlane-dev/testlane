@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,8 +35,8 @@ async function completeTools(f) {
   const host = { win32: 'windows-x86_64', linux: 'linux-x86_64', darwin: 'darwin-x86_64' }[process.platform];
   for (const file of [
     'platforms/android-37.0/android.jar', 'platforms/android-37.0/source.properties',
-    'build-tools/37.0.0/source.properties', 'build-tools/37.0.0/aapt2' + executable,
-    'build-tools/37.0.0/zipalign' + executable, 'build-tools/37.0.0/lib/d8.jar', 'build-tools/37.0.0/lib/apksigner.jar',
+    ...['36.0.0', '37.0.0'].flatMap(revision => ['build-tools/' + revision + '/source.properties', 'build-tools/' + revision + '/aapt2' + executable,
+      'build-tools/' + revision + '/zipalign' + executable, 'build-tools/' + revision + '/lib/d8.jar', 'build-tools/' + revision + '/lib/apksigner.jar']),
     'ndk/27.1.12297006/source.properties', 'ndk/27.1.12297006/build/cmake/android.toolchain.cmake',
     'ndk/27.1.12297006/toolchains/llvm/prebuilt/' + host + '/bin/clang' + executable,
     'cmake/3.22.1/source.properties', 'cmake/3.22.1/bin/cmake' + executable, 'cmake/3.22.1/bin/ninja' + executable,
@@ -50,9 +51,8 @@ test('an absent SDK refuses before creating output or a temporary build root', a
 
 test('a newer aapt2 cannot substitute for the pinned build-tools prerequisite', async t => {
   const f = await fixture(t), executable = process.platform === 'win32' ? '.exe' : '';
-  await f.file(f.sdk, 'platforms/android-37.0/android.jar');
-  await f.file(f.sdk, 'platforms/android-37.0/source.properties');
-  await f.file(f.sdk, 'build-tools/37.0.0/source.properties');
+  await completeTools(f);
+  await rm(path.join(f.sdk, 'build-tools/37.0.0/aapt2' + executable));
   await f.file(f.sdk, 'build-tools/99.0.0/aapt2' + executable);
   await f.refusesBeforeAllocation();
 });
@@ -61,6 +61,13 @@ test('missing pinned CMake refuses before dependency installation or temporary a
   const f = await fixture(t), executable = process.platform === 'win32' ? '.exe' : '';
   await completeTools(f);
   await rm(path.join(f.sdk, 'cmake/3.22.1/bin/cmake' + executable));
+  await f.refusesBeforeAllocation();
+});
+
+test('AGP library-default Build Tools 36.0.0 is required independently of the app selection 37.0.0', async t => {
+  const f = await fixture(t), executable = process.platform === 'win32' ? '.exe' : '';
+  await completeTools(f);
+  await rm(path.join(f.sdk, 'build-tools/36.0.0/aapt2' + executable));
   await f.refusesBeforeAllocation();
 });
 
@@ -77,6 +84,25 @@ test('an absolute npm_execpath outside the Node directory is used without a shel
   const recovery = JSON.parse(await readFile(path.join(f.outputDir, 'recovery.json'), 'utf8'));
   assert.equal(path.dirname(recovery.buildRoot), await realpath(f.temporary));
   assert.equal((await lstat(recovery.buildRoot)).isDirectory(), true);
+  const diagnostic = JSON.parse(await readFile(path.join(f.outputDir, 'build-failure.json'), 'utf8'));
+  assert.equal(diagnostic.stage, 'npm-ci'); assert.equal(diagnostic.exitCode, 73); assert.equal(diagnostic.signal, null);
+  assert.deepEqual(diagnostic.categories, ['BUILD_UNCLASSIFIED']);
+});
+
+test('failed child output survives only as a fixed diagnostic alongside private recovery', async t => {
+  const f = await fixture(t); await completeTools(f);
+  const previous = process.env.npm_execpath;
+  t.after(() => { if (previous === undefined) delete process.env.npm_execpath; else process.env.npm_execpath = previous; });
+  const secret = randomBytes(32).toString('base64url'), relative = 'separate-node-distribution/npm-cli.js';
+  await f.file(f.root, relative, 'process.stderr.write(' + JSON.stringify('No space left on device\n' + secret + '\n' + Buffer.from(secret).toString('base64')) + ');process.exit(19);\n');
+  process.env.npm_execpath = path.join(f.root, relative);
+  await assert.rejects(buildAndroidProof({ outputDir: f.outputDir, sdkRoot: f.sdk, javaHome: f.jdk }), error =>
+    error.message === 'ANDROID_BUILD_STAGE_FAILED' && error.stage === 'npm-ci');
+  const json = await readFile(path.join(f.outputDir, 'build-failure.json'), 'utf8'), diagnostic = JSON.parse(json);
+  assert.deepEqual(diagnostic.categories, ['BUILD_DISK_CAPACITY']); assert.equal(diagnostic.exitCode, 19);
+  for (const value of [secret, encodeURIComponent(secret), Buffer.from(secret).toString('base64')]) assert.equal(json.includes(value), false);
+  assert.equal((await readFile(path.join(f.outputDir, 'npm-ci.log'), 'utf8')).includes(secret), true, 'raw child output remains in the private build log only');
+  assert.equal((await lstat(path.join(f.outputDir, 'recovery.json'))).isFile(), true);
 });
 
 test('a pre-aborted build refuses before allocating output or a temporary root', async t => {

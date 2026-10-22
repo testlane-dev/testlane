@@ -1,9 +1,9 @@
 // Deliberately malformed/failed workers for the fixed-entry host's lifecycle tests.
 // Tests redirect spawn internally; callers cannot select a public worker entry.
-import { NATIVE_RUNNER, NATIVE_LIMITS, nativeFailureReport, nativeDiagnostic } from '../../contracts.mjs';
+import { nativeLimits, nativeFailureReport, nativeDiagnostic } from '../../contracts.mjs';
 const mode = process.argv[2];
 let payload;
-const passed = plan => ({ schemaVersion: 1, runner: NATIVE_RUNNER, verdict: 'passed', reasonCodes: [], diagnostics: [], limits: [...NATIVE_LIMITS],
+const passed = plan => ({ schemaVersion: 1, runner: plan.runner, verdict: 'passed', reasonCodes: [], diagnostics: [], limits: [...nativeLimits(plan)],
   cases: plan.cases.map(item => ({ id: item.id, status: 'passed', reason: 'NATIVE_CASE_PASSED', attempts: 1,
     bodyAssertionsObserved: 1, cleanupAssertionsObserved: item.cleanup.required ? 1 : 0, assertionsObserved: item.cleanup.required ? 2 : 1,
     cleanup: { required: item.cleanup.required, status: item.cleanup.required ? 'completed' : 'not-required' }, diagnostics: [] })) });

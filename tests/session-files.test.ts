@@ -69,10 +69,39 @@ describe("managed session files", () => {
   });
 
   it("removes expired files without a client cleanup call", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const files = service();
-    const receipt = await files.create(async () => source({ expiresAt: new Date(Date.now() + 300).toISOString() }));
-    await vi.waitFor(async () => expect(await fs.stat(receipt.path).catch(() => null)).toBeNull(), { timeout: 2_000 });
-    expect(await files.release(receipt.id)).toBe(false);
+    const releases = vi.spyOn(files, "release");
+    let removed!: () => void;
+    let finishUnlink!: () => void;
+    const absent = new Promise<void>(resolve => { removed = resolve; });
+    const unlinkGate = new Promise<void>(resolve => { finishUnlink = resolve; });
+    let expiring: Promise<boolean> | undefined;
+    vi.mocked(unlinkFile).mockImplementationOnce(async (...args) => {
+      await fs.unlink(...args);
+      removed();
+      // Filesystem absence can precede the unlink continuation that retires
+      // broker ownership. Force that window instead of relying on OS scheduling.
+      await unlinkGate;
+    });
+    try {
+      const receipt = await files.create(async () => source({ expiresAt: new Date(Date.now() + 300).toISOString() }));
+      await vi.advanceTimersByTimeAsync(300);
+      await absent;
+      expect(releases).toHaveBeenCalledExactlyOnceWith(receipt.id);
+      expiring = releases.mock.results[0]!.value as Promise<boolean>;
+      let settled = false;
+      void expiring.then(() => { settled = true; }, () => { settled = true; });
+      await expect(fs.stat(receipt.path)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(settled).toBe(false);
+      finishUnlink();
+      expect(await expiring).toBe(true);
+      expect(await files.release(receipt.id)).toBe(false);
+    } finally {
+      finishUnlink();
+      await expiring?.catch(() => {});
+      vi.useRealTimers();
+    }
   });
 
   it("refuses stale and oversized artifacts before creating a file", async () => {

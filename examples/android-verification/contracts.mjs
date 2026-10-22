@@ -1,12 +1,55 @@
-/** Experimental native Android contracts. Independent of Playwright reports. */
+/** Experimental native contracts. Independent of Playwright reports. */
+import { types } from 'node:util';
 export const NATIVE_RUNNER = 'android-uiautomator2';
+export const IOS_NATIVE_RUNNER = 'ios-xcuitest';
+export const NATIVE_WORKER_PROTOCOL_SUBTYPE_CODES = Object.freeze([
+  'NATIVE_WORKER_PROTOCOL_MESSAGE_SERIALIZATION',
+  'NATIVE_WORKER_PROTOCOL_MESSAGE_SIZE',
+  'NATIVE_WORKER_PROTOCOL_REQUEST_CONTRACT',
+  'NATIVE_WORKER_PROTOCOL_RESULT_CONTRACT',
+  'NATIVE_WORKER_PROTOCOL_RESULT_ACTIVE_RPC',
+  'NATIVE_WORKER_PROTOCOL_FINAL_SANITIZE',
+]);
 export const NATIVE_CASE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const NATIVE_DRIVER_FAILURE_CODES = Object.freeze([
   'NATIVE_DRIVER_CONFIGURATION_INVALID', 'NATIVE_DRIVER_OWNERSHIP_REFUSED', 'NATIVE_DRIVER_CONTEXT_REFUSED',
   'NATIVE_DRIVER_TIMEOUT', 'NATIVE_DRIVER_COMMAND_FAILED', 'NATIVE_DRIVER_SESSION_INVALID', 'NATIVE_DRIVER_RESPONSE_INVALID',
   'NATIVE_DRIVER_SESSION_TIMEOUT', 'NATIVE_DRIVER_CONTEXT_TIMEOUT', 'NATIVE_DRIVER_READINESS_TIMEOUT',
   'NATIVE_DRIVER_ELEMENT_INVALID', 'NATIVE_DRIVER_ELEMENT_TIMEOUT', 'NATIVE_DRIVER_INPUT_INVALID',
+  'NATIVE_DRIVER_REMOTE_UNSETTLED',
 ]);
+export const IOS_REQUEST_OPERATIONS = Object.freeze(['session-create', 'session-delete', 'native-context', 'element-find', 'element-displayed',
+  'element-rect', 'window-rect', 'scroll', 'click', 'clear', 'type', 'text-read', 'value-read', 'keyboard-state', 'keyboard-hide', 'unclassified']);
+export const IOS_REQUEST_PHASES = Object.freeze(['ownership', 'http', 'response']);
+function ownData(value, names) {
+  if (!value || typeof value !== 'object' || types.isProxy(value)) return;
+  try {
+    if (Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertyNames(value).length !== names.length || Object.getOwnPropertySymbols(value).length) return;
+    const result = {};
+    for (const name of names) { const descriptor = Object.getOwnPropertyDescriptor(value, name); if (!descriptor || !Object.hasOwn(descriptor, 'value')) return; result[name] = descriptor.value; }
+    return result;
+  } catch { /* Untrusted data never supplies text or executes accessors. */ }
+}
+/** Fixed request metadata only; this grants no execution or cleanup authority. */
+export function normalizeIosRequestFact(value) {
+  const data = ownData(value, ['operation', 'phase']);
+  if (!data || !IOS_REQUEST_OPERATIONS.includes(data.operation) || !IOS_REQUEST_PHASES.includes(data.phase)) return;
+  return Object.freeze({ operation: data.operation, phase: data.phase });
+}
+const unsafeRequestCodes = ['NATIVE_BODY_TIMEOUT', 'NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_TIMEOUT', 'NATIVE_CLEANUP_UNSETTLED', 'NATIVE_RUN_CANCELLED', 'NATIVE_DRIVER_REMOTE_UNSETTLED'];
+function caseRequestFact(value, row, report, runner) {
+  const data = ownData(value, ['stage', 'operation', 'phase']);
+  if (!data || !['body', 'cleanup'].includes(data.stage)) return;
+  const fact = normalizeIosRequestFact({ operation: data.operation, phase: data.phase });
+  if (!fact || runner !== IOS_NATIVE_RUNNER || row.status !== 'failed' || row.attempts !== 1 || report.verdict !== 'failed' ||
+      report.reasonCodes.some(code => unsafeRequestCodes.includes(code))) return;
+  const codes = row.diagnostics.map(item => item.code), marker = data.stage === 'body' ? 'NATIVE_BODY_FAILED' : 'NATIVE_CLEANUP_FAILED';
+  const index = codes.indexOf(marker);
+  if (codes.some(code => unsafeRequestCodes.includes(code)) || index < 0 || !NATIVE_DRIVER_FAILURE_CODES.includes(codes[index + 1]) ||
+      (data.stage === 'body' && (index !== 0 || row.reason !== marker)) ||
+      (data.stage === 'cleanup' && row.cleanup.status !== 'failed')) return;
+  return Object.freeze({ stage: data.stage, ...fact });
+}
 export const NATIVE_LIMITS = Object.freeze([
   'Experimental local Android execution; no general Expo, device or coding-agent certification is claimed.',
   'Plans, callbacks, app code and the supplied context are trusted executable code, not a security sandbox.',
@@ -15,6 +58,12 @@ export const NATIVE_LIMITS = Object.freeze([
   'Unsettled callbacks stop later cases and leave cleanup unknown. The process owner must enforce an outer worker budget, including code that blocks the event loop.',
   'Reports omit callback returns, expected/actual values, descriptions, exception messages, stacks, native view contents and driver payloads.',
 ]);
+const IOS_LIMITS = Object.freeze([
+  'Experimental iOS Simulator execution on an explicitly opted-in ephemeral GitHub-hosted Mac; no general Expo, real-device or coding-agent certification is claimed.',
+  'Device scope is ephemeral-hosted-standard-device-set: one nonce-bound Simulator is created and deleted by exact UUID, with unchanged foreign inventory required for cleanup completion.',
+  ...NATIVE_LIMITS.slice(1),
+]);
+export const nativeLimits = plan => plan?.runner === IOS_NATIVE_RUNNER ? IOS_LIMITS : NATIVE_LIMITS;
 export class NativeVerificationError extends Error {
   constructor(code) { super(code); this.name = 'NativeVerificationError'; this.code = code; }
 }
@@ -32,12 +81,13 @@ export function loopbackOrigin(value) {
 }
 export function validateNativePlan(value) {
   if (!keys(value, ['schemaVersion', 'runner', 'status', 'title', 'target', 'app', 'cases']) ||
-    value.schemaVersion !== 1 || value.runner !== NATIVE_RUNNER || !['draft', 'reviewed'].includes(value.status) || !text(value.title, 160) ||
+    value.schemaVersion !== 1 || ![NATIVE_RUNNER, IOS_NATIVE_RUNNER].includes(value.runner) || !['draft', 'reviewed'].includes(value.status) || !text(value.title, 160) ||
     !keys(value.target, ['baseUrl', 'environment']) || !['local', 'sandbox', 'testing', 'preview'].includes(value.target.environment) ||
-    !keys(value.app, ['package', 'apkSha256']) || typeof value.app.package !== 'string' || value.app.package.length > 160 ||
-    !/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/.test(value.app.package) ||
-    typeof value.app.apkSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.app.apkSha256) ||
     !Array.isArray(value.cases) || value.cases.length === 0 || value.cases.length > 50) throw new NativeVerificationError('NATIVE_PLAN_INVALID');
+  const ios = value.runner === IOS_NATIVE_RUNNER, appId = ios ? 'bundleId' : 'package', appHash = ios ? 'buildSha256' : 'apkSha256';
+  if (!keys(value.app, [appId, appHash]) || typeof value.app[appId] !== 'string' || value.app[appId].length > 160 ||
+    !(ios ? /^[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z][A-Za-z0-9-]*)+$/ : /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/).test(value.app[appId]) ||
+    typeof value.app[appHash] !== 'string' || !/^[a-f0-9]{64}$/.test(value.app[appHash])) throw new NativeVerificationError('NATIVE_PLAN_INVALID');
   const baseUrl = loopbackOrigin(value.target.baseUrl);
   const ids = new Set();
   for (const item of value.cases) {
@@ -60,6 +110,7 @@ const diagnoses = {
   NATIVE_CASE_NOT_RUN: ['execution', 'This planned native case did not run.', 'Resolve the earlier setup, cancellation or unsettled-callback diagnosis before a fresh run.'],
   NATIVE_ASSERTION_FAILED: ['body', 'A native body check failed, even if its exception was caught.', 'Inspect the authored business assertion against the bound case source; observed values are not retained.'],
   NATIVE_BODY_FAILED: ['body', 'The native case body failed.', 'Inspect native actions, API operations and the authored body. No exception text or native view content is retained.'],
+  NATIVE_UI_SETTLEMENT_TIMEOUT: ['body', 'The expected native UI value was not observed before polling ended.', 'Review the bound app state and authored expected value. UI text is omitted and actions are never replayed.'],
   NATIVE_NO_BODY_CHECKS: ['body', 'No native body check was observed.', 'Add concrete check(actual, expected) assertions for the planned business behavior.'],
   NATIVE_BODY_TIMEOUT: ['body', 'The native body exceeded its budget.', 'Review awaited native/API operations and inspect owned records before retrying.'],
   NATIVE_BODY_UNSETTLED: ['body', 'The aborted body did not settle; cleanup is unknown.', 'Stop the owned worker and inspect owned records. No cleanup callback or later case was started concurrently with this body.'],
@@ -78,6 +129,8 @@ const diagnoses = {
   NATIVE_DRIVER_CONTEXT_TIMEOUT: ['setup', 'The native context check exceeded its five-second request budget.', 'Inspect the owned Appium session privately. The runner must observe NATIVE_APP before accepting native actions.'],
   NATIVE_DRIVER_READINESS_TIMEOUT: ['setup', 'The initial native readiness element did not become available within its budget.', 'Inspect the bound app startup and accessibility ID privately. No business action or case is retried by this readiness check.'],
   NATIVE_DRIVER_COMMAND_FAILED: ['execution', 'The owned native driver command failed.', 'Inspect the private Appium/device command outcome; HTTP errors and transport errors are not copied into reports.'],
+  NATIVE_DRIVER_CANCELLED: ['execution', 'The native driver operation was cancelled.', 'Review the phase cancellation and owned cleanup outcome before a fresh run. No driver payload is retained.'],
+  NATIVE_DRIVER_REMOTE_UNSETTLED: ['execution', 'A dispatched native mutation has no confirmed successful terminal result.', 'Do not replay commands or delete its session. Stop the owned worker and Appium/device before inspecting owned recovery state.'],
   NATIVE_DRIVER_SESSION_INVALID: ['setup', 'The native driver did not obtain a valid owned session.', 'Check Appium session creation and the exact owned app/device capabilities privately.'],
   NATIVE_DRIVER_RESPONSE_INVALID: ['execution', 'The native driver response did not satisfy its bounded contract.', 'Inspect the private Appium response shape and size; arbitrary response values are not retained.'],
   NATIVE_DRIVER_ELEMENT_INVALID: ['execution', 'A native action used an invalid accessibility identifier or closed session.', 'Use the stable app-owned accessibility IDs and keep actions within the owned driver lifetime.'],
@@ -87,28 +140,45 @@ const diagnoses = {
   NATIVE_WORKER_FAILED: ['execution', 'The native worker failed before a complete result was accepted.', 'Inspect owned worker and device state; incomplete execution cannot verify cleanup.'],
   NATIVE_WORKER_TIMEOUT: ['execution', 'The outer native worker budget expired.', 'The owned worker was stopped. Inspect owned records and stop the owned device processes; cleanup remains unknown.'],
   NATIVE_WORKER_PROTOCOL_INVALID: ['execution', 'The native worker IPC contract was refused.', 'Preserve private recovery state and inspect the worker source/protocol. No offending payload is copied into this report.'],
+  NATIVE_WORKER_PROTOCOL_MESSAGE_SERIALIZATION: ['execution', 'The native worker IPC message could not be measured.', 'Preserve owned recovery state and inspect the fixed worker contract. No offending IPC data is included.'],
+  NATIVE_WORKER_PROTOCOL_MESSAGE_SIZE: ['execution', 'The native worker IPC message exceeded the fixed byte limit.', 'Preserve owned recovery state and inspect the fixed worker contract. No offending IPC data is included.'],
+  NATIVE_WORKER_PROTOCOL_REQUEST_CONTRACT: ['execution', 'The native worker IPC request contract was refused.', 'Preserve owned recovery state and inspect the fixed worker contract. No offending IPC data is included.'],
+  NATIVE_WORKER_PROTOCOL_RESULT_CONTRACT: ['execution', 'The native worker result contract was refused.', 'Preserve owned recovery state and inspect the fixed worker contract. No offending IPC data is included.'],
+  NATIVE_WORKER_PROTOCOL_RESULT_ACTIVE_RPC: ['execution', 'The native worker returned a result while a parent operation remained pending.', 'Preserve owned recovery state and inspect the fixed worker contract. No offending IPC data is included.'],
+  NATIVE_WORKER_PROTOCOL_FINAL_SANITIZE: ['execution', 'The final native worker report contract was refused.', 'Preserve owned recovery state and inspect the fixed worker contract. No offending IPC data is included.'],
   NATIVE_WORKER_OUTPUT_LIMIT: ['execution', 'The native worker exceeded its private output budget.', 'Inspect private diagnostics and owned state; no truncated output is evidence of a passing run.'],
   NATIVE_WORKER_TERMINATION_UNCONFIRMED: ['execution', 'Owned native worker termination could not be confirmed.', 'Stop the owned process tree and device processes manually before recovery or another run.'],
   NATIVE_WORKER_RPC_UNSETTLED: ['cleanup', 'A parent-owned native operation did not settle.', 'Do not start another run. Stop the owned device processes and inspect retained recovery state before continuing.'],
 };
-export function nativeDiagnostic(code) {
+const iosDiagnoses = {
+  NATIVE_PLAN_INVALID: ['setup', 'The native plan is invalid.', 'Review the iOS runner, exact bundle ID/build hash, loopback target and case contract.'],
+  NATIVE_DRIVER_FAILED: ['setup', 'The owned native driver could not complete setup or execution.', 'Inspect the owned Simulator and Appium lifecycle privately; no driver payload is retained.'],
+  NATIVE_DRIVER_CONFIGURATION_INVALID: ['setup', 'The native driver configuration was refused.', 'Review the loopback Appium origin, exact Simulator UDID/bundle, owned device-set/build paths and required privacy capabilities.'],
+  NATIVE_DRIVER_CONTEXT_REFUSED: ['setup', 'The driver did not observe the required NATIVE_APP context.', 'Use XCUITest for the owned Simulator app; WebViews and browser contexts are not accepted by this proof.'],
+  NATIVE_DRIVER_SESSION_TIMEOUT: ['setup', 'Native session creation did not finish within its active setup or request budget.', 'Inspect the owned cold WebDriverAgent build and Simulator startup privately before retrying. Business-case budgets remain separate.'],
+  NATIVE_DRIVER_CLEANUP_FAILED: ['cleanup', 'The owned native driver session did not close successfully.', 'Stop the owned Appium/Simulator processes and inspect cleanup before accepting the run.'],
+};
+export function nativeDiagnostic(code, runner = NATIVE_RUNNER) {
   if (!Object.hasOwn(diagnoses, code)) throw new NativeVerificationError('NATIVE_CONFIGURATION_INVALID');
-  const [phase, summary, remedy] = diagnoses[code];
+  const [phase, summary, remedy] = runner === IOS_NATIVE_RUNNER && Object.hasOwn(iosDiagnoses, code) ? iosDiagnoses[code] : diagnoses[code];
   return { code, phase, summary, remedy };
 }
 export function nativeFailureReport(inputPlan, code) {
   const plan = validateNativePlan(inputPlan);
-  return { schemaVersion: 1, runner: NATIVE_RUNNER, verdict: code === 'NATIVE_RUN_CANCELLED' ? 'cancelled' : 'blocked',
-    reasonCodes: [code], diagnostics: [nativeDiagnostic(code)], limits: [...NATIVE_LIMITS],
+  return { schemaVersion: 1, runner: plan.runner, verdict: code === 'NATIVE_RUN_CANCELLED' ? 'cancelled' : 'blocked',
+    reasonCodes: [code], diagnostics: [nativeDiagnostic(code, plan.runner)], limits: [...nativeLimits(plan)],
     cases: plan.cases.map(item => ({ id: item.id, status: 'blocked', reason: 'NATIVE_CASE_NOT_RUN', attempts: 0,
       assertionsObserved: 0, bodyAssertionsObserved: 0, cleanupAssertionsObserved: 0,
-      cleanup: { required: item.cleanup.required, status: 'unknown' }, diagnostics: [nativeDiagnostic('NATIVE_CASE_NOT_RUN')] })) };
+      cleanup: { required: item.cleanup.required, status: 'unknown' }, diagnostics: [nativeDiagnostic('NATIVE_CASE_NOT_RUN', plan.runner)] })) };
 }
 export function appendNativeRunFailure(input, code) {
   const report = structuredClone(input);
-  report.reasonCodes = [...new Set([...report.reasonCodes, code])]; report.diagnostics = report.reasonCodes.map(nativeDiagnostic);
+  report.reasonCodes = [...new Set([...report.reasonCodes, code])]; report.diagnostics = report.reasonCodes.map(value => nativeDiagnostic(value, report.runner));
   report.verdict = report.cases.some(row => row.status === 'cancelled') || report.reasonCodes.includes('NATIVE_RUN_CANCELLED') ? 'cancelled' :
     report.cases.some(row => row.status === 'failed') ? 'failed' : 'blocked';
+  if (report.verdict === 'cancelled' || report.reasonCodes.some(value => unsafeRequestCodes.includes(value))) {
+    for (const row of report.cases) delete row.requestFailure;
+  }
   return report;
 }
 
@@ -118,30 +188,36 @@ export function sanitizeNativeReport(value, inputPlan) {
   let plan;
   try { plan = validateNativePlan(inputPlan); } catch { return refuse(); }
   const validDiagnostic = item => {
+    if (item?.code === 'NATIVE_DRIVER_REMOTE_UNSETTLED' && plan.runner !== IOS_NATIVE_RUNNER) return false;
     if (!keys(item, ['code', 'phase', 'summary', 'remedy']) || Object.keys(item).length !== 4 ||
       typeof item.code !== 'string' || !Object.hasOwn(diagnoses, item.code)) return false;
-    const expected = nativeDiagnostic(item.code);
+    const expected = nativeDiagnostic(item.code, plan.runner);
     return ['phase', 'summary', 'remedy'].every(key => item[key] === expected[key]);
   };
   const count = (number, max = 1_000_000) => Number.isSafeInteger(number) && number >= 0 && number <= max;
   const statuses = ['passed', 'failed', 'blocked', 'cancelled'];
   if (!keys(value, ['schemaVersion', 'runner', 'verdict', 'reasonCodes', 'diagnostics', 'cases', 'limits']) ||
-    value.schemaVersion !== 1 || value.runner !== NATIVE_RUNNER || !statuses.includes(value.verdict) ||
+    value.schemaVersion !== 1 || value.runner !== plan.runner || !statuses.includes(value.verdict) ||
     !Array.isArray(value.reasonCodes) || value.reasonCodes.some(code => typeof code !== 'string' || !Object.hasOwn(diagnoses, code)) ||
     new Set(value.reasonCodes).size !== value.reasonCodes.length || !Array.isArray(value.diagnostics) ||
     value.diagnostics.length !== value.reasonCodes.length || value.diagnostics.some((item, index) => !validDiagnostic(item) || item.code !== value.reasonCodes[index]) ||
     !Array.isArray(value.cases) || value.cases.length !== plan.cases.length ||
-    JSON.stringify(value.limits) !== JSON.stringify(NATIVE_LIMITS)) return refuse();
+    JSON.stringify(value.limits) !== JSON.stringify(nativeLimits(plan))) return refuse();
+  const protocolSubtypes = value.reasonCodes.filter(code => NATIVE_WORKER_PROTOCOL_SUBTYPE_CODES.includes(code));
+  if (protocolSubtypes.length > 1 || (protocolSubtypes.length && value.reasonCodes[0] !== 'NATIVE_WORKER_PROTOCOL_INVALID')) return refuse();
   const rows = [];
   for (let index = 0; index < plan.cases.length; index++) {
     const row = value.cases[index], planned = plan.cases[index];
-    if (!keys(row, ['id', 'status', 'reason', 'attempts', 'assertionsObserved', 'bodyAssertionsObserved', 'cleanupAssertionsObserved', 'cleanup', 'diagnostics']) ||
+    if (!row || typeof row !== 'object' || types.isProxy(row)) return refuse();
+    const requestDescriptor = Object.getOwnPropertyDescriptor(row, 'requestFailure');
+    if (requestDescriptor && (!Object.hasOwn(requestDescriptor, 'value') || !requestDescriptor.enumerable)) return refuse();
+    if (!keys(row, ['id', 'status', 'reason', 'attempts', 'assertionsObserved', 'bodyAssertionsObserved', 'cleanupAssertionsObserved', 'cleanup', 'diagnostics', 'requestFailure']) ||
       row.id !== planned.id || !statuses.includes(row.status) || ![0, 1].includes(row.attempts) ||
       !count(row.bodyAssertionsObserved) || !count(row.cleanupAssertionsObserved) || !count(row.assertionsObserved, 2_000_000) ||
       row.assertionsObserved !== row.bodyAssertionsObserved + row.cleanupAssertionsObserved ||
       !keys(row.cleanup, ['required', 'status']) || Object.keys(row.cleanup).length !== 2 || row.cleanup.required !== planned.cleanup.required ||
       !['completed', 'failed', 'not-required', 'unknown'].includes(row.cleanup.status) ||
-      !Array.isArray(row.diagnostics) || row.diagnostics.some(item => !validDiagnostic(item)) ||
+      !Array.isArray(row.diagnostics) || row.diagnostics.some(item => !validDiagnostic(item) || NATIVE_WORKER_PROTOCOL_SUBTYPE_CODES.includes(item.code)) ||
       new Set(row.diagnostics.map(item => item.code)).size !== row.diagnostics.length ||
       (row.cleanup.status === 'completed' && row.cleanupAssertionsObserved < 1) ||
       (row.cleanup.status === 'not-required' && (row.cleanup.required || row.cleanupAssertionsObserved !== 0))) return refuse();
@@ -150,18 +226,21 @@ export function sanitizeNativeReport(value, inputPlan) {
         !['completed', 'not-required'].includes(row.cleanup.status)) return refuse();
     } else if (!row.diagnostics.length || row.reason !== row.diagnostics[0].code) return refuse();
     if (row.attempts === 0 && (row.assertionsObserved !== 0 || row.cleanup.status !== 'unknown')) return refuse();
-    if (row.diagnostics.some(item => ['NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_UNSETTLED'].includes(item.code)) &&
+    if (row.diagnostics.some(item => ['NATIVE_BODY_UNSETTLED', 'NATIVE_CLEANUP_UNSETTLED', 'NATIVE_DRIVER_REMOTE_UNSETTLED'].includes(item.code)) &&
       (row.status !== 'blocked' || row.cleanup.status !== 'unknown')) return refuse();
+    const requestFailure = requestDescriptor ? caseRequestFact(requestDescriptor.value, row, value, plan.runner) : undefined;
+    if (requestDescriptor && !requestFailure) return refuse();
     rows.push({ id: planned.id, status: row.status, reason: row.reason, attempts: row.attempts,
       assertionsObserved: row.assertionsObserved, bodyAssertionsObserved: row.bodyAssertionsObserved,
       cleanupAssertionsObserved: row.cleanupAssertionsObserved,
-      cleanup: { required: planned.cleanup.required, status: row.cleanup.status }, diagnostics: row.diagnostics.map(item => nativeDiagnostic(item.code)) });
+      cleanup: { required: planned.cleanup.required, status: row.cleanup.status }, diagnostics: row.diagnostics.map(item => nativeDiagnostic(item.code, plan.runner)),
+      ...(requestFailure ? { requestFailure } : {}) });
   }
   const expectedVerdict = rows.some(row => row.status === 'cancelled') || value.reasonCodes.includes('NATIVE_RUN_CANCELLED') ? 'cancelled' :
     rows.some(row => row.status === 'failed') ? 'failed' : rows.some(row => row.status !== 'passed') || value.reasonCodes.length ? 'blocked' : 'passed';
   if (value.verdict !== expectedVerdict || (value.verdict === 'passed' && plan.status !== 'reviewed')) return refuse();
-  return { schemaVersion: 1, runner: NATIVE_RUNNER, verdict: value.verdict, reasonCodes: [...value.reasonCodes],
-    diagnostics: value.reasonCodes.map(nativeDiagnostic), cases: rows, limits: [...NATIVE_LIMITS] };
+  return { schemaVersion: 1, runner: plan.runner, verdict: value.verdict, reasonCodes: [...value.reasonCodes],
+    diagnostics: value.reasonCodes.map(code => nativeDiagnostic(code, plan.runner)), cases: rows, limits: [...nativeLimits(plan)] };
 }
 
 const string = { type: 'string', minLength: 1 };
@@ -169,13 +248,11 @@ export const NATIVE_PLAN_SCHEMA = Object.freeze({
   $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', additionalProperties: false,
   required: ['schemaVersion', 'runner', 'status', 'title', 'target', 'app', 'cases'],
   properties: {
-    schemaVersion: { const: 1 }, runner: { const: NATIVE_RUNNER }, status: { enum: ['draft', 'reviewed'] }, title: { ...string, maxLength: 160 },
+    schemaVersion: { const: 1 }, runner: { enum: [NATIVE_RUNNER, IOS_NATIVE_RUNNER] }, status: { enum: ['draft', 'reviewed'] }, title: { ...string, maxLength: 160 },
     target: { type: 'object', additionalProperties: false, required: ['baseUrl', 'environment'], properties: {
       baseUrl: { ...string, format: 'uri' }, environment: { enum: ['local', 'sandbox', 'testing', 'preview'] },
     } },
-    app: { type: 'object', additionalProperties: false, required: ['package', 'apkSha256'], properties: {
-      package: { ...string, maxLength: 160, pattern: '^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$' }, apkSha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
-    } },
+    app: { type: 'object' },
     cases: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'object', additionalProperties: false,
       required: ['id', 'title', 'expected', 'cleanup'], properties: {
         id: { ...string, pattern: '^[a-z0-9][a-z0-9-]{0,63}$' }, title: { ...string, maxLength: 160 },
@@ -186,4 +263,12 @@ export const NATIVE_PLAN_SCHEMA = Object.freeze({
       },
     } },
   },
+  oneOf: [
+    { properties: { runner: { const: NATIVE_RUNNER }, app: { type: 'object', additionalProperties: false, required: ['package', 'apkSha256'], properties: {
+      package: { ...string, maxLength: 160, pattern: '^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$' }, apkSha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+    } } } },
+    { properties: { runner: { const: IOS_NATIVE_RUNNER }, app: { type: 'object', additionalProperties: false, required: ['bundleId', 'buildSha256'], properties: {
+      bundleId: { ...string, maxLength: 160, pattern: '^[A-Za-z][A-Za-z0-9-]*(?:\\.[A-Za-z][A-Za-z0-9-]*)+$' }, buildSha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+    } } } },
+  ],
 });

@@ -133,6 +133,19 @@ export const URL_ALLOWLIST = [
   "docs.maestro.dev/reference/commands-available/asserttrue.md",
   "docs.expo.dev/develop/development-builds/introduction",
   "docs.expo.dev/versions/v58.0.0/",
+  // Exact AGP compatibility table used by the Android proof SDK recipe.
+  "developer.android.com/build/releases/agp-9-2-0-release-notes",
+  // Exact primary references for selected-runtime cache preparation.
+  "developer.apple.com/forums/thread/807025",
+  "chromium.googlesource.com/chromium/src/ios/+/58fd493aeb99385b57fb7c5108837bc372b4d4b4%5E%21/",
+  // Exact Apple ATS reference used by the proof-only iOS build recipe.
+  "developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsexceptiondomains",
+  // Exact public upstream source and Android archives reviewed for native proofs.
+  "github.com/appium/appium-xcuitest-driver/blob/71ab559399ef0a88a337cfe781af9e1a8ba4205b/lib/commands/wda/startup.ts",
+  "dl.google.com/android/repository/emulator-linux_x64-13610412.zip",
+  "dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip",
+  "dl.google.com/android/repository/sys-img/google_apis/x86_64-34_r14.zip",
+  "www.freedesktop.org/standards/dbus/1.0/busconfig.dtd",
   "example.com",
   "example.net",
   "example.org",

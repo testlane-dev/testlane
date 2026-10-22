@@ -1,6 +1,7 @@
 /** App-owned native examples. These are prewritten cases, not agent-authorship evidence. */
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
+import {NativeVerificationError} from './contracts.mjs';
 
 export const APPROVAL_REQUIREMENTS = [
   {id:'editor-native-total',title:'Editor creates the exact total in the native app',expected:['Native creation saves three items at 1400 cents for exactly 4200 cents','Fresh backend state matches every saved field']},
@@ -10,15 +11,17 @@ export const APPROVAL_REQUIREMENTS = [
   {id:'anonymous-denied',title:'Anonymous native and API access is refused',expected:['The native app and an anonymous API client receive 401']},
 ];
 const endpoint = id => '/api/requests/'+encodeURIComponent(id);
+// Every phase gets an immutable view of the shared session. A body timeout must
+// cancel its remaining UI commands without poisoning the fresh cleanup signal.
+const phaseContext = ctx => ({...ctx,driver:ctx.driver.withSignal(ctx.signal)});
 async function wait(ctx,id,value) {
   const deadline=Date.now()+8000;
   while(Date.now()<deadline) {
     ctx.signal?.throwIfAborted();
-    try { if(await ctx.driver.text(id)===value)return; }
-    catch { ctx.signal?.throwIfAborted(); }
+    if(await ctx.driver.text(id)===value)return;
     await delay(Math.min(75,Math.max(1,deadline-Date.now())),undefined,{signal:ctx.signal});
   }
-  throw new Error('ANDROID_UI_SETTLEMENT_TIMEOUT');
+  throw new NativeVerificationError('NATIVE_UI_SETTLEMENT_TIMEOUT');
 }
 function expected(owned,editor,reviewer,{approved=false,totalCents=4200}={}) {
   return {id:owned.id,marker:owned.marker,ownerEmail:editor.email,quantity:3,unitPriceCents:1400,totalCents,
@@ -86,7 +89,7 @@ async function cleanup(ctx,owned,id) {
 export function createApprovalCases() {
   const build=(id,body)=>{
     const owned={marker:'native-proof-'+randomUUID(),id:null};
-    return {id,run:async ctx=>{await prepare(ctx,owned,id);await body(ctx,owned,id);},cleanup:ctx=>cleanup(ctx,owned,id)};
+    return {id,run:async input=>{const ctx=phaseContext(input);await prepare(ctx,owned,id);await body(ctx,owned,id);},cleanup:ctx=>cleanup(phaseContext(ctx),owned,id)};
   };
   return [
     build('editor-native-total',async(ctx,owned,id)=>{
@@ -123,7 +126,8 @@ export function createApprovalCases() {
       await ctx.driver.click('approve-request');await wait(ctx,'operation-status','HTTP_409');ctx.check(await ctx.driver.text('api-status'),'409');
       ctx.check(await read(ctx,'reviewer',owned),before);
     }),
-    {id:'anonymous-denied',run:async ctx=>{
+    {id:'anonymous-denied',run:async input=>{
+      const ctx=phaseContext(input);
       // Establish this case's approved local origin independently; the native
       // anonymous-check operation deliberately omits the loaded cookie.
       await identity(ctx,'editor');

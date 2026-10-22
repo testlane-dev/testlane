@@ -9,7 +9,7 @@ const caps = () => ({ platformName: 'Android', 'appium:automationName': 'UiAutom
   'appium:skipLogcatCapture': true, 'appium:suppressKillServer': true, 'appium:printPageSourceOnFindFailure': false });
 async function fixture() {
   const calls = [], secret = randomBytes(32).toString('base64url');
-  let context = 'NATIVE_APP', keyboard = true, displayed = true, failClick = false, hangClick = false, oversizedClick = false, missingFinds = 0;
+  let context = 'NATIVE_APP', keyboard = true, displayed = true, failClick = false, hangClick = false, oversizedClick = false, missingFinds = 0, clearGate;
   const server = createServer(async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null;
@@ -26,6 +26,9 @@ async function fixture() {
     else if (request.url.endsWith('/text')) value = request.url.includes('/attribute/') ? secret : '';
     else if (request.url.endsWith('/is_keyboard_shown')) value = keyboard;
     else if (request.url.endsWith('/hide_keyboard')) keyboard = false;
+    else if (request.url.endsWith('/clear') && clearGate) {
+      response.once('close', clearGate.closed.resolve); clearGate.entered.resolve(); return;
+    }
     else if (request.url.endsWith('/click') && hangClick) return;
     else if (request.url.endsWith('/click') && oversizedClick) value = secret.repeat(3000);
     else if (request.url.endsWith('/click') && failClick) { status = 500; value = { error: 'unknown error', message: secret, stacktrace: Buffer.from(secret).toString('base64') }; }
@@ -35,6 +38,7 @@ async function fixture() {
   return { url: 'http://127.0.0.1:' + server.address().port, calls, secret,
     changeContext(value) { context = value; }, failClick() { failClick = true; }, hangClick() { hangClick = true; },
     oversizedClick() { oversizedClick = true; }, missingFinds(count) { missingFinds = count; },
+    hangClear() { clearGate = { entered: Promise.withResolvers(), closed: Promise.withResolvers() }; return { entered: clearGate.entered.promise, closed: clearGate.closed.promise }; },
     offscreen() { displayed = false; },
     async close() { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } };
 }
@@ -110,6 +114,47 @@ test('aborted actions stop while bounded session cleanup remains available', asy
     await driver.close();
     assert.equal(appium.calls.filter(call => call.method === 'DELETE').length, 1);
   } finally { await appium.close(); }
+});
+
+async function promptly(promise) {
+  let timer;
+  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('UNIT_PHASE_DID_NOT_SETTLE')), 2000); })]); }
+  finally { clearTimeout(timer); }
+}
+
+test('a body abort cancels an in-flight native request and its next action while a fresh cleanup facade and close remain usable', async () => {
+  const appium = await fixture(), run = new AbortController(), body = new AbortController(), cleanup = new AbortController();
+  try {
+    const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), signal: run.signal });
+    const active = driver.withSignal(body.signal), blocked = appium.hangClear();
+    const operation = (async () => { await active.type('quantity', '3'); await active.click('create-request'); })();
+    const refused = assert.rejects(operation, { code: 'NATIVE_DRIVER_CANCELLED' });
+    await promptly(blocked.entered); body.abort(); await promptly(refused); await promptly(blocked.closed);
+    assert.equal(run.signal.aborted, false);
+    assert.equal(appium.calls.some(call => call.path.endsWith('/value') || call.path.endsWith('/click')), false);
+    const count = appium.calls.length;
+    await assert.rejects(active.withSignal(cleanup.signal).click('create-request'), { code: 'NATIVE_DRIVER_CANCELLED' });
+    assert.equal(appium.calls.length, count, 'a nested facade cannot revive a cancelled body');
+    await driver.withSignal(cleanup.signal).waitFor('session-status');
+    await active.close();
+    assert.equal(appium.calls.filter(call => call.method === 'DELETE').length, 1);
+    assert.throws(() => driver.withSignal({}), { code: 'NATIVE_DRIVER_INPUT_INVALID' });
+  } finally { await appium.close(); }
+});
+
+test('phase cancellation also interrupts an ownership wait before it can send a native command', async () => {
+  const appium = await fixture(), run = new AbortController(), body = new AbortController(), owner = Promise.withResolvers(), entered = Promise.withResolvers();
+  let blocked = false;
+  try {
+    const driver = await createNativeDriver({ url: appium.url, capabilities: caps(), signal: run.signal,
+      assertOwned: () => { if (!blocked) return true; entered.resolve(); return owner.promise; } });
+    blocked = true;
+    const count = appium.calls.length, refused = assert.rejects(driver.withSignal(body.signal).click('save'), { code: 'NATIVE_DRIVER_CANCELLED' });
+    await promptly(entered.promise); body.abort(); await promptly(refused);
+    assert.equal(run.signal.aborted, false); assert.equal(appium.calls.length, count);
+    blocked = false; owner.resolve(true); await driver.close();
+    assert.equal(appium.calls.filter(call => call.method === 'DELETE').length, 1);
+  } finally { owner.resolve(true); await appium.close(); }
 });
 
 test('missing action elements use the bounded native scroll selector without retaining server messages', async () => {
