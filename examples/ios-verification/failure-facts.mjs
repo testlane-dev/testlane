@@ -3,9 +3,10 @@ import { types } from 'node:util';
 
 const STAGES = new Set(['owned-simulator-start', 'device-xcode-runtime-and-pinned-tools-validated',
   'device-owned-simulator-created', 'device-owned-simulator-boot-started', 'device-owned-simulator-booted',
-  'device-wda-build-for-testing', 'device-wda-prepared', 'device-private-appium-ready']);
+  'device-wda-build-for-testing', 'device-wda-prepared', 'device-selected-runtime-cache-preparing',
+  'device-selected-runtime-cache-prepared', 'device-private-appium-ready']);
 const KINDS = new Set(['not-recorded', 'xcode-version', 'runtime-list', 'device-type-list', 'owned-device-list',
-  'owned-device-create', 'owned-device-boot', 'owned-device-bootstatus', 'owned-device-shutdown', 'owned-device-delete',
+  'selected-runtime-cache-update', 'owned-device-create', 'owned-device-boot', 'owned-device-bootstatus', 'owned-device-shutdown', 'owned-device-delete',
   'owned-wda-prebuild', 'owned-app-install', 'owned-proof-app-prewarm', 'owned-app-container', 'loopback-listeners',
   'process-identity', 'owned-prewarm-stack-sample', 'owned-descendants', 'owned-process-group', 'other']);
 const CODES = new Set(['IOS_APP_INPUT_INVALID', 'IOS_APP_INSTALL_FAILED', 'IOS_APP_LAUNCH_FAILED',
@@ -16,7 +17,7 @@ const CODES = new Set(['IOS_APP_INPUT_INVALID', 'IOS_APP_INSTALL_FAILED', 'IOS_A
   'IOS_DEVICE_START_FAILED', 'IOS_DEVICE_TYPE_UNAVAILABLE', 'IOS_FOREIGN_INVENTORY_CHANGED', 'IOS_HOSTED_CI_REQUIRED',
   'IOS_LISTENER_BINDING_REFUSED', 'IOS_LISTENER_STOP_UNCONFIRMED', 'IOS_MACOS_REQUIRED', 'IOS_OUTPUT_PATH_REFUSED',
   'IOS_OWNERSHIP_REFUSED', 'IOS_PREAUTH_DIAGNOSTIC_FAILED', 'IOS_PROCESS_OWNERSHIP_REFUSED', 'IOS_PROCESS_STOP_UNCONFIRMED',
-  'IOS_PROCESS_TREE_LIMIT', 'IOS_RUNTIME_METADATA_INVALID', 'IOS_RUNTIME_UNAVAILABLE', 'IOS_SIMCTL_SCOPE_REFUSED',
+  'IOS_PROCESS_TREE_LIMIT', 'IOS_RUNTIME_CACHE_PREPARE_FAILED', 'IOS_RUNTIME_METADATA_INVALID', 'IOS_RUNTIME_UNAVAILABLE', 'IOS_SIMCTL_SCOPE_REFUSED',
   'IOS_SIMULATOR_BOOT_FAILED', 'IOS_SIMULATOR_BOOT_TIMEOUT', 'IOS_SIMULATOR_CREATE_FAILED', 'IOS_SIMULATOR_CREATE_UNSETTLED',
   'IOS_SIMULATOR_DELETE_UNCONFIRMED', 'IOS_SIMULATOR_LIST_FAILED', 'IOS_SIMULATOR_SHUTDOWN_UNCONFIRMED',
   'IOS_STANDARD_DEVICE_SET_REFUSED', 'IOS_TARGET_INCOMPATIBLE', 'IOS_TARGET_SELECTOR_INVALID', 'IOS_TOOLS_MISSING',

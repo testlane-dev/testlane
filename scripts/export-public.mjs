@@ -135,6 +135,9 @@ export const URL_ALLOWLIST = [
   "docs.expo.dev/versions/v58.0.0/",
   // Exact AGP compatibility table used by the Android proof SDK recipe.
   "developer.android.com/build/releases/agp-9-2-0-release-notes",
+  // Exact primary references for selected-runtime cache preparation.
+  "developer.apple.com/forums/thread/807025",
+  "chromium.googlesource.com/chromium/src/ios/+/58fd493aeb99385b57fb7c5108837bc372b4d4b4%5E%21/",
   // Exact Apple ATS reference used by the proof-only iOS build recipe.
   "developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsexceptiondomains",
   // Exact public upstream source and Android archives reviewed for native proofs.

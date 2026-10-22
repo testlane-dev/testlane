@@ -27,9 +27,9 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 const WDA_BUILD_MS = 600000;
 
 /** One cold-start observation window. Callbacks settle; no timer races detach work. */
-export async function runIosColdBoot({ boot, bootStatus, confirmOwned, onBootStarted = () => {}, signal, now = () => performance.now() }) {
+export async function runIosColdBoot({ prepareRuntime, boot, bootStatus, confirmOwned, onRuntimePrepared = () => {}, onBootStarted = () => {}, signal, now = () => performance.now() }) {
   if (signal?.aborted) throw fail('IOS_CANCELLED');
-  if (![boot, bootStatus, confirmOwned, onBootStarted, now].every(callback => typeof callback === 'function')) throw fail('IOS_DEVICE_INPUT_INVALID');
+  if (![prepareRuntime, boot, bootStatus, confirmOwned, onRuntimePrepared, onBootStarted, now].every(callback => typeof callback === 'function')) throw fail('IOS_DEVICE_INPUT_INVALID');
   let observed = now();
   if (!Number.isFinite(observed) || observed < 0) throw fail('IOS_SIMULATOR_BOOT_TIMEOUT');
   const deadline = observed + 600000;
@@ -52,6 +52,10 @@ export async function runIosColdBoot({ boot, bootStatus, confirmOwned, onBootSta
       budget.check(); accept(result);
     } catch (error) { throw tagIosCommandFailure(error, kind); }
   };
+  await step('selected-runtime-cache-update', 600000, prepareRuntime, result => {
+    if (result?.code !== 0 || result?.closed !== true) throw fail('IOS_RUNTIME_CACHE_PREPARE_FAILED');
+  });
+  onRuntimePrepared();
   await step('owned-device-boot', 30000, boot, result => {
     if (result?.code !== 0) throw fail('IOS_SIMULATOR_BOOT_FAILED');
   });
@@ -191,6 +195,7 @@ function commandKind(executable, args) {
   if (executable === '/usr/bin/sample') return 'owned-prewarm-stack-sample';
   if (executable === '/usr/bin/pgrep') return args[0] === '-P' ? 'owned-descendants' : 'owned-process-group';
   if (executable !== '/usr/bin/xcrun' || args[0] !== 'simctl') return 'other';
+  if (args.length === 5 && args[1] === 'runtime' && args[2] === 'dyld_shared_cache' && args[3] === 'update') return 'selected-runtime-cache-update';
   const index = args[1] === '--set' ? 3 : 1;
   if (args[index] === 'list') return { runtimes: 'runtime-list', devicetypes: 'device-type-list', devices: 'owned-device-list' }[args[index + 1]] ?? 'other';
   return { create: 'owned-device-create', boot: 'owned-device-boot', bootstatus: 'owned-device-bootstatus',
@@ -489,14 +494,16 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     coldBootBudget?.check();
     live(); return true;
   }
-  // This private guard is confined to build-only preparation before first boot.
+  // This private Shutdown guard covers preparation before first boot.
   // Public ownership and prepared-artifact checks remain Booted-only.
-  async function assertWdaPreparationOwned() {
-    live(); const current = await assertRoot();
-    verifyOwnedWdaPreparationSimulator({ expected: marker, marker: current, devices: await listOwned(), baseline });
+  async function assertWdaPreparationOwned(coldBootBudget) {
+    const checked = async callback => { coldBootBudget?.check(); const result = await callback(); coldBootBudget?.check(); return result; };
+    live(); const current = await checked(assertRoot);
+    const devices = await checked(() => listOwned(false, coldBootBudget ? Math.min(30000, coldBootBudget.remainingMs()) : 30000, undefined, coldBootBudget?.deadlineAt));
+    verifyOwnedWdaPreparationSimulator({ expected: marker, marker: current, devices, baseline });
     const ownDevice = path.join(deviceSetPath, marker.udid);
-    if (await realpath(ownDevice) !== ownDevice || (await lstat(ownDevice)).isSymbolicLink()) throw fail('IOS_OWNERSHIP_REFUSED');
-    live(); return true;
+    if (await checked(() => realpath(ownDevice)) !== ownDevice || (await checked(() => lstat(ownDevice))).isSymbolicLink()) throw fail('IOS_OWNERSHIP_REFUSED');
+    coldBootBudget?.check(); live(); return true;
   }
   async function assertListeners({ absent = false } = {}) {
     await queryIosListeners(run, [appiumPort, wdaPort, mjpegPort], { absent });
@@ -746,7 +753,18 @@ export async function startOwnedIos({ toolsRoot, outputDir, signal, onStage = ()
     startupAt('owned-simulator-created');
     await assertWdaPreparationOwned();
     startupAt('wda-build-for-testing'); await prepareWda(); startupAt('wda-prepared');
+    startupAt('selected-runtime-cache-preparing');
     await runIosColdBoot({ signal,
+      prepareRuntime: async budget => {
+        await assertWdaPreparationOwned(budget);
+        const result = await run('/usr/bin/xcrun', ['simctl', 'runtime', 'dyld_shared_cache', 'update', target.runtimeId],
+          { timeoutMs: budget.remainingMs(), deadlineAt: budget.deadlineAt });
+        if (result.code !== 0) throw fail('IOS_RUNTIME_CACHE_PREPARE_FAILED');
+        await assertWdaPreparationOwned(budget);
+        // run() resolves only after this exact retained client has closed.
+        return { code: result.code, closed: true };
+      },
+      onRuntimePrepared: () => startupAt('selected-runtime-cache-prepared'),
       boot: ({ timeoutMs, deadlineAt }) => run('/usr/bin/xcrun', ownedSimctlArguments(marker, 'boot'), { timeoutMs, deadlineAt }),
       onBootStarted: () => { startupAt('owned-simulator-boot-started'); signal?.addEventListener('abort', abortLifecycle, { once: true }); },
       bootStatus: ({ timeoutMs, deadlineAt }) => simctl(['bootstatus', marker.udid, '-b'], { timeoutMs, deadlineAt }),

@@ -79,9 +79,21 @@ Simulator. Ordinary
 `npm run test:mobile` executes unit/control tests without starting a device.
 
 Cold boot is a prerequisite observation, separate from test execution. One
-absolute monotonic window of at most 600 seconds covers the owned boot command,
-`simctl bootstatus -b` and the first fresh owned/foreign inventory and path
-confirmation. The boot command keeps its 30-second cap; the first ownership
+absolute monotonic window of at most 600 seconds covers fresh Shutdown
+ownership checks before and after selected-runtime cache preparation, the owned
+boot command, `simctl bootstatus -b` and the first fresh Booted ownership and
+path confirmation. Cache preparation runs exactly
+`simctl runtime dyld_shared_cache update <selected-runtime-id>`, without
+`--all`, force, deletion or a service reset. It must close with exit zero, then
+pass fresh Shutdown root, marker, path and foreign-inventory checks before boot.
+The [Apple guidance](https://developer.apple.com/forums/thread/807025) and
+[Chromium change](https://chromium.googlesource.com/chromium/src/ios/+/58fd493aeb99385b57fb7c5108837bc372b4d4b4%5E%21/)
+support this prerequisite experiment; they do not establish the cause of the
+observed post-boot inventory stall or demonstrate a fix. The command may complete
+OS-managed cache work for the selected shared runtime, outside the private root;
+private-root cleanup does not remove that cache. Cache completion proves neither
+Booted state nor inventory health. Retained-client closure after timeout also
+does not prove cancellation of OS-managed cache work. The boot command keeps its 30-second cap; the first ownership
 confirmation keeps a 90-second cap. Each receives only the time remaining in the
 shared window. No step retries or renews the window. A printed completion message
 is not success: `bootstatus` must exit zero and the complete fresh ownership

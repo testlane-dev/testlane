@@ -1,8 +1,10 @@
 /** Pure policy/settlement tests. These do not boot a Simulator or prove iOS acceptance. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {runIosColdBoot} from '../device.mjs';
+import {runIosColdBoot as runColdBoot} from '../device.mjs';
+const runIosColdBoot=options=>runColdBoot({prepareRuntime:async()=>({code:0,closed:true}),...options});
 import {createIosStartupFailure} from '../failure-facts.mjs';
+import {isAllowedUrl} from '../../../scripts/export-public.mjs';
 
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};};
 const observed=(error,code,kind)=>error.message===code&&error.nativeCommandKind===kind;
@@ -122,4 +124,44 @@ test('non-monotonic observation is refused instead of renewing the cold-start wi
   let now=100;
   await assert.rejects(runIosColdBoot({now:()=>now,boot:async()=>{now=50;return{code:0};},bootStatus:async()=>assert.fail('must not run'),confirmOwned:async()=>true}),
     error=>observed(error,'IOS_SIMULATOR_BOOT_TIMEOUT','owned-device-boot'));
+});
+
+test('cache preparation and its guards debit the original window without renewing boot or first ownership caps',async()=>{
+  let now=1000;const calls=[];
+  assert.equal(await runColdBoot({now:()=>now,
+    prepareRuntime:async budget=>{calls.push(['cache',budget.timeoutMs,budget.deadlineAt]);now+=100000;return{code:0,closed:true};},
+    onRuntimePrepared:()=>calls.push(['prepared']),
+    boot:async budget=>{calls.push(['boot',budget.timeoutMs,budget.deadlineAt]);now+=20000;return{code:0};},
+    bootStatus:async budget=>{calls.push(['status',budget.timeoutMs,budget.deadlineAt]);now+=470000;return{code:0};},
+    confirmOwned:async budget=>{calls.push(['owned',budget.timeoutMs,budget.deadlineAt]);return true;},
+  }),true);
+  assert.deepEqual(calls,[['cache',600000,601000],['prepared'],['boot',30000,131000],['status',480000,601000],['owned',10000,601000]]);
+});
+
+test('cache preparation is mandatory and closed zero acknowledgement cannot be inferred from output',async()=>{
+  let boot=0,prepared=0;const callbacks={boot:async()=>{boot++;return{code:0};},bootStatus:async()=>({code:0}),confirmOwned:async()=>true,onRuntimePrepared:()=>{prepared++;},now:()=>0};
+  await assert.rejects(runColdBoot(callbacks),{message:'IOS_DEVICE_INPUT_INVALID'});
+  for(const result of [{code:0},{code:0,closed:false},{code:1,closed:true},{code:null,closed:true},null]){
+    await assert.rejects(runColdBoot({...callbacks,prepareRuntime:async()=>result}),error=>observed(error,'IOS_RUNTIME_CACHE_PREPARE_FAILED','selected-runtime-cache-update'));
+  }
+  assert.equal(boot,0);assert.equal(prepared,0);
+});
+
+test('cache late zero and cancellation never advance hooks or boot, and pending work is joined',async()=>{
+  let now=0,boot=0,prepared=0;
+  const callbacks={now:()=>now,boot:async()=>{boot++;return{code:0};},bootStatus:async()=>({code:0}),confirmOwned:async()=>true,onRuntimePrepared:()=>{prepared++;}};
+  await assert.rejects(runColdBoot({...callbacks,prepareRuntime:async()=>{now=600000;return{code:0,closed:true};}}),
+    error=>observed(error,'IOS_SIMULATOR_BOOT_TIMEOUT','selected-runtime-cache-update'));
+  const controller=new AbortController(),entered=deferred(),settled=deferred();let done=false;now=0;
+  const pending=runColdBoot({...callbacks,signal:controller.signal,prepareRuntime:async()=>{entered.resolve();await settled.promise;return{code:0,closed:true};}}).finally(()=>{done=true;});
+  await entered.promise;controller.abort();await Promise.resolve();assert.equal(done,false);
+  settled.resolve();await assert.rejects(pending,error=>observed(error,'IOS_CANCELLED','selected-runtime-cache-update'));
+  assert.equal(boot,0);assert.equal(prepared,0);
+});
+
+test('only the two reviewed primary reference paths are permitted, not their neighboring pages or hosts',()=>{
+  const apple='https://developer.apple.com/forums/thread/807025',chromium='https://chromium.googlesource.com/chromium/src/ios/+/58fd493aeb99385b57fb7c5108837bc372b4d4b4%5E%21/';
+  assert.equal(isAllowedUrl(apple),true);assert.equal(isAllowedUrl(chromium),true);
+  for(const url of [apple+'1',apple.replace('807025','807026'),apple.replace('developer.apple.com','other.apple.com'),
+    chromium.replace('58fd493','58fd494'),chromium.replace('/src/ios/','/src/other/')])assert.equal(isAllowedUrl(url),false);
 });
