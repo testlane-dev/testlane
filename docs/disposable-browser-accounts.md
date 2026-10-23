@@ -3,7 +3,10 @@
 This is the **unreleased browser-account preview**. The published
 `0.7.0-beta.2` package requires existing accounts; it does not include this API.
 Until a matching release is published, install only a reviewed candidate tarball.
-The installed-package proof for this preview is still pending.
+Local installed-package verification covers a synthetic Supabase form-post app
+on Windows with DPAPI. It exercised a positive run, an intentional failure after
+saving data, and a corrected run, with account revocation and cleanup in each.
+Linux/macOS keychains and NextAuth DOM remain unverified for this workflow.
 
 The workflow creates one Editor and one Reviewer, puts their generated passwords
 into the native broker store through stdin, runs your app's Playwright cases,
@@ -20,8 +23,9 @@ change, continue with the [existing-account quickstart](quickstart.md).
 
 This preview does not install a generic Supabase or NextAuth account backend.
 NextAuth Credentials handles sign-in; your app still owns user persistence and
-revocation. The source-only Supabase proof creates a new, disposable local stack.
-Its database setup is not an existing-project migration or a hosted-project recipe.
+revocation. The Supabase example is a proof harness for a new, disposable local
+stack. Its database setup is not an existing-project migration or a hosted-project
+recipe.
 
 Prerequisites:
 
@@ -307,6 +311,10 @@ A quota refusal is a stop condition, not permission to retry or reset history.
 There are no automatic retries, worker scaling, screenshots, traces or videos in
 this managed workflow. Adapter and delivery callbacks are trusted and awaited;
 Testlane cannot forcibly stop arbitrary hung application code.
+
+Temporary-file cleanup admits at most 4,096 entries including the temporary root,
+16 levels below it, 16 MiB per file and 64 MiB in total. Changing entries or
+exceeding these limits makes cleanup fail; remaining files stay for review.
 
 If `recoveryRequired` is true, stop and preserve the original target and private
 directory. For a known-settled cleanup failure, the reviewed wrapper can call
