@@ -189,7 +189,7 @@ async function realDependencies(input: Normalized, root: ManagedRoot, journal: M
       if (!worker || JSON.stringify(await root.read(path.join(runDirectory, "worker-binding.json"))) !== JSON.stringify(worker)) throw new ManagedBrowserError("BROWSER_MANAGED_BARRIER_FAILED");
       await root.write(path.join(revocation, "response.json"), { schemaVersion: 1, targetId: run.targetId, runId: run.runId, expiresAt: run.expiresAt, nonce: worker.revocation.nonce, status });
     },
-    emptyTemporary: async () => { await checkDirectories(); await root.empty(temporary); },
+    emptyTemporary: async () => { await checkDirectories(); await root.clearTemporary(run.runId); await root.empty(temporary); },
     cancelled: () => aborted(input.signal), now: Date.now, pause: () => pause(25),
   };
 }

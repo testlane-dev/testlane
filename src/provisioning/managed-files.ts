@@ -1,6 +1,6 @@
 /** Internal durable wrapper journal. Same-user trusted code is not sandboxed. */
 import { constants, type BigIntStats } from "node:fs";
-import { lstat, open, readdir, realpath, rename, rmdir, unlink } from "node:fs/promises";
+import { lstat, open, opendir, readdir, realpath, rename, rmdir, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { types } from "node:util";
@@ -32,6 +32,7 @@ export interface ManagedRoot {
   write(file: string, value: unknown): Promise<void>;
   read(file: string): Promise<unknown>;
   empty(directory: string): Promise<void>;
+  clearTemporary(runId: string): Promise<void>;
 }
 
 /** Private mode/ACL attestation once at entry; retained identities on each I/O. */
@@ -161,6 +162,87 @@ export async function openManagedRoot(requested: string, targetId: string, bindi
       async write(file: string, value: unknown) { await requireLock(); await write(file, value); },
       async read(file: string) { await requireLock(); return read(file, 16384); },
       async empty(directory: string) { await check(directory); if ((await readdir(directory)).length !== 0) throw refused(); await check(directory); },
+      /** Only the current run's retained tmp tree, after all possible writers settle. */
+      async clearTemporary(runId: string) {
+        try {
+          await writes; await requireLock();
+          if (!ACCOUNT_UUID.test(runId) || owner.currentRunId !== runId) throw refused();
+          const runDirectory = path.join(runs, runId), temporary = path.join(runDirectory, "tmp");
+          await check(runDirectory); await check(temporary);
+          const journal = normalizeManagedJournal(await read(path.join(runDirectory, "managed-run.json"), 16384));
+          if (journal.runId !== runId || journal.targetId !== targetId || journal.bindingHash !== bindingHash ||
+              journal.phase !== "cleanup" || journal.child === "pending" || journal.child === "unknown" || journal.nativeChild !== "settled") throw refused();
+          // Check the private boundary again after the child used it. Do not
+          // repair permissions; descendants rely on this retained private root.
+          await assertBrowserPrivateDirectory(temporary); await check(temporary);
+          const temporaryDevice = identities.get(temporary)!.dev;
+          type Node = { file: string; info: BigIntStats; children?: Node[] };
+          let count = 0, bytes = 0n;
+          const full = (a: BigIntStats, b: BigIntStats) => same(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
+          const info = async (file: string): Promise<BigIntStats> => {
+            await requireLock(); await check(temporary);
+            const relative = path.relative(temporary, file), value = await lstat(file, { bigint: true });
+            if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative) || value.dev !== temporaryDevice || value.isSymbolicLink() ||
+                (!value.isDirectory() && (!value.isFile() || value.nlink !== 1n)) || await realpath(file) !== file ||
+                (process.platform !== "win32" && (value.uid !== BigInt(process.getuid!()) || (value.mode & 0o022n) !== 0n))) throw refused();
+            return value;
+          };
+          const names = async (file: string): Promise<string[]> => {
+            const values: string[] = [];
+            for await (const entry of await opendir(file)) {
+              if (values.length >= 4096) throw refused();
+              values.push(entry.name);
+            }
+            values.sort();
+            if (values.some(name => !name || path.basename(name) !== name || /[\x00-\x1f\x7f]/.test(name))) throw refused();
+            return values;
+          };
+          const scan = async (file: string, depth: number): Promise<Node> => {
+            if (++count > 4096 || depth > 16) throw refused();
+            const before = await info(file), node: Node = { file, info: before };
+            if (before.isDirectory()) {
+              const listed = await names(file); node.children = [];
+              for (const name of listed) node.children.push(await scan(path.join(file, name), depth + 1));
+              if (JSON.stringify(await names(file)) !== JSON.stringify(listed)) throw refused();
+            } else { bytes += before.size; if (before.size > 16n * 1024n * 1024n || bytes > 64n * 1024n * 1024n) throw refused(); }
+            if (!full(before, await info(file))) throw refused();
+            return node;
+          };
+          const tree = await scan(temporary, 0);
+          const validate = async (node: Node): Promise<void> => {
+            if (!full(node.info, await info(node.file))) throw refused();
+            if (node.children) {
+              if (JSON.stringify(await names(node.file)) !== JSON.stringify(node.children.map(child => path.basename(child.file)))) throw refused();
+              for (const child of node.children) await validate(child);
+            }
+          };
+          // Complete admission before the first unlink: a foreign alias or
+          // unstable entry anywhere leaves the entire admitted tree untouched.
+          await validate(tree);
+          const clear = async (node: Node): Promise<void> => {
+            if (!same(node.info, await info(node.file))) throw refused();
+            if (node.children) {
+              const remaining = node.children.map(child => path.basename(child.file));
+              for (const child of node.children) {
+                if (!same(node.info, await info(node.file)) || JSON.stringify(await names(node.file)) !== JSON.stringify(remaining)) throw refused();
+                await clear(child); remaining.shift();
+                if (JSON.stringify(await names(node.file)) !== JSON.stringify(remaining)) throw refused();
+              }
+              if (!same(node.info, await info(node.file)) || (await names(node.file)).length !== 0) throw refused();
+              if (node.file !== temporary) await rmdir(node.file);
+            } else {
+              if (!full(node.info, await info(node.file))) throw refused();
+              await unlink(node.file);
+            }
+            if (node.file !== temporary) {
+              try { await lstat(node.file); throw refused(); } catch (error) { if (!missing(error)) throw error; }
+            }
+          };
+          await clear(tree); await check(temporary);
+          if ((await readdir(temporary)).length !== 0) throw refused();
+          await requireLock();
+        } catch { throw refused(); } // Preserve remaining entries and recovery state.
+      },
     });
   } catch (error) { if (error instanceof ManagedBrowserError) throw error; throw refused(); }
 }
