@@ -1,4 +1,4 @@
-/** Parent-owned disposable browser orchestration; deliberately not exported yet. */
+/** Parent-owned browser orchestration; the public facade lives in browser.ts. */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";

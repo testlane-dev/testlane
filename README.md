@@ -34,14 +34,17 @@ project-local preview installation. To try a disposable app first, use the
 Requires Node 22 or newer. Pre-1.0; no independent security audit yet
 ([security policy](SECURITY.md)).
 
+The next browser-account preview is unreleased. Its [app-owned adapter guide](docs/disposable-browser-accounts.md) covers automatic disposable accounts, session revocation and scoped recovery. It requires a reviewed server integration; the published beta.2 still uses existing accounts.
+
 ## Development direction
 
 We are focusing on teams that use coding agents to build applications with roles,
 approvals and persistent business data. The aim is a complete workflow: tests the
 team owns, exact browser and API assertions, and verified removal of test records.
-The next milestone adds a reproducible approval example, useful failure diagnostics
-and an installed-package acceptance gate. Native Android and iOS testing is a planned
-track; the current release runs web tests with Playwright.
+The next browser milestone adds automatic test accounts through an app-owned adapter,
+with positive/failure browser checks and verified cleanup against the installed package.
+Native Android and iOS work is deferred; it is not a gate for the browser release.
+The current published release runs web tests with Playwright.
 
 A separate [test-account provisioning experiment](examples/account-provisioning/README.md)
 creates and revokes dedicated accounts in a synthetic local app. It demonstrates

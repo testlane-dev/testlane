@@ -8,10 +8,16 @@ what to do about it in [docs/upgrading.md](docs/upgrading.md).
 
 ### Added
 
+- An unreleased parent-side disposable-account workflow at `@testlane/cli/browser`,
+  with separate worker helpers at `@testlane/cli/browser-worker`. A reviewed app-owned
+  adapter creates Editor/Reviewer accounts, delivers generated credentials privately,
+  revokes live access and checks cleanup. Unknown writers remain nonpassing. No raw
+  account-create/delete tool is added to MCP or HTTP. See the
+  [integration guide](docs/disposable-browser-accounts.md) for prerequisites and limits.
 - A source-only local test-account provisioning experiment with fixed roles,
   target-wide quotas, expiry, durable ownership/recovery and immediate synthetic
   session invalidation. Its real-broker proof separately verifies account/session
-  and native-store cleanup. It adds no provider adapter or public provisioning API.
+  and native-store cleanup. The experiment remains outside the npm package; the new packaged parent API is a separate app-owned integration.
 - A public, disposable request approval example with app-owned Playwright tests for
   exact saved totals, editor/reviewer authorization, duplicate approval, anonymous
   denial and verified cleanup. Its unchanged suite detects an injected one-cent defect.

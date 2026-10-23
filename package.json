@@ -1,6 +1,6 @@
 {
   "name": "@testlane/cli",
-  "version": "0.7.0-beta.2",
+  "version": "0.8.0-beta.1",
   "description": "Authenticated verification for coding agents: broker sandbox sessions and run app-owned Playwright workflows with local evidence.",
   "keywords": [
     "agents",
@@ -95,7 +95,8 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
-    "SECURITY.md"
+    "SECURITY.md",
+    "docs/disposable-browser-accounts.md"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -129,7 +130,8 @@
     "proof:launch-consumer": "node scripts/launch-consumer-proof.mjs",
     "proof:verification-demo": "node scripts/verification-demo-proof.mjs",
     "release:prepare": "node scripts/release-artifact.mjs prepare",
-    "release:verify": "node scripts/release-artifact.mjs verify"
+    "release:verify": "node scripts/release-artifact.mjs verify",
+    "proof:account-provisioning:installed-browser": "node examples/account-provisioning/supabase/package-browser-proof.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.0",
@@ -143,5 +145,23 @@
     "tsx": "^4.19.3",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js",
+      "default": "./dist/browser.js"
+    },
+    "./browser-worker": {
+      "types": "./dist/browser-worker.d.ts",
+      "import": "./dist/browser-worker.js",
+      "default": "./dist/browser-worker.js"
+    },
+    "./*": "./*"
   }
 }
