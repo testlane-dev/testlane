@@ -132,7 +132,7 @@
     "release:verify": "node scripts/release-artifact.mjs verify"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "commander": "^14.0.3",
     "zod": "^3.24.2"
   },
