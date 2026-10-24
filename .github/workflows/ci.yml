@@ -85,7 +85,13 @@ jobs:
       - name: Local account provisioning contract and abuse tests
         run: npm run test:account-provisioning
 
-      - run: npx vitest run --reporter=default
+      - name: Windows private-directory preflight
+        if: runner.os == 'Windows'
+        run: npx vitest run tests/provisioning-windows-acl-preflight.test.ts --reporter=default --bail=1
+        env:
+          TESTLANE_HOME: ${{ runner.temp }}/testlane-home
+
+      - run: npx vitest run --reporter=default --bail=1 --exclude tests/provisioning-windows-acl-preflight.test.ts
         env:
           # Never let a runner touch a real ~/.testlane (runner context is step-level only).
           TESTLANE_HOME: ${{ runner.temp }}/testlane-home

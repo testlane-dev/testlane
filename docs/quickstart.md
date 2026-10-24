@@ -4,6 +4,10 @@ Connect Testlane to an app you already run, then let an agent verify a protected
 and API without handling its test account's password. The human configures the profile
 and seeds the password once. Each verification uses fresh session state and removes it.
 
+This guide uses existing accounts with the published preview. For the unreleased
+automatic-account workflow, see [disposable browser accounts](disposable-browser-accounts.md);
+it needs a reviewed app-owned server adapter.
+
 This guide uses CLI session files. MCP also supports [managed local session files](sessions.md#mcp-managed-local-session-files)
 whose tool results contain a path and expiry metadata. Its older `session` tool returns
 live values inline. The browser example shares the CLI's machine and filesystem.

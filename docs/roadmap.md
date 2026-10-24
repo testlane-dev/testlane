@@ -64,10 +64,14 @@ seeds the existing broker, verifies live permissions, and removes owned accounts
 sessions. Its quota, expiry, replay and recovery checks run against a synthetic
 loopback backend. It does not add account creation to the published CLI or MCP tools.
 
-The next integration needs an explicitly reviewed provider and separate disposable
-test auth/database project. Provider-enforced authority, suppressed external side
-effects, session revocation and ownership-based cleanup each need their own tests.
-Do not infer those guarantees from local policy labels or a successful synthetic run.
+The [local Supabase/NextAuth experiment](../examples/account-provisioning/supabase/README.md)
+adds a fresh owned Auth/database stack and actual NextAuth v4 Credentials library
+fixture. It is source-only; existing hosted projects and arbitrary app installations
+remain future work. Each integration needs an explicitly reviewed provider and
+separate disposable test auth/database target. Provider-enforced authority,
+suppressed external side effects, session revocation and ownership-based cleanup
+each need their own tests. Do not infer those guarantees from local policy labels
+or a successful synthetic run.
 
 ## Following priorities
 

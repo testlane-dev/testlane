@@ -19,6 +19,9 @@ export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     environment: "node",
+    // Windows fixtures run real PowerShell ACL checks. Serialize files so
+    // parallel test processes do not exhaust their unchanged 15-second bounds.
+    fileParallelism: process.platform !== "win32",
     testTimeout: 20_000,
     hookTimeout: 20_000,
     env: {

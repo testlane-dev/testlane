@@ -26,6 +26,10 @@ If Playwright is already installed, install only `@testlane/cli@0.7.0-beta.2` an
 
 ## Configure accounts and authentication
 
+The unreleased [disposable-account workflow](disposable-browser-accounts.md) uses a
+reviewed app-owned adapter and its own parent wrapper. Follow that guide instead of
+the existing-account setup below when testing its reviewed candidate tarball.
+
 Complete steps 1–5 of the [existing-app quickstart](quickstart.md) to review the app contract, create the secret-free profile, human-seed its password and connect the agent. That guide uses the same project-local `0.7.0-beta.2` CLI; keep this pin throughout. The [project installation guide](project-install.md) gives the pinned MCP entry point. Profile origins include the port, and accounts must already exist in the app. The human uses the hidden `store set` prompt; the workflow does not create accounts, provision a test database or seed passwords. Do not send credentials through the feature brief.
 
 The init example below uses the quickstart's `shop:testing:qa` profile. Replace it with your actual reviewed profile. If a feature needs writer/reviewer or other roles, have the human prepare distinct existing accounts/profiles first; changing a test's role alias does not create them.

@@ -1,0 +1,112 @@
+{
+  "authentication": {
+    "kind": "nextauth-credentials",
+    "library": "next-auth",
+    "scope": "Node NextApi-compatible library fixture",
+    "version": "4.24.15"
+  },
+  "brokerArtifactMode": "fresh-source-pack",
+  "cleanupVerified": true,
+  "controllerRoutesExposed": false,
+  "credentialLeakScanPassed": true,
+  "databaseQuotaChecked": true,
+  "deletedAccountSignInRefused": 2,
+  "directRlsChecked": true,
+  "experiment": "source-only local Supabase Auth/database provisioning",
+  "foreignControlUnchanged": true,
+  "hostedProjectTested": false,
+  "installedBrokerTreeSha256": "5c9cd25c546a82a2fe5f87016e6c2c6108f271aaa625b2c8b5ea8d2a7cd4301c",
+  "installedBrokerVersion": "0.7.0-beta.2",
+  "lateCreateFenced": true,
+  "liveGrantBlocksUnexpiredJwt": true,
+  "liveGrantCheckedBeforeProviderDeletion": true,
+  "nativeStore": "dpapi",
+  "observed": {
+    "deletedEditorAppStatus": 401,
+    "deletedEditorBrokerExit": 3,
+    "deletedEditorRefreshStatus": 400,
+    "deletedEditorUserStatus": 403,
+    "deletedReviewerAppStatus": 401,
+    "deletedReviewerBrokerExit": 3,
+    "deletedReviewerRefreshStatus": 400,
+    "deletedReviewerUserStatus": 403,
+    "editorDeleteStatus": 204,
+    "editorInsertStatus": 201,
+    "publicSignupStatus": 422,
+    "reviewerInsertStatus": 403,
+    "revokedAppStatus": 401,
+    "revokedInsertStatus": 403,
+    "unauthenticatedAdminStatus": 401
+  },
+  "oldAppSessionsRefused": 2,
+  "ownedAccountsRemaining": 0,
+  "passed": true,
+  "privateScratchAndSessionDirectories": true,
+  "prototypeIncludedInInstalledPackage": false,
+  "provider": {
+    "backendEgress": false,
+    "composeRevision": "b46b645c6d74316dd5ec0be92bc0f94125917e9b",
+    "docker": "29.8.0",
+    "fixedGatewayTargets": 3,
+    "gatewayCodeSha256": "24040cad11d7fe25e8c2e609f4648aeec4a5aae57acd7f3305d6458ecb13925a",
+    "images": {
+      "auth": {
+        "reference": "supabase/gotrue@sha256:1736a63078f5922b198c4cbe50f80ab9a2d3b54fe8b7b6cfb2e9dc5dbbc12c6b",
+        "version": "v2.197.0"
+      },
+      "database": {
+        "reference": "supabase/postgres@sha256:f371b5f3f2ac0a05703f33d6e6134515fb2498cab708fb948a0aeb7481467c00",
+        "version": "17.6.1.136"
+      },
+      "gateway": {
+        "reference": "node@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392",
+        "version": "22.23.3-bookworm-slim"
+      },
+      "rest": {
+        "reference": "postgrest/postgrest@sha256:c7cd7e265a85b05248abf53f4473fcec7e327c282d0bd0cf60f1551996d09fcf",
+        "version": "v14.18"
+      }
+    },
+    "internalNetwork": true,
+    "loopbackOnly": true,
+    "pg": "8.23.1",
+    "privacy": {
+      "currentUserOnly": true,
+      "immediateParentVerified": true,
+      "type": "windows-dacl"
+    },
+    "resolvedImageIds": {
+      "auth": "sha256:1181bff5ba4ce440013a63cef9f4cf13024c432d705c9b1fbc9e5b949e852f48",
+      "database": "sha256:f519727303f0af6862882be2a30f420e28710d4209226e681aaddb2c01d12d9b",
+      "gateway": "sha256:d0a16be756b6ec6658aecb8b7bcf87fa6c7d0d7fcc6ca53ad14bb49a4c90bdd7",
+      "rest": "sha256:455fe971661e8c8c2722aece9f1e40e15871fb350724ca5433d54e40f5ade3c8"
+    }
+  },
+  "rateLimitSurvivesChurn": true,
+  "releaseId": "7edb5d2d3aa2136f38af787dcc2b336ccfe8e9c128c6b997951c225daa1632bd",
+  "roles": [
+    "Editor",
+    "Reviewer"
+  ],
+  "schemaVersion": 1,
+  "sourceHashes": {
+    "examples/account-provisioning/app.mjs": "987b0dc65fa0c3111e6e2d0ec28f7020159d2500829e3cd2ff3c2dde7c1c5900",
+    "examples/account-provisioning/contracts.mjs": "fd84f2d0961646154edc3f1ee330ba37a34048d8e1e52a2f58c326dae4b1b4e8",
+    "examples/account-provisioning/controller.mjs": "64e4e3b996ebcae40cc0880af0a611fe98a23c612701a4eee22a429418566930",
+    "examples/account-provisioning/proof.mjs": "a865764f5188d9257786b4a83c5839e0d2177c82e087fed0bf685fb2795a0ee1",
+    "examples/account-provisioning/supabase/app.mjs": "6dc3b374595fb36c0484cb4303547ef4bd79242bd9acb8d3a0237e9d292b294f",
+    "examples/account-provisioning/supabase/authority.mjs": "2d7339adcd8920ee8479abe3959556a5554c26a06a41ded60eb3610eae130195",
+    "examples/account-provisioning/supabase/ledger.sql": "40116a1475faa97b0c113ef7d9c0f5247360b4ca7d6de7eee154a81d94549c48",
+    "examples/account-provisioning/supabase/nextauth-app.mjs": "4bc3cd2b11981cb71ed84acdead5b981c135355e7cab0c12b2ad7275322efe54",
+    "examples/account-provisioning/supabase/proof.mjs": "8b6f86abf48c5bb7bc9b32256b62c3a581237bc1dd6638f1f0a01936a220e275",
+    "examples/account-provisioning/supabase/runtime.mjs": "d676df5e08118b2e6698fad80205a8d02e2ad87e97fbbac796729c0de4f53413",
+    "examples/account-provisioning/supabase/tools/package-lock.json": "5a7bb9e79bc0b6fa2b6983ab3eeb63d10f7788e1fbbc240066f678331b6fb0c0",
+    "examples/account-provisioning/supabase/tools/package.json": "32e4236b95ff9d14b54ddd92f2833e3cbf4bc8c01f8364306093f8cd3f8a4d40",
+    "examples/account-provisioning/supabase/tools/private-directory.mjs": "e6a2752bfeb3171710818e43182703005f5cc3d344cf7d7f328628d8586d721c",
+    "examples/account-provisioning/supabase/tools/process.mjs": "d282638e11bfecedad1c6038688a81e4c10203ccbd0044116f9162a44a2b5398",
+    "examples/account-provisioning/supabase/tools/setup.mjs": "80f3c1de6cd943fba27f16e6a7dbf42a06eaadf5a1bd3d7dbd01818a95a0062a",
+    "examples/playwright/tests/consumer.mjs": "6db34bb1389709daa7355f81f4c93ac65795bd7526ce9c8c1d24efdba13e8676",
+    "examples/verification-demo/native.mjs": "904b9d35dbf3c1bf8b38f015f5fae215936945d79b6b6009590f71dd59bfca6b",
+    "examples/workflows/test-support/real-broker.mjs": "d138cbea3460071979edef2b21a6705265819d1f257722893149c921410ef57f"
+  }
+}
