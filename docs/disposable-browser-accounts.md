@@ -60,6 +60,18 @@ On Windows, use a quoted forward-slash archive path and `npm.cmd`/`npx.cmd` when
 PowerShell blocks the script shims. Preserve existing Playwright setup rather than
 silently replacing it. Linux may also need reviewed browser OS dependencies.
 
+Install Chromium and run the wrapper with the same browser-cache selection.
+Leave `PLAYWRIGHT_BROWSERS_PATH` unset for its default, or use a canonical absolute
+local path. Relative values and the hermetic value `0` are not supported here.
+The worker preserves the selected `HOME` and Windows `LOCALAPPDATA` settings for
+normal Playwright browser discovery.
+
+This preview requires ordinary canonical single-link plan, package, Playwright
+CLI and spec files, including app-local `node_modules/@playwright/test/package.json`.
+Symlinked or hardlinked dependency layouts and hoisted-only installs may be refused.
+Use a separate reviewed consumer fixture if your app cannot meet these checks;
+keep the app's package manager and the verification guards intact.
+
 ## 2. Implement and review the app adapter once
 
 Implement the `BrowserAccountAdapter` type from `@testlane/cli/browser` in your app's
@@ -85,6 +97,15 @@ exact `{ root, targetId, bindingHash, nonce }` record. `bindCoordinator` returns
 `targetWideQuotas`, `expiry`, `disabledEffects`, `tombstones`, and `liveRevocation`.
 Those acknowledgements must follow real store checks and enforcement; returning
 true flags alone does not establish these properties.
+
+Cleanup is owner-based even when `createOwned` threw before returning an ID.
+`revokeDeleteOwned` must idempotently fence late creation and delivery for that
+exact owner, including a missing user; a not-found response alone is insufficient.
+After acknowledgement, `inspectOwned` must report `present: false`, `revoked: true`,
+`deliveryPending: false`, `ownedRecords: 0` and `activeReservations: 0`. Its `id`
+is `null` or the same ID already correlated by creation or the prior inspection.
+Keep durable ownership and tombstone history and count actual owner-scoped records
+and reservations.
 
 Target, run, operation and returned account IDs must be lower-case UUID strings.
 Opaque/numeric account IDs are not accepted directly. A provider with another ID
@@ -189,6 +210,12 @@ reset a refusal. On Windows, a user-owned application-data directory can be used
 when a workspace parent does not meet the ACL requirements.
 
 ## 4. Author app-specific tests and a reviewed plan
+
+Managed verification uses Testlane's generated Playwright configuration. Start the
+app explicitly before the wrapper: your project's `webServer`, `globalSetup` and
+`projects` settings do not run here. Put necessary reviewed fixture settings in
+the authored test/fixture code where compatible, preserving one worker, zero
+retries and recording off. Your existing project configuration can stay in place.
 
 Use the [verification guide](agent-verification.md) for case design and expected
 behavior. Its existing-account setup and `verify init --profile` steps are not
@@ -322,6 +349,11 @@ directory. For a known-settled cleanup failure, the reviewed wrapper can call
 using the original values and native-store environment. Recovery only cleans the
 original owned run; it does not create, seed, rerun tests or allocate a new ID.
 On Linux/macOS it also needs the reviewed keychain opt-in.
+
+Cancellation while the verification runner is active can leave the run quarantined
+with incomplete cleanup. Check the returned cleanup fields; Ctrl-C alone does not
+confirm account or credential deletion. The recovery API refuses runs whose
+worker settlement remains unknown.
 
 An unconfirmed child or credential-seeding process stop retains a lock and stays
 nonpassing. A lost acknowledgement from a known-settled child can instead receive

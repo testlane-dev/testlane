@@ -26,7 +26,9 @@ async function fixture() {
           } else await unlink(nested);
         }
         await rmdir(file);
-      } else if (info.isSymbolicLink()) await rmdir(file);
+      } else if (info.isSymbolicLink()) {
+        if (process.platform === "win32") await rmdir(file); else await unlink(file);
+      }
       else await unlink(file);
     }
     await rmdir(root);
@@ -70,7 +72,7 @@ it("refuses unsafe parents and directory aliases before allocation", async () =>
     if (process.platform === "win32") expect(windowsFixture(f.root, actual, "unsafe")).toBe("done"); else await chmod(actual, 0o777);
     await expect(createBrowserPrivateDirectory(path.join(actual, "child"))).rejects.toThrow("BROWSER_PRIVATE_DIRECTORY_REFUSED");
     await expect(lstat(path.join(actual, "child"))).rejects.toMatchObject({ code: "ENOENT" });
-    await rmdir(alias);
+    if (process.platform === "win32") await rmdir(alias); else await unlink(alias);
   } finally { await f.close(); }
 });
 
