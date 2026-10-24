@@ -217,6 +217,15 @@ app explicitly before the wrapper: your project's `webServer`, `globalSetup` and
 the authored test/fixture code where compatible, preserving one worker, zero
 retries and recording off. Your existing project configuration can stay in place.
 
+The [harness runner limits](agent-verification.md#runner-limits) use a generated
+default of 30 seconds per test, 175 seconds for the suite, and a separate
+180-second timer that requests cancellation. Reviewed test code can override its
+per-test timeout; 30 seconds is not a security cap. There is no CLI timeout flag.
+The managed parent separately gives its owned CLI child a 210-second deadline.
+The final worker revocation request waits at most 15 seconds, clipped by account
+expiry. These are separate execution windows, not an overall deadline for trusted
+adapter or delivery callbacks; those callbacks remain awaited, as described below.
+
 Use the [verification guide](agent-verification.md) for case design and expected
 behavior. Its existing-account setup and `verify init --profile` steps are not
 needed here: the parent supplies generated profiles. Do not manually seed or

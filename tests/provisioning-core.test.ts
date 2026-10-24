@@ -8,6 +8,7 @@ import { accountFailure, browserAccountEmail, readOwnedInspection, verifyBrowser
   type BrowserAccountOwner, type BrowserCoordinatorBinding } from "../src/provisioning/adapter.js";
 import { createBrowserAccountCoordinator, type BrowserAccountCredential } from "../src/provisioning/core.js";
 import { createBrowserPrivateDirectory } from "../src/provisioning/private-directory.js";
+import { waitForProvisioningTestGate } from "./provisioning-test-gate.js";
 
 const gate = () => { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; };
 const hash = (bytes: string) => createHash("sha256").update(bytes).digest("hex");
@@ -141,29 +142,31 @@ it("persists ambiguous create and recovers the same owner without another creati
 
 it("fences a pending create with a persistent tombstone and never resurrects deleted state", async () => {
   const f = await fixture(), entered = gate(), release = gate();
+  let pending: Promise<unknown> | undefined;
   try {
     f.setBeforeCreate(async () => { entered.release(); await release.promise; });
     const manager = await f.reopen(), run = await manager.beginRun({ runId: randomUUID() }); let delivered = false;
-    const pending = manager.createAccount(run, "Editor", () => { delivered = true; }).then(() => null, error => error);
-    await entered.promise; await manager.cleanupRun(run); release.release();
+    pending = manager.createAccount(run, "Editor", () => { delivered = true; }).then(() => null, error => error);
+    await waitForProvisioningTestGate(entered.promise, pending); await manager.cleanupRun(run); release.release();
     const error: unknown = await pending; expect(error).toMatchObject({ code: "BROWSER_ACCOUNT_REPLAY_REFUSED" });
     expect(delivered).toBe(false); expect((await manager.snapshot()).operations[0]!.status).toBe("deleted"); expect(f.accounts.size).toBe(1);
     await manager.beginRun({ runId: randomUUID() });
-  } finally { release.release(); await f.dispose(); }
+  } finally { release.release(); if (pending) await pending; await f.dispose(); }
 }, 120000);
 
 it("pending delivery blocks cleanup and fresh runs through reopen until the actual sink settles", async () => {
   const f = await fixture(), entered = gate(), release = gate();
+  let pending: Promise<unknown> | undefined;
   try {
     const manager = await f.reopen(), run = await manager.beginRun({ runId: randomUUID() });
-    const pending = manager.createAccount(run, "Editor", async () => { entered.release(); await release.promise; }).then(() => null, error => error);
-    await entered.promise;
+    pending = manager.createAccount(run, "Editor", async () => { entered.release(); await release.promise; }).then(() => null, error => error);
+    await waitForProvisioningTestGate(entered.promise, pending);
     await expect(manager.cleanupRun(run)).rejects.toMatchObject({ code: "BROWSER_ACCOUNT_CLEANUP_INCOMPLETE" });
     const recovered = await f.reopen(); await expect(recovered.cleanupRun(await recovered.recoverRun(run.runId))).rejects.toMatchObject({ code: "BROWSER_ACCOUNT_CLEANUP_INCOMPLETE" });
     await expect(recovered.beginRun({ runId: randomUUID() })).rejects.toMatchObject({ code: "BROWSER_ACCOUNT_CLEANUP_INCOMPLETE" });
     release.release(); expect(await pending).toMatchObject({ code: "BROWSER_ACCOUNT_RUN_REFUSED" });
     await recovered.cleanupRun(await recovered.recoverRun(run.runId)); expect((await recovered.snapshot()).runs[0]!.status).toBe("released");
-  } finally { release.release(); await f.dispose(); }
+  } finally { release.release(); if (pending) await pending; await f.dispose(); }
 }, 120000);
 
 it("does not issue a cleanup receipt while owned records or reservations remain", async () => {
