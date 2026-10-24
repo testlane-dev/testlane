@@ -34,6 +34,7 @@ const WINDOWS_PRIVATE_DIRECTORY = String.raw`
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 try {
+  $env:PSModulePath=[IO.Path]::Combine($PSHOME,'Modules')
   $request=[Console]::In.ReadToEnd() | ConvertFrom-Json
   if ($request.operation -ne 'create' -and $request.operation -ne 'verify') { throw 'refused' }
   $target=[string]$request.path

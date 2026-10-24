@@ -131,3 +131,30 @@ it("directory options are own data and genuine signals without getter or proxy e
     expect(await createBrowserPrivateDirectory(child, { signal: undefined })).toBe(child);
   } finally { await f.close(); }
 });
+
+it.skipIf(process.platform !== "win32")("Windows module discovery is fixed after startup without forwarding ambient module paths", async () => {
+  const f = await fixture(), child = fakeChild(), previous = process.env["PSModulePath"];
+  const canary = "synthetic-private-user-module-path", assignment = "$env:PSModulePath=[IO.Path]::Combine($PSHOME,'Modules')";
+  const controller = new AbortController(); let pending: Promise<unknown> | undefined;
+  try {
+    process.env["PSModulePath"] = canary;
+    vi.mocked(spawn).mockImplementationOnce(() => child);
+    pending = createBrowserPrivateDirectory(path.join(f.root, "absent"), { signal: controller.signal }).then(value => value, error => error);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+    const [, args, options] = vi.mocked(spawn).mock.calls[0]!;
+    expect(Object.keys(options!.env!).sort()).toEqual(["PATH", "SystemRoot", "windir"]);
+    expect(options!.env).toEqual({ SystemRoot: process.env["SystemRoot"], windir: process.env["SystemRoot"], PATH: path.join(process.env["SystemRoot"]!, "System32") });
+    expect(args!.slice(0, 4)).toEqual(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]);
+    const script = args![4]!;
+    expect(script.split(assignment)).toHaveLength(2);
+    expect(script.indexOf(assignment)).toBeLessThan(script.indexOf("[Console]::In.ReadToEnd() | ConvertFrom-Json"));
+    expect(JSON.stringify({ args, options })).not.toContain(canary);
+    child.emit("close", 1);
+    expect((await pending as Error).message).toBe("BROWSER_PRIVATE_DIRECTORY_REFUSED");
+    await expect(lstat(path.join(f.root, "absent"))).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    controller.abort(); child.emit("close", null); if (pending) await pending;
+    if (previous === undefined) delete process.env["PSModulePath"]; else process.env["PSModulePath"] = previous;
+    await f.close();
+  }
+});
