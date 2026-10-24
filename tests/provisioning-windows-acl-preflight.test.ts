@@ -5,6 +5,7 @@ import { lstat, readdir, realpath, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { types } from "node:util";
 import { it, vi } from "vitest";
+import { retainFailedWindowsPreflight, runWindowsAclStageProbe } from "./provisioning-windows-acl-stage-probe.js";
 import { createBrowserPrivateDirectory } from "../src/provisioning/private-directory.js";
 
 vi.mock("node:child_process", async original => {
@@ -102,5 +103,10 @@ it.skipIf(process.platform !== "win32")("the first real Windows private-director
       operations: observations.map(({ began: _began, ...row }) => row), fixtureRemoved,
       cleanupSkippedAfterRefusal: !passed, rawOutputExported: false, leafTimeoutMs: 15000, leafStopWaitMs: 5000 }));
   }
-  if (!passed) throw fixed();
-}, 45000);
+  // Exactly one follow-up is diagnostic only: the original failure remains sticky.
+  // A still-unknown first child is not permission to start another one.
+  await retainFailedWindowsPreflight(passed, observations.length > 0 && observations.every(row => row.closed), async () => {
+    try { console.info(JSON.stringify(await runWindowsAclStageProbe(originalSpawn))); }
+    catch { console.info(JSON.stringify({ schemaVersion: 1, diagnostic: "windows-private-directory-stage-probe", originalPreflightPassed: false, executions: 0, preparationRefused: true, rawOutputExported: false })); }
+  });
+}, 65000);
