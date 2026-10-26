@@ -6,5 +6,5 @@
   "type": "module",
   "description": "Optional runnable authenticated smoke workflow for Testlane sandbox profiles",
   "scripts": { "test": "node --test tests/*.test.mjs", "smoke": "node run.mjs" },
-  "optionalDependencies": { "playwright": "1.64.0" }
+  "optionalDependencies": { "playwright": "1.64.1" }
 }
